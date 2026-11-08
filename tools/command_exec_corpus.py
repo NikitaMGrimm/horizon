@@ -4500,6 +4500,40 @@ def projectile_saved_uuid():
 
 
 
+def entity_saved_boolean_flags():
+    """Entity.load reads the flags with getBooleanOr; saveWithoutId writes 1b/0b, before and after a reload."""
+    x0, y0, z0 = 3072, 300, 3072
+    chunk = [[x0 >> 4, z0 >> 4]]
+    flags = ['Invulnerable', 'Silent', 'NoGravity', 'Glowing', 'HasVisualFire', 'CustomNameVisible']
+    subjects = [
+        ('minecart', 1, 'NoGravity:2b,Invulnerable:-1b,Silent:127b,Glowing:3b,HasVisualFire:-2b,CustomNameVisible:4b'),
+        ('minecart', 3, 'NoGravity:0b,Invulnerable:0b,Silent:0b,Glowing:0b,HasVisualFire:0b,CustomNameVisible:0b'),
+        ('hopper_minecart', 5, 'NoGravity:-1b,Invulnerable:2b'),
+        ('spruce_boat', 7, 'NoGravity:2b,Silent:2b'),
+        ('cushion', 9, 'Invulnerable:2b,Glowing:-1b'),
+        ('snowball', 11, 'NoGravity:1b,Invulnerable:2b,Silent:-1b,Glowing:2b,CustomNameVisible:3b'),
+    ]
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk},
+           cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', expect_result=256)]
+    for n, (kind, dx, body) in enumerate(subjects, 1):
+        ops.append(cmd(f'/summon {kind} {x0 + dx}.5 {y0} {z0 + 8}.5 {{UUID:[I;12523,0,{n},1],{body}}}',
+                       expect_result=1))
+
+    def reads():
+        for n in range(1, len(subjects) + 1):
+            for key in flags:
+                ops.append(cmd(f'/data get entity 000030eb-0000-0000-0000-{n:04x}00000001 {key}'))
+
+    reads()
+    ops += [cmd(f'/forceload remove {x0} {z0}', False), {'op': 'tick', 'n': 60},
+            cmd(f'/execute unless loaded {x0} {y0} {z0}', expect_result=1),
+            cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk}]
+    reads()
+    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=24,dz=16]',
+                       f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} air',
+                       f'/forceload remove {x0} {z0}')
+
+
 def sulfur_cube_loaded_health():
     # Size is saved as physical size minus one. Babies age even with NoAI.
     cases = [(0, None, -24000, 4), (1, None, 0, 8),
@@ -6573,6 +6607,7 @@ def groups():
         ('loot world pack tables', loot_world_pack_tables()),
         ('numeric array edits', numeric_array_edits()),
         ('projectile saved UUID', projectile_saved_uuid()),
+        ('entity saved boolean flags', entity_saved_boolean_flags()),
         ('awake villager saved position', awake_villager_saved_position()),
         ('villager wake rotation', villager_wake_rotation()),
         ('cube saved Age', cube_saved_age()),

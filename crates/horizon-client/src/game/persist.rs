@@ -1586,7 +1586,8 @@ impl Game<'_> {
             map.insert("Item".into(), item.clone());
         }
         // Entity.saveWithoutId's optional fields Horizon models nowhere for
-        // these entities, kept as loaded (written only when set).
+        // these entities, kept as `Entity.load` reads them (written only when
+        // set, `Invulnerable` always).
         for key in [
             "Silent",
             "Glowing",
@@ -1598,6 +1599,7 @@ impl Game<'_> {
                 map.insert(key.into(), v.clone());
             }
         }
+        entity_nbt::normalize_flags(&mut map);
         if !map.is_empty() {
             self.persist.raw.insert(id, Tag::Compound(map));
         }

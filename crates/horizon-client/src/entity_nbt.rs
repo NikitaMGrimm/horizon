@@ -104,6 +104,7 @@ impl Base<'_> {
             if matches!(map.get(&"Tags".into()), Some(Tag::List(tags)) if tags.is_empty()) {
                 map.remove(&"Tags".into());
             }
+            normalize_flags(map);
             for (key, value) in [
                 // Entity.remainingFireTicks starts at 0 (-1 was the old default).
                 ("Fire", Tag::Short(0)),
@@ -125,6 +126,31 @@ impl Base<'_> {
             map.remove(&"PersistenceRequired".into());
         }
         tag
+    }
+}
+
+/// The `Entity` flags of a loaded compound as `saveWithoutId` writes them back:
+/// `Entity.load` reads each with `getBooleanOr` (any nonzero number is true),
+/// and `putBoolean` writes 1b or 0b, `Invulnerable` always and the others only
+/// when set. A flag the compound does not have stays absent.
+pub fn normalize_flags(map: &mut Compound) {
+    for (key, always) in [
+        ("Invulnerable", true),
+        ("Silent", false),
+        ("NoGravity", false),
+        ("Glowing", false),
+        ("HasVisualFire", false),
+        ("CustomNameVisible", false),
+    ] {
+        let Some(value) = map.get(&key.into()) else {
+            continue;
+        };
+        let set = int_value(value).is_some_and(|v| v as i8 != 0);
+        if set || always {
+            map.insert(key.into(), Tag::Byte(i8::from(set)));
+        } else {
+            map.remove(&key.into());
+        }
     }
 }
 
