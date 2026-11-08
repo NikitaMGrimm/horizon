@@ -1593,6 +1593,9 @@ impl Game<'_> {
             "Invulnerable",
             "CustomName",
             "CustomNameVisible",
+            // Only a LivingEntity's tick changes its air.
+            "Air",
+            "HasVisualFire",
         ] {
             if let Some(v) = tag.get(key) {
                 map.insert(key.into(), v.clone());
@@ -2155,8 +2158,12 @@ impl Game<'_> {
         // overlay also serves entity types whose shot flag is still opaque.
         let shot = tag.get("HasBeenShot").cloned();
         let mut tag = with_raw(tag, self.persist.raw.get(&p.id));
-        if let (Some(shot), Tag::Compound(map)) = (shot, &mut tag) {
-            map.insert("HasBeenShot".into(), shot);
+        let cooldown = self.portal_cooldown(p.id);
+        if let Tag::Compound(map) = &mut tag {
+            if let Some(shot) = shot {
+                map.insert("HasBeenShot".into(), shot);
+            }
+            map.insert("PortalCooldown".into(), Tag::Int(cooldown));
         }
         Some((chunk_of(p.position), tag))
     }

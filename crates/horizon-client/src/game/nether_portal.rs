@@ -661,7 +661,10 @@ impl Game<'_> {
         let mut waiting: Vec<u32> = Vec::new();
         let tracked = &self.portals.entities;
         for_each_entity!(entity_lists_of!(self), entity => {
-            if entity.portal_size().is_some() && entity.is_vehicle() == vehicles {
+            // One that never goes through (a pearl, a wind charge) still counts
+            // a loaded cooldown down: `handlePortal` is in every entity's tick.
+            let portal = entity.portal_size().is_some();
+            if (portal || tracked.contains_key(&entity.id())) && entity.is_vehicle() == vehicles {
                 let at = entity.position();
                 if !entity_ticking(at.x.floor() as i32, at.z.floor() as i32) {
                     if tracked.contains_key(&entity.id()) {
@@ -669,11 +672,11 @@ impl Game<'_> {
                     }
                     continue;
                 }
-                if entity.portal_from().is_none() {
+                if portal && entity.portal_from().is_none() {
                     before.insert(entity.id(), entity.position());
                 }
                 if tracked.contains_key(&entity.id()) {
-                    ids.push((entity.id(), entity.can_use_portal(self)));
+                    ids.push((entity.id(), portal && entity.can_use_portal(self)));
                 }
             }
         });
@@ -732,6 +735,11 @@ impl Game<'_> {
                 },
             );
         }
+    }
+    /// `Entity.portalCooldown` as a save writes it: the live count, 0 once it
+    /// ran out (the state goes then).
+    pub(super) fn portal_cooldown(&self, id: u32) -> i32 {
+        self.portals.entities.get(&id).map_or(0, |state| state.cooldown)
     }
     /// `Entity.setAsInsidePortal` on an entity that is still on its portal
     /// cooldown, whatever the portal: the cooldown restarts and it stays.

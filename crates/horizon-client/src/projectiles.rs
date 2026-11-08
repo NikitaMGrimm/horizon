@@ -543,12 +543,32 @@ impl Projectile {
     pub fn clear_fire(&mut self) {
         self.fire_ticks = self.fire_ticks.min(0);
     }
-    /// `ThrowableProjectile.tick`'s `applyEffectsFromBlocks` and the fire phase
-    /// of `Entity.baseTick`: a fire block the box is in ignites the projectile
-    /// for 160 ticks (`BaseFireBlock.fireIgnite`), water puts it out, and one
-    /// tick is counted down every tick.
+    /// The fire phase of `Entity.baseTick`, which counts one tick down for
+    /// every kind. A thrown one first takes `ThrowableProjectile.tick`'s
+    /// `applyEffectsFromBlocks`: a fire block the box is in ignites it for 160
+    /// ticks (`BaseFireBlock.fireIgnite`) and water puts it out. A fireball is
+    /// then kept burning for a second (`AbstractHurtingProjectile.tick` with
+    /// `shouldBurn`, false for skulls and wind charges).
     fn fire_tick(&mut self, w: &impl ProjectileWorld) {
+        // Arrows and tridents count their fire in their own tick.
+        if matches!(
+            self.kind,
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident
+        ) {
+            return;
+        }
         if !self.is_thrown() {
+            // `applyEffectsFromBlocks` sets the fire of one that is not on fire
+            // to `-getFireImmuneTicks()`, 0; `WitherSkull.isOnFire` is false.
+            if matches!(self.kind, ProjectileKind::WitherSkull { .. }) {
+                self.fire_ticks = 0;
+            }
+            if self.fire_ticks > 0 {
+                self.fire_ticks -= 1;
+            }
+            if self.kind.is_item_fireball() {
+                self.ignite_for_ticks(20);
+            }
             return;
         }
         if self.in_fire(w) {

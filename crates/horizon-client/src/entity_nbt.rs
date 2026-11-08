@@ -3233,13 +3233,6 @@ pub fn fireball_to_nbt(
         Tag::Double(p.acceleration.to_bits()),
     );
     put_projectile(&mut tag, p, owner);
-    // AbstractHurtingProjectile.tick: shouldBurn is true for both fireballs, so
-    // once ticked they igniteForSeconds(1) every tick. WitherSkull.shouldBurn is
-    // false, so a skull never saves a fire.
-    if p.age > 0 && p.kind.is_item_fireball() {
-        let fire = number(tag.get("Fire")).unwrap_or(0).max(20);
-        put(&mut tag, "Fire", Tag::Short(fire as i16));
-    }
     if let Some(power) = power {
         put(&mut tag, "ExplosionPower", Tag::Byte(power as i8));
     }
@@ -3256,8 +3249,9 @@ pub fn fireball_to_nbt(
 }
 
 /// `Projectile.addAdditionalSaveData`: Owner, LeftOwner only when set, and
-/// the explicit HasBeenShot flag.
+/// the explicit HasBeenShot flag; with `Entity.saveWithoutId`'s live `Fire`.
 fn put_projectile(tag: &mut Tag, p: &Projectile, owner: Option<[i32; 4]>) {
+    put(tag, "Fire", Tag::Short(p.fire_ticks as i16));
     if let Tag::Compound(map) = tag {
         map.remove(&"LeftOwner".into());
     }
@@ -3397,6 +3391,7 @@ pub fn throwable_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Project
     p.has_been_shot = flag(tag, "HasBeenShot");
     p.owner_uuid = owner;
     p.no_gravity = flag(tag, "NoGravity");
+    p.fire_ticks = saved_fire(tag);
     Some(p)
 }
 
@@ -3442,6 +3437,7 @@ pub fn spit_or_bullet_from_nbt(
     p.has_been_shot = flag(tag, "HasBeenShot");
     p.owner_uuid = owner;
     p.no_gravity = flag(tag, "NoGravity");
+    p.fire_ticks = saved_fire(tag);
     Some(p)
 }
 
@@ -3502,6 +3498,11 @@ pub fn bullet_target(tag: &Tag) -> Option<[i32; 4]> {
     uuid_from_tag(tag.get("Target"))
 }
 
+/// `Entity.load`'s `getShortOr("Fire", 0)`: the remaining fire ticks.
+fn saved_fire(tag: &Tag) -> i32 {
+    i32::from(number(tag.get("Fire")).unwrap_or(0) as i16)
+}
+
 /// `Projectile`'s `Owner`.
 pub fn owner_uuid(tag: &Tag) -> Option<[i32; 4]> {
     uuid_from_tag(tag.get("Owner"))
@@ -3534,6 +3535,7 @@ pub fn fireball_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Projecti
     p.has_been_shot = flag(tag, "HasBeenShot");
     p.owner_uuid = owner;
     p.no_gravity = flag(tag, "NoGravity");
+    p.fire_ticks = saved_fire(tag);
     p.acceleration = float(tag.get("acceleration_power")).unwrap_or(0.1);
     if let Some(item) = tag.get("Item").and_then(item_from_nbt) {
         p.set_item(item);
@@ -7863,7 +7865,7 @@ mod fireball_nbt_tests {
         let back = fireball_to_nbt(&skull, [1, 2, 3, 4], None, None).unwrap();
         assert_eq!(kind(&back).as_deref(), Some("minecraft:wither_skull"));
         assert_eq!(number(back.get("dangerous")), Some(1));
-        // Entity saves Fire every time; a skull's stays 0 (a fireball's is 20 once ticked).
+        // Entity saves Fire every time; a skull's stays 0 (a fireball's tick keeps it at 20).
         assert_eq!(number(back.get("Fire")), Some(0));
 
         let black = Tag::compound([

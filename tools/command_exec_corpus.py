@@ -4061,6 +4061,42 @@ def hurting_projectile_float_inertia():
     return ops
 
 
+def projectile_saved_entity_fields():
+    """Entity.load/saveWithoutId's Fire, Air, HasVisualFire and PortalCooldown on projectiles.
+
+    baseTick counts Fire and PortalCooldown down every tick; a fireball's tick keeps it burning for 20.
+    Read after summoning, after one tick, after an unload and reload, and three ticks later.
+    """
+    x0, y0, z0 = 3136, 300, 3136
+    chunk = [[x0 >> 4, z0 >> 4]]
+    given = 'NoGravity:1b,Fire:100s,Air:5s,HasVisualFire:1b,PortalCooldown:100'
+    subjects = [('ender_pearl', given), ('snowball', given), ('small_fireball', given),
+                ('fireball', given), ('wither_skull', given), ('small_fireball', 'NoGravity:1b')]
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk}]
+    for n, (kind, body) in enumerate(subjects, 1):
+        ops.append(cmd(f'/summon {kind} {x0 + 2 * n}.5 {y0 + 2} {z0 + 8}.5 {{UUID:[I;12524,0,{n},1],{body}}}',
+                       expect_result=1))
+
+    def reads():
+        for n in range(1, len(subjects) + 1):
+            for key in ['Fire', 'Air', 'HasVisualFire', 'PortalCooldown']:
+                ops.append(cmd(f'/data get entity 000030ec-0000-0000-0000-{n:04x}00000001 {key}'))
+
+    reads()
+    ops.append({'op': 'tick', 'n': 1})
+    reads()
+    # Frozen across the unload and reload: only the save and the load are compared, not how many ticks
+    # each engine gives an entity whose chunk is waiting to unload.
+    ops += [cmd('/tick freeze', False), cmd(f'/forceload remove {x0} {z0}', False), {'op': 'tick', 'n': 60},
+            cmd(f'/execute unless loaded {x0} {y0} {z0}', expect_result=1),
+            cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk}]
+    reads()
+    ops += [cmd('/tick unfreeze', False), {'op': 'tick', 'n': 3}]
+    reads()
+    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=24,dz=16]',
+                       f'/forceload remove {x0} {z0}')
+
+
 def allay_invalid_brain_retention():
     """Live failed Brain loads retain LIKED_PLAYER; valid empty memories clear it."""
     ops = setup('/setblock 6 199 6 stone', '/scoreboard objectives add h226 dummy',
@@ -6580,6 +6616,7 @@ def groups():
         ('mob partial block suffocation', mob_partial_block_suffocation()),
         ('allay invalid Brain retention', allay_invalid_brain_retention()),
         ('hurting projectile float inertia', hurting_projectile_float_inertia()),
+        ('projectile saved entity fields', projectile_saved_entity_fields()),
         ('primed TNT block state', primed_tnt_block_state()),
         ('allay pocket inventory', allay_pocket_inventory()),
         ('summoned fangs lifetime', summoned_fangs_lifetime()),
