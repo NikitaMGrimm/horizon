@@ -13,10 +13,10 @@ should be able to take the engine and the platform without Horizon's product.
 CI checks the rules, so review doesn't have to. Everything stays in one repository: crates are checked now, and
 the modules of the mixed crates follow as code moves.
 
-Credits: the three layers, the dependency rule, the address rule and the plan come from duckybertduck's proposal
-("3-layer split: engine / platform / Horizon", #contributors, 2026-11-08). The rule that the mod API owns its types
-and the property check that keeps engine types out of it come from arismoko's mod API work on
-[arismoko/horizon](https://github.com/arismoko/horizon) (arismoko/horizon#1608).
+Credits: the three layers, the dependency rule, the address rule and the plan come from NikitaMGrimm's proposal
+(DuckyBertDuck on Discord: "3-layer split: engine / platform / Horizon", #contributors, 2026-11-08). The rule
+that the mod API owns its types and the property check that keeps engine types out of it come from arismoko's mod
+API work on [arismoko/horizon](https://github.com/arismoko/horizon) (arismoko/horizon#1608).
 
 ## The rule
 
@@ -46,6 +46,12 @@ Vanilla Minecraft: Java Edition 26.3, and nothing else.
   or screen, a network address vanilla doesn't contact, Horizon branding.
 - **Network:** only what vanilla contacts: Mojang and Microsoft services, and the servers the player joins.
 - **May depend on:** engine crates.
+- **Portable:** `horizon-core`, `horizon-world`, `horizon-protocol`, `horizon-items`, `horizon-command`,
+  `horizon-client-core` and `horizon-assets` hold vanilla's rules and data with no desktop in them: no window,
+  GPU, sound, gamepad or clipboard library, no HTTP client, and no engine crate outside this list. A port to a
+  machine the desktop client can't run on (a handheld console, a browser) builds on them, so they stay that way:
+  the layer check fails when one takes `winit`, `wgpu`, `cpal`, `gilrs`, `arboard` or `ureq`, or an engine crate
+  outside this list (plan step 2).
 
 ## Platform
 
@@ -187,7 +193,8 @@ These are not addresses:
 One small PR at a time, stacked:
 
 1. This page.
-2. `tools/check_layers.py` in CI and pr_ready, with the checklist in the PR template.
+2. `tools/check_layers.py` in CI and pr_ready, with the checklist in the PR template; then the portable crates'
+   rule (Engine) in the same check.
 3. The address check: every built-in address above in one module per workspace, enforced by CI.
 4. Moves, most contributor value first. The extras (cosmetics, emotes, Discord, the official server, telemetry
    and the ping) leave the engine crates for Horizon crates. Then the renderer's platform and Horizon modules
@@ -196,6 +203,10 @@ One small PR at a time, stacked:
    - keeps `--no-default-features` and horizon-plain building;
    - takes its entries out of `allowed`.
 5. Optionally, a lines-of-code check per file.
+6. Longer, also optional: gameplay into the portable crates. Gameplay is methods on `Game`, which also holds the
+   renderer, the screens, the particles and sound. Split `Game`'s state into the world and its presentation,
+   module by module; turn gameplay's direct particle and sound calls into level events, as vanilla's server sends
+   them to its client; then move each module that is clean into a portable crate.
 
 arismoko's API boundary work brings the mod API upstream from arismoko/horizon. The API owns its types,
 `horizon-mod-runtime` gets no game dependency, and a CI property check keeps `horizon-mod-api` free of engine
