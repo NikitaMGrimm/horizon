@@ -93,6 +93,8 @@ pub(super) struct Boat {
     /// left, right, up, down
     pub input: [bool; 4],
     pub on_ground: bool,
+    /// `Entity.fallDistance` (`fall_distance` in its save).
+    pub(super) fall_distance: f64,
     /// `Entity.stuckSpeedMultiplier`: set where the boat sits in powder snow
     /// (`PowderSnowBlock.entityInside`), spent by the next move.
     stuck: Vec3,
@@ -213,6 +215,7 @@ impl Boat {
             paddle_controller: false,
             input: [false; 4],
             on_ground: false,
+            fall_distance: 0.0,
             stuck: Vec3::ZERO,
             chest: false,
             items: Vec::new(),
@@ -241,6 +244,12 @@ impl Boat {
             Vec3::new(p.x + w, p.y + HEIGHT, p.z + w),
         )
     }
+    /// `Entity.load`'s `OnGround` (`getBooleanOr`) and `fall_distance`
+    /// (`getDoubleOr`).
+    pub(super) fn load_ground(&mut self, tag: &Tag) {
+        self.on_ground = horizon_client::entity_nbt::flag(tag, "OnGround");
+        self.fall_distance = horizon_client::save::float(tag.get("fall_distance")).unwrap_or(0.0);
+    }
     /// `Entity.saveWithoutId` with `AbstractChestBoat`'s items: the loaded
     /// compound `raw` under the live fields.
     pub(super) fn to_nbt(&self, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
@@ -255,6 +264,11 @@ impl Boat {
         );
         if let Tag::Compound(map) = &mut tag {
             map.insert("Fire".into(), Tag::Short(self.fire_ticks as i16));
+            map.insert("OnGround".into(), Tag::Byte(i8::from(self.on_ground)));
+            map.insert(
+                "fall_distance".into(),
+                Tag::Double(self.fall_distance.to_bits()),
+            );
         }
         tag
     }
@@ -802,6 +816,16 @@ impl Game<'_> {
                 b.position.z + moved.z,
             );
             b.on_ground = movement.y < 0.0 && moved.y > movement.y;
+            // AbstractBoat.checkFallDamage: the fall resets on the ground and
+            // grows while the boat drops, except over water.
+            if b.on_ground {
+                b.fall_distance = 0.0;
+            } else if moved.y < 0.0 {
+                let [x, y, z] = [b.position.x, b.position.y, b.position.z].map(|v| v.floor() as i32);
+                if self.fluid_height_of(x, y - 1, z, Some(Fluid::Water)).is_none() {
+                    b.fall_distance -= f64::from(moved.y as f32);
+                }
+            }
             if (moved.x - movement.x).abs() > 1.0e-7 {
                 b.velocity.x = 0.0;
             }

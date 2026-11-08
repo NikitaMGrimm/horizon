@@ -856,6 +856,7 @@ impl Game<'_> {
             let mut b = super::boats::Boat::new(id, std::sync::Arc::from(wood), position, yaw);
             b.no_gravity = entity_nbt::flag(&tag, "NoGravity");
             b.fire_ticks = super::boats::saved_fire(&tag);
+            b.load_ground(&tag);
             b.pitch = entity_nbt::rotation(&tag)[1];
             if chest {
                 b = b.with_chest();

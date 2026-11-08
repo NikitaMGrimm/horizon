@@ -2978,6 +2978,8 @@ impl Minecart {
                 map.insert(JavaString::from(k), v);
             };
             put("FlippedRotation", Tag::Byte(i8::from(self.flipped)));
+            put("OnGround", Tag::Byte(i8::from(self.on_ground)));
+            put("fall_distance", Tag::Double(self.fall_distance.to_bits()));
             // AbstractMinecart saves firstTick as HasTicked. A cart never burns:
             // Entity.move sets -getFireImmuneTicks(), 0 for all but players.
             put("HasTicked", Tag::Byte(i8::from(self.first_tick)));
@@ -3080,6 +3082,8 @@ impl Minecart {
         };
         c.flipped = flag("FlippedRotation", false);
         c.first_tick = flag("HasTicked", false);
+        c.on_ground = flag("OnGround", false);
+        c.fall_distance = double("fall_distance");
         if kind.slots() > 0 {
             c.items = horizon_client::save::decode_items(tag.get("Items"), kind.slots());
         }
