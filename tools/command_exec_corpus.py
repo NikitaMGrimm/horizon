@@ -4512,6 +4512,8 @@ def entity_saved_boolean_flags():
         ('spruce_boat', 7, 'NoGravity:2b,Silent:2b'),
         ('cushion', 9, 'Invulnerable:2b,Glowing:-1b'),
         ('snowball', 11, 'NoGravity:1b,Invulnerable:2b,Silent:-1b,Glowing:2b,CustomNameVisible:3b'),
+        ('experience_orb', 13, 'Value:1s,NoGravity:2b,Invulnerable:-1b,Silent:2b,Glowing:0b'),
+        ('falling_block', 15, 'BlockState:{Name:"minecraft:stone"},Time:1,NoGravity:2b,Invulnerable:2b,Silent:3b'),
     ]
     ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk},
            cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', expect_result=256)]
