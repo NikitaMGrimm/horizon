@@ -6426,6 +6426,10 @@ def groups():
     except ImportError:
         from mob_effect_predicate_corpus import cases as mob_effect_predicates
     try:
+        from .ender_portal_entity_corpus import ender_portal_entities
+    except ImportError:
+        from ender_portal_entity_corpus import ender_portal_entities
+    try:
         from .seed_sync_corpus import cases as seed_sync_proof
     except ImportError:
         from seed_sync_corpus import cases as seed_sync_proof
@@ -6510,6 +6514,7 @@ def groups():
         ('decorated pot data', decorated_pot_data()),
         ('modern data literal values', storage_literals(cmd)),
         ('comparator output data', comparator_output_data()),
+        ('ender chest and end portal block entities', ender_portal_entities(cmd, setup)),
         ('hopper empty slot limits', hopper_empty_slot_limits()),
         ('End clock commands', end_clock_commands()),
         ('client commands', client_commands()),

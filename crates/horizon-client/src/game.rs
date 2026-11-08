@@ -8576,6 +8576,8 @@ impl Game<'_> {
                 | BlockEntity::Skull(_)
                 | BlockEntity::DaylightDetector
                 | BlockEntity::Bell
+                | BlockEntity::EnderChest
+                | BlockEntity::EndPortal
                 | BlockEntity::Campfire(_)
                 | BlockEntity::ChiseledBookshelf(_)
                 | BlockEntity::Brushable(_)
@@ -8640,6 +8642,8 @@ impl Game<'_> {
                 | BlockEntity::Skull(_)
                 | BlockEntity::DaylightDetector
                 | BlockEntity::Bell
+                | BlockEntity::EnderChest
+                | BlockEntity::EndPortal
                 | BlockEntity::Campfire(_)
                 | BlockEntity::ChiseledBookshelf(_)
                 | BlockEntity::Brushable(_)
@@ -8775,6 +8779,8 @@ impl Game<'_> {
                     | BlockEntity::Skull(_)
                     | BlockEntity::DaylightDetector
                     | BlockEntity::Bell
+                    | BlockEntity::EnderChest
+                    | BlockEntity::EndPortal
                     | BlockEntity::Campfire(_)
                     | BlockEntity::ChiseledBookshelf(_)
                     | BlockEntity::Brushable(_)

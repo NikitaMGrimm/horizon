@@ -803,6 +803,8 @@ pub fn encode_block_entity(
         // Encoded above.
         BlockEntity::DaylightDetector
         | BlockEntity::Bell
+        | BlockEntity::EnderChest
+        | BlockEntity::EndPortal
         | BlockEntity::CopperGolemStatue(_)
         | BlockEntity::Mod(_) => {}
         // PotentSulfurBlockEntity.saveAdditional.
@@ -1134,6 +1136,8 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::Skull(_)
         | BlockEntity::DaylightDetector
         | BlockEntity::Bell
+        | BlockEntity::EnderChest
+        | BlockEntity::EndPortal
         | BlockEntity::Mod(_) => {}
         // `BlockEntity.loadAdditional`: the components the block entity keeps.
         BlockEntity::CopperGolemStatue(components) => {

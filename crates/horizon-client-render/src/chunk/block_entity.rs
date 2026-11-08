@@ -85,6 +85,10 @@ pub enum BlockEntity {
     DaylightDetector,
     /// `BellBlockEntity`: saved identity only; ringing state is kept separately.
     Bell,
+    /// `EnderChestBlockEntity`: no saved data; its lid is animated separately.
+    EnderChest,
+    /// `TheEndPortalBlockEntity`: no saved data.
+    EndPortal,
     /// Suspicious sand and gravel: saved loot and the transient brushed face.
     Brushable(Box<Brushable>),
     /// A shelf holds three displayed item stacks.
