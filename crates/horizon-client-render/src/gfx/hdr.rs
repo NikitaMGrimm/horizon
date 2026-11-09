@@ -209,7 +209,7 @@ pub struct Hdr {
     pub masks: Masks,
     /// HDR lighting, whether Horizon lifts this frame's world: off under a Horizon shader pack
     /// that draws, while a `shaders/` pack's post or material stage runs (the pack's own),
-    /// with HDR Lighting (`look`) off, and with `HORIZON_HDR_LIGHTING=0`, to compare.
+    /// and with HDR Lighting (`look`) off.
     pub lighting: bool,
     /// The HDR Lighting setting: off, nothing in the world is lifted, light sources and the
     /// sun included, so the picture is SDR's on the HDR canvas.
@@ -1571,8 +1571,14 @@ struct ReferenceParams { peak: f32, unused: f32, world: f32, debug: f32, share: 
             }
             texel(&device, &queue, encoder, &frame)
         };
-        let unchanged = |hdr: &mut Hdr, color: [f64; 4]| {
-            through(hdr, color, true) == through(hdr, color, false)
+        // `exact`, or within one half-float step: S's own gamma rounds up in half float, to
+        // light just above S that the curve holds at S, and whether that comes back to the same
+        // half float depends on the GPU's rounding (one step lower on an Apple M4 Pro).
+        let unchanged = |hdr: &mut Hdr, color: [f64; 4], exact: bool| {
+            let (got, stored) = (through(hdr, color, true), through(hdr, color, false));
+            (0..4).all(|c| {
+                got[c] == stored[c] || !exact && (got[c] - stored[c]).abs() <= stored[c] / 1024.0
+            })
         };
         // Linear light in and out, in units of paper white.
         let mapped = |hdr: &mut Hdr, light: [f32; 3]| {
@@ -1596,9 +1602,10 @@ struct ReferenceParams { peak: f32, unused: f32, world: f32, debug: f32, share: 
             (hdr.paper_white, hdr.peak) = (paper, peak);
             for i in 0..=64 {
                 let g = f64::from((scene_peak * i as f32 / 64.0).powf(1.0 / 2.2));
-                assert!(unchanged(&mut hdr, [g, g, g, 1.0]), "{peak}: {i}");
+                let exact = i < 64;
+                assert!(unchanged(&mut hdr, [g, g, g, 1.0], exact), "{peak}: {i}");
                 assert!(
-                    unchanged(&mut hdr, [g, g * 0.6, g * 0.1, 1.0]),
+                    unchanged(&mut hdr, [g, g * 0.6, g * 0.1, 1.0], exact),
                     "{peak}: {i}"
                 );
             }
@@ -1671,7 +1678,7 @@ struct ReferenceParams { peak: f32, unused: f32, world: f32, debug: f32, share: 
             for light in [0.0f32, 0.3, knee] {
                 let g = f64::from(light.powf(1.0 / 2.2));
                 assert!(
-                    unchanged(&mut hdr, [g, g * 0.5, 0.0, 1.0]),
+                    unchanged(&mut hdr, [g, g * 0.5, 0.0, 1.0], true),
                     "{paper}/{peak}: {light}"
                 );
             }
@@ -1702,7 +1709,7 @@ struct ReferenceParams { peak: f32, unused: f32, world: f32, debug: f32, share: 
         let headroom = 300.0 / 203.0;
         for light in [0.0f32, 0.5, 0.9, 1.0] {
             let g = f64::from(light.powf(1.0 / 2.2));
-            assert!(unchanged(&mut hdr, [g, g * 0.5, 0.0, 1.0]), "{light}");
+            assert!(unchanged(&mut hdr, [g, g * 0.5, 0.0, 1.0], true), "{light}");
         }
         for (light, want) in [
             (1.2, 1.16839),
