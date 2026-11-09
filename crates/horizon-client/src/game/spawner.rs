@@ -138,8 +138,10 @@ impl Game<'_> {
         let mut planned: Vec<Planned> = Vec::new();
         {
             let level = self.natural_level();
-            let mut spawn = |l: &super::natural_spawning::GameLevel, r: &SpawnerSpawn| {
-                l.game.plan_spawner_mob(l, r, &mut planned)
+            let mut spawn = |l: &super::natural_spawning::GameLevel,
+                             random: &mut horizon_core::random::LegacyRandom,
+                             r: &SpawnerSpawn| {
+                l.game.plan_spawner_mob(l, r, random, &mut planned)
             };
             spawner.server_tick(&level, &mut random, pos, &mut spawn, &mut events);
         }
@@ -185,6 +187,7 @@ impl Game<'_> {
         &self,
         l: &super::natural_spawning::GameLevel,
         r: &SpawnerSpawn,
+        random: &mut horizon_core::random::LegacyRandom,
         planned: &mut Vec<Planned>,
     ) -> Option<SpawnerAdded> {
         let kind = self.res.mob_types().get(r.id)?.clone();
@@ -194,7 +197,7 @@ impl Game<'_> {
             let mut mob = Mob::new(0, kind, at, r.yaw);
             let facts = self.biome_facts(x.floor() as i32, y.floor() as i32, z.floor() as i32);
             let difficulty = self.local_difficulty(r.position);
-            spawning::finalize(&mut mob, &facts, &difficulty);
+            spawning::finalize(&mut mob, &facts, &difficulty, random);
             // TrialSpawner.spawnMob: setPersistenceRequired.
             mob.persistent = r.trial;
             horizon_client::mobs::raider::finalize(

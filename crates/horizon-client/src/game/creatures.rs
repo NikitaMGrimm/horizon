@@ -692,7 +692,7 @@ impl Game<'_> {
                 at[2].floor() as i32,
             );
             let difficulty = self.local_difficulty(at);
-            spawning::finalize(&mut mob, &facts, &difficulty);
+            spawning::finalize(&mut mob, &facts, &difficulty, &mut self.world.random);
             if !scripted {
                 let reason = if persistent {
                     horizon_client::mobs::raider::Reason::Other
@@ -904,7 +904,7 @@ impl Game<'_> {
         );
         let difficulty = self.local_difficulty([at.x, at.y, at.z]);
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-            spawning::finalize(m, &facts, &difficulty);
+            spawning::finalize(m, &facts, &difficulty, &mut self.world.random);
             m.persistent = true;
         }
     }

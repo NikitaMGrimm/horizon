@@ -1076,7 +1076,7 @@ pub fn spawn_for_chunk<L: NaturalLevel, R: RandomSource>(
     state: &mut SpawnState,
     categories: &[Category],
     chunk: (i32, i32),
-    spawn: &mut dyn FnMut(&L, &SpawnRequest) -> Option<Spawned>,
+    spawn: &mut dyn FnMut(&L, &mut R, &SpawnRequest) -> Option<Spawned>,
     trace: &mut dyn FnMut(Event),
 ) {
     for &category in categories {
@@ -1095,7 +1095,7 @@ pub fn spawn_category_for_chunk<L: NaturalLevel, R: RandomSource>(
     state: &mut SpawnState,
     category: Category,
     chunk: (i32, i32),
-    spawn: &mut dyn FnMut(&L, &SpawnRequest) -> Option<Spawned>,
+    spawn: &mut dyn FnMut(&L, &mut R, &SpawnRequest) -> Option<Spawned>,
     trace: &mut dyn FnMut(Event),
 ) {
     let x = chunk.0 * 16 + random.next_int_bound(16).unwrap_or(0);
@@ -1118,7 +1118,7 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
     category: Category,
     chunk: (i32, i32),
     start: [i32; 3],
-    spawn: &mut dyn FnMut(&L, &SpawnRequest) -> Option<Spawned>,
+    spawn: &mut dyn FnMut(&L, &mut R, &SpawnRequest) -> Option<Spawned>,
     trace: &mut dyn FnMut(Event),
 ) {
     let [x0, y, z0] = start;
@@ -1205,7 +1205,7 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
                 group_index,
                 reason: Reason::Natural,
             };
-            let Some(result) = spawn(l, &request) else {
+            let Some(result) = spawn(l, random, &request) else {
                 continue;
             };
             attempt_count(1);
