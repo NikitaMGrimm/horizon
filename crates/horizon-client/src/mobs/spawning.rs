@@ -212,6 +212,31 @@ pub fn finalize(
             m.extra.pick_up_loot = true;
             super::fox::populate_default_equipment(m, random);
         }
+        // Piglin.createSpawnWeapon: half crossbows, half golden swords, and
+        // each piece of golden armour one time in ten.
+        S::Piglin if !m.is_baby() => {
+            m.extra.pick_up_loot = true;
+            for i in 0..4 {
+                if random.next_float() < 0.1 {
+                    let (slot, piece) = match i {
+                        0 => (&mut m.extra.head, "helmet"),
+                        1 => (&mut m.extra.chest, "chestplate"),
+                        2 => (&mut m.extra.legs, "leggings"),
+                        _ => (&mut m.extra.feet, "boots"),
+                    };
+                    *slot = Some(format!("minecraft:golden_{piece}").into());
+                }
+            }
+            let crossbow = m.random.next_float() < 0.5;
+            m.extra.set_main_hand(Some(
+                if crossbow {
+                    "minecraft:crossbow"
+                } else {
+                    "minecraft:golden_sword"
+                }
+                .into(),
+            ));
+        }
         _ => {}
     }
     // Mob.finalizeSpawn, reached through `super` by every mob but the cave
@@ -312,31 +337,6 @@ pub fn finalize(
         // Camel.finalizeSpawn: standing, with fixed attributes.
         S::Camel | S::CamelHusk => super::camel::stand_up_instantly(m),
         S::SulfurCube => super::sulfur_cube::finalize(m),
-        // Piglin.createSpawnWeapon: half crossbows, half golden swords, and
-        // each piece of golden armour one time in ten.
-        S::Piglin if !m.is_baby() => {
-            m.extra.pick_up_loot = true;
-            for i in 0..4 {
-                if random.next_float() < 0.1 {
-                    let (slot, piece) = match i {
-                        0 => (&mut m.extra.head, "helmet"),
-                        1 => (&mut m.extra.chest, "chestplate"),
-                        2 => (&mut m.extra.legs, "leggings"),
-                        _ => (&mut m.extra.feet, "boots"),
-                    };
-                    *slot = Some(format!("minecraft:golden_{piece}").into());
-                }
-            }
-            let crossbow = m.random.next_float() < 0.5;
-            m.extra.set_main_hand(Some(
-                if crossbow {
-                    "minecraft:crossbow"
-                } else {
-                    "minecraft:golden_sword"
-                }
-                .into(),
-            ));
-        }
         S::PiglinBrute => {
             m.extra.set_main_hand(Some("minecraft:golden_axe".into()));
             m.extra.pick_up_loot = true;
