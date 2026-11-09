@@ -8230,12 +8230,15 @@ impl Renderer {
         }
         laps.lap("r_prepare");
         // Frame generation: its present thread acquires and presents, this frame draws
-        // into frames of its own. Not over menus that blur the frame, a shader pack's
-        // own post passes, HDR (or the 16-bit frame it was started with) or the title screen.
+        // into frames of its own. Not over menus that blur the frame, a shader pack's own post
+        // passes, HDR output without the HUD's layer (or the 16-bit frame HDR was started
+        // with) or the title screen.
         let fg = self.frame_gen.on
             && !self.frame_gen.paused
-            && self.hdr.is_none()
-            && self.output.frame.format == self.config.format.remove_srgb_suffix()
+            && (self.hdr.as_ref()).map_or(
+                self.output.frame.format == self.config.format.remove_srgb_suffix(),
+                hdr::Hdr::layered,
+            )
             && !frame.title
             && frame.menu_blur.is_none()
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
@@ -8256,7 +8259,7 @@ impl Renderer {
                     self.surface.as_ref(),
                     self.offscreen.as_ref(),
                     &self.window,
-                    &self.config,
+                    &self.surface_config(),
                 )
             })
             .flatten();
@@ -8309,8 +8312,8 @@ impl Renderer {
         }
         let size = [self.config.width, self.config.height];
         let target_texture = match (&surface_frame, &mut self.hdr) {
-            _ if let Some((real, _)) = &fg_frames => real.clone(),
             (_, Some(hdr)) => hdr.frame(&self.device, size),
+            _ if let Some((real, _)) = &fg_frames => real.clone(),
             // A screenshot of a swapchain without COPY_SRC (OpenGL), and a 16-bit frame
             // with HDR off, draw into a texture of their own, then onto the swapchain or
             // the offscreen target.
@@ -11668,6 +11671,13 @@ impl Renderer {
                 self.draw_hand(&mut pass, hand_quads, world_quads + additive_quads);
             }
         }
+        // A 0.2 pack is shown at paper white: HDR output lifts nothing of its world.
+        let lifts_world = !frame.title
+            && self.output.frame.format != LINEAR_FRAME
+            && self
+                .native
+                .as_ref()
+                .is_none_or(|n| n.frame.api == horizon_shader_api::Api::V0_1);
         if let Some((color, depth)) = &scaled
             && pack_post
             && let Some((dimension, Some(mut post))) = self.pack_post.take()
@@ -11809,11 +11819,6 @@ impl Renderer {
                 native.timing.as_mut(),
             );
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
-            let world = self
-                .frame_gen
-                .world(&self.device, &self.world_post, &self.config);
-            self.world_post
-                .finish(&self.queue, &mut encoder, &world, self.own_timing.as_mut());
             let camera = frame_gen::Camera {
                 jittered,
                 view_proj,
@@ -11825,32 +11830,19 @@ impl Renderer {
                 far: frame.depth_far,
                 fov_y: frame.fov_degrees.to_radians(),
             };
-            let generated_view = generated.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(self.config.format.remove_srgb_suffix()),
-                ..Default::default()
-            });
-            fg_made = self.frame_gen.generate(
-                &self.device,
-                &self.queue,
-                &mut encoder,
-                &self.world_post,
-                &view_target,
-                &generated_view,
-                &camera,
-            );
-            if fg_made {
-                let overlay = Overlay {
-                    hand_quads: hand_quads * u32::from(!pack_draws_hand),
-                    first_hand_vertex: made_hand_vertex,
-                    crosshair,
-                    first_crosshair: debug_depth + debug_top,
-                    world_depth: false,
-                    real: false,
-                    hand_drawn: !pack_draws_hand,
-                    hand_view_proj,
-                };
-                self.draw_overlay(&mut encoder, frame, &generated_view, generated, &overlay);
-            }
+            let overlay = Overlay {
+                hand_quads: hand_quads * u32::from(!pack_draws_hand),
+                first_hand_vertex: made_hand_vertex,
+                crosshair,
+                first_crosshair: debug_depth + debug_top,
+                world_depth: false,
+                real: false,
+                hand_drawn: !pack_draws_hand,
+                hand_view_proj,
+            };
+            let onto = (&view_target, &target_texture, generated);
+            fg_made =
+                self.draw_generated(&mut encoder, frame, &camera, &overlay, onto, lifts_world);
         } else if scaled.is_some() {
             self.world_post.finish(
                 &self.queue,
@@ -11916,7 +11908,10 @@ impl Renderer {
         };
         let overlay = Overlay {
             hand_quads: hand_quads * u32::from(!pack_draws_hand && !hand_in_world),
-            first_hand_vertex: ((world_quads + additive_quads) * 4) as i32,
+            first_hand_vertex: match fg_made && frame_gen::generated_only() && self.hdr.is_some() {
+                true => made_hand_vertex,
+                false => ((world_quads + additive_quads) * 4) as i32,
+            },
             crosshair,
             first_crosshair: debug_depth + debug_top,
             world_depth: scaled.is_none(),
@@ -11967,18 +11962,17 @@ impl Renderer {
         {
             self.readback.present(&self.device, &mut encoder, image);
         }
-        // A 0.2 pack is shown at paper white: HDR output lifts nothing of its world.
-        let lifts_world = !frame.title
-            && self.output.frame.format != LINEAR_FRAME
-            && self
-                .native
-                .as_ref()
-                .is_none_or(|n| n.frame.api == horizon_shader_api::Api::V0_1);
-        match (&self.hdr, &surface_frame) {
-            (Some(hdr), Some(f)) => hdr.present(
+        // With frame generation on a window, its real frame.
+        let shown = surface_frame.as_ref().map(|f| &f.texture);
+        let shown = shown.or(fg_frames
+            .as_ref()
+            .filter(|_| self.surface.is_some())
+            .map(|f| &f.0));
+        match (&self.hdr, shown) {
+            (Some(hdr), Some(texture)) => hdr.present(
                 &self.queue,
                 &mut encoder,
-                &f.texture,
+                texture,
                 lifts_world,
                 self.own_timing.as_mut(),
             ),
@@ -12139,7 +12133,7 @@ impl Renderer {
                 self.configure_surface();
             }
         } else if let Some((real, generated)) = fg_frames {
-            self.frame_gen.present(real, generated, fg_made);
+            self.present_generated(real, generated, fg_made);
         }
         if self.surface.is_none() {
             // No swapchain paces offscreen frames: keep two on the GPU at most.

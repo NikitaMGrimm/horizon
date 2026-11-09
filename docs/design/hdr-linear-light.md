@@ -251,7 +251,9 @@ paper white) are a later, optional addition for pack authors.
 They read the frame as it is stored and, outside the 0.1 path, have no marks to keep, which fixes the alpha problems
 above. Native upscaling
 ([#1403](https://github.com/horizon-rust/horizon/issues/1403)) should take the float frame. TAA over values above 1
-may need a tone-weighted resolve so bright pixels don't sparkle. Frame generation stays off with HDR output, as today.
+may need a tone-weighted resolve so bright pixels don't sparkle. Frame generation interpolates the float frame's
+light before the tone curve, and the made frame goes through the tone curve, the HUD's layer and HDR output's last
+pass as the real one does; the compatibility frame keeps it off with HDR output.
 The rules such a pass keeps now are in [hdr-passes.md](../hdr-passes.md).
 
 ## Tests

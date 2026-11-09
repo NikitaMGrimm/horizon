@@ -89,7 +89,8 @@ fn name(encoding: Option<hdr::Output>) -> &'static str {
 }
 
 /// The swapchain's configuration for `encoding`: `config` (what every pipeline draws in), or
-/// HDR10 or scRGB.
+/// HDR10 or scRGB, which HDR output's last pass draws, or frame generation's present thread
+/// copies to where the surface takes copies.
 pub(super) fn surface_config(
     config: &wgpu::SurfaceConfiguration,
     encoding: Option<hdr::Output>,
@@ -99,7 +100,8 @@ pub(super) fn surface_config(
         config.format = output.format();
         config.view_formats = vec![output.format()];
         config.color_space = output.color_space();
-        config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        config.usage =
+            wgpu::TextureUsages::RENDER_ATTACHMENT | config.usage & wgpu::TextureUsages::COPY_DST;
     }
     config
 }
