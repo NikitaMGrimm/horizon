@@ -109,15 +109,42 @@ fn auto_levels_and_setup_read_their_own_renderers_report() {
     let label = |h, out| Item::Horizon(h).label(&s, out).plain();
     assert_eq!(
         label(H::HdrPaperWhite, &reporting),
-        "Paper White: Auto (400)"
+        "Paper White: Auto (400 nits)"
     );
-    assert_eq!(label(H::HdrPaperWhite, &silent), "Paper White: Auto (203)");
+    assert_eq!(
+        label(H::HdrPaperWhite, &silent),
+        "Paper White: Auto (203 nits)"
+    );
     assert_eq!(
         label(H::HdrPeak, &reporting),
-        "Peak Brightness: Auto (1000)"
+        "Peak Brightness: Auto (1000 nits)"
     );
     assert_eq!(label(H::HdrCalibrate, &reporting), "Calibrate Anyway...");
     assert_eq!(label(H::HdrCalibrate, &silent), "Calibrate...");
+}
+
+/// The brightness rows show their unit: the nits of the signal Horizon sends (PQ, or scRGB's
+/// 80-nit units), Auto with the nits it gives and a value set by hand alike.
+#[test]
+fn brightness_rows_read_in_nits() {
+    let mut s = Settings::default();
+    s.horizon.hdr = HdrMode::On;
+    let label = |s: &Settings, h| Item::Horizon(h).label(s, &NONE).plain();
+    assert_eq!(label(&s, H::HdrPaperWhite), "Paper White: Auto (203 nits)");
+    assert_eq!(label(&s, H::HdrPeak), "Peak Brightness: Auto (1000 nits)");
+    assert_eq!(
+        label(&s, H::HdrUiBrightness),
+        "UI Brightness: Auto (203 nits)"
+    );
+    assert_eq!(label(&s, H::HdrBlackLevel), "Black Level: 0.00 nits");
+    s.horizon.hdr_paper_white = 160;
+    s.horizon.hdr_peak = 1000;
+    s.horizon.hdr_ui_nits = 250;
+    s.horizon.hdr_black_level = 5;
+    assert_eq!(label(&s, H::HdrPaperWhite), "Paper White: 160 nits");
+    assert_eq!(label(&s, H::HdrPeak), "Peak Brightness: 1000 nits");
+    assert_eq!(label(&s, H::HdrUiBrightness), "UI Brightness: 250 nits");
+    assert_eq!(label(&s, H::HdrBlackLevel), "Black Level: 0.05 nits");
 }
 
 #[test]
@@ -139,14 +166,14 @@ fn ui_brightness_reads_in_nits_on_paper_whites_steps() {
     s.horizon.hdr = HdrMode::On;
     let reporting = offering(true, Some(true));
     let label = |s: &Settings, out| Item::Horizon(H::HdrUiBrightness).label(s, out).plain();
-    assert_eq!(label(&s, &reporting), "UI Brightness: Auto (400)");
-    assert_eq!(label(&s, &NONE), "UI Brightness: Auto (203)");
+    assert_eq!(label(&s, &reporting), "UI Brightness: Auto (400 nits)");
+    assert_eq!(label(&s, &NONE), "UI Brightness: Auto (203 nits)");
     s.horizon.hdr_paper_white = 250;
-    assert_eq!(label(&s, &reporting), "UI Brightness: Auto (250)");
+    assert_eq!(label(&s, &reporting), "UI Brightness: Auto (250 nits)");
     s.horizon.hdr_ui_nits = 160;
     for paper_white in [0, 80, 250] {
         s.horizon.hdr_paper_white = paper_white;
-        assert_eq!(label(&s, &reporting), "UI Brightness: 160");
+        assert_eq!(label(&s, &reporting), "UI Brightness: 160 nits");
     }
     let item = Item::Horizon(H::HdrUiBrightness);
     assert_eq!(
