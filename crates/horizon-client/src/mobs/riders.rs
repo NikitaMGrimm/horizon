@@ -474,7 +474,7 @@ pub fn tick(
     mobs: &mut [Mob],
     index: usize,
     w: &MobWorld,
-    random: &mut horizon_core::random::LegacyRandom,
+    random: &mut horizon_core::random::LevelRandom,
     events: &mut Vec<super::MobEvent>,
 ) -> bool {
     let mut owner = index;
