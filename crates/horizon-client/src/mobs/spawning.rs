@@ -376,9 +376,8 @@ pub fn finalize(
         );
     }
     // Drowned.finalizeSpawn, once Zombie.finalizeSpawn is done: a nautilus
-    // shell in an empty offhand, as a guaranteed drop. Java draws it from the
-    // level's random; this route stands in the mob's own, as above.
-    if m.species() == S::Drowned && m.extra.off_hand.is_none() && m.random.next_float() < 0.03 {
+    // shell in an empty offhand, as a guaranteed drop.
+    if m.species() == S::Drowned && m.extra.off_hand.is_none() && random.next_float() < 0.03 {
         super::finalize::set_item(m, super::finalize::OFFHAND, "minecraft:nautilus_shell");
         super::finalize::set_drop_chance(m, super::finalize::OFFHAND, 2.0);
     }
