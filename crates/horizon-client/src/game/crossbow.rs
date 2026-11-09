@@ -12,7 +12,10 @@ use horizon_client::{
     projectiles::{Projectile, ProjectileKind},
     random_source,
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{
+    geometry::Vec3,
+    random::{EntityRandom, RandomSource},
+};
 
 const CROSSBOW: &str = "minecraft:crossbow";
 const FIREWORK_ROCKET: &str = "minecraft:firework_rocket";
@@ -343,7 +346,12 @@ impl Game<'_> {
             if rocket {
                 let at = Vec3::new(eye[0], eye[1] - f64::from(0.15f32), eye[2]);
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
-                shot.shoot(&mut random_source::entity(), dir.to_array(), power, 1.0);
+                shot.shoot(
+                    &mut EntityRandom::own(random_source::entity()),
+                    dir.to_array(),
+                    power,
+                    1.0,
+                );
                 // Its first tick posts the shot (Projectile.tick).
                 self.launch_angled_rocket(at, shot.velocity, ammo, Some(Who::Player));
             }

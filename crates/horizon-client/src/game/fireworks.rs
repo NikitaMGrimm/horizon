@@ -18,7 +18,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    random::RandomSource,
+    random::{EntityRandom, RandomSource},
 };
 
 pub(super) const FIREWORK_EXPLODE_EVENT: i8 = 17;
@@ -276,8 +276,8 @@ impl Game<'_> {
     pub(super) fn new_rocket(&mut self, at: Vec3, stack: &ItemStack, attached: bool) -> Rocket {
         let (flight, explosions) = fireworks_of(stack);
         // FireworkRocketEntity: motion and lifetime come from the rocket's own random.
-        let r = &mut random_source::entity();
-        let tri = |r: &mut horizon_core::random::LegacyRandom| r.triangle(0.0, 0.002297);
+        let r = &mut EntityRandom::own(random_source::entity());
+        let tri = |r: &mut EntityRandom| r.triangle(0.0, 0.002297);
         let velocity = Vec3::new(tri(r), 0.05, tri(r));
         let lifetime = 10 * (1 + i32::from(flight))
             + r.next_int_bound(6).unwrap_or(0)

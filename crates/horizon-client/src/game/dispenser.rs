@@ -19,7 +19,7 @@ pub(super) use horizon_client::mod_api::NativeDispensed;
 use horizon_core::{
     geometry::{Aabb, Direction, Vec3},
     position::BlockPos,
-    random::RandomSource,
+    random::{EntityRandom, RandomSource},
 };
 use horizon_world::{
     fluid::FluidKind,
@@ -1103,12 +1103,22 @@ impl Game<'_> {
             | "minecraft:splash_potion"
             | "minecraft:lingering_potion" => {
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
-                shot.shoot(&mut random_source::entity(), dir, power, uncertainty);
+                shot.shoot(
+                    &mut EntityRandom::own(random_source::entity()),
+                    dir,
+                    power,
+                    uncertainty,
+                );
                 self.launch_thrown(one, at, shot.velocity, None);
             }
             "minecraft:firework_rocket" => {
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
-                shot.shoot(&mut random_source::entity(), dir, power, uncertainty);
+                shot.shoot(
+                    &mut EntityRandom::own(random_source::entity()),
+                    dir,
+                    power,
+                    uncertainty,
+                );
                 self.launch_angled_rocket(at, shot.velocity, &one, None);
             }
             _ => {

@@ -17,7 +17,7 @@ use horizon_client::{
 use horizon_core::{
     geometry::{Aabb, Vec3, traverse_blocks, trig},
     position::BlockPos,
-    random::{LegacyRandom, LevelRandom, RandomSource},
+    random::{EntityRandom, LegacyRandom, LevelRandom, RandomSource},
 };
 use horizon_protocol::entity_data::{Value, serializer};
 use std::{collections::HashMap, sync::Arc};
@@ -95,7 +95,7 @@ pub(super) struct Hook {
     medium: Option<HookMedium>,
     /// The position a server's update put it heading for.
     lerp: HookLerp,
-    pub(super) random: LegacyRandom,
+    pub(super) random: EntityRandom,
 }
 /// What a hook keeps of the mod's fishing medium it floats in.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -113,7 +113,7 @@ fn inside_medium(
 }
 /// `catchingFish`'s wait for a fish: vanilla's 100 to 600 ticks, or a medium's
 /// own range, less the rod's Lure.
-fn lure_wait(random: &mut LegacyRandom, range: Option<(i32, i32)>, lure: i32) -> i32 {
+fn lure_wait(random: &mut EntityRandom, range: Option<(i32, i32)>, lure: i32) -> i32 {
     match range {
         None => 100 + random.next_int_bound(501).unwrap_or(0) - lure,
         Some((min, max)) => {
@@ -262,7 +262,7 @@ fn bite_impulse(r: &mut impl RandomSource) -> f64 {
 }
 
 /// `FishingHook` constructor's three independent triangle draws.
-fn cast_velocity(y_sin: f32, y_cos: f32, dir_y: f32, random: &mut LegacyRandom) -> Vec3 {
+fn cast_velocity(y_sin: f32, y_cos: f32, dir_y: f32, random: &mut EntityRandom) -> Vec3 {
     let v = Vec3::new(f64::from(-y_sin), f64::from(dir_y), f64::from(-y_cos));
     let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
     Vec3::new(
@@ -285,7 +285,7 @@ impl Game<'_> {
         for seed in [0_i64, 1, 42, 123456789, -1] {
             for phase in 0..5 {
                 let mut hook = Hook::remote(1, Vec3::new(0.5, 400.0, 0.5));
-                hook.random = LegacyRandom::new(seed);
+                hook.random.set_seed(seed);
                 hook.nibble = if phase == 4 { 2 } else { 0 };
                 hook.time_until_lured = if phase == 1 { 2 } else { 0 };
                 hook.time_until_hooked = match phase {
@@ -317,7 +317,7 @@ impl Game<'_> {
             let position = self.player.as_ref().expect("harness player").position;
             let mut hook = Hook::remote(1, position);
             hook.nibble = 10;
-            hook.random = LegacyRandom::new(seed);
+            hook.random.set_seed(seed);
             self.hook = Some(hook);
             let item_start = self.dropped.len();
             let orb_start = self.orbs.len();
@@ -379,7 +379,7 @@ impl Game<'_> {
             hook.state = State::Bobbing;
             hook.velocity = Vec3::new(0.1, 0.03, -0.2);
             hook.nibble = 0;
-            hook.random = LegacyRandom::new(seed);
+            hook.random.set_seed(seed);
             self.hook = Some(hook);
             self.tick_fishing();
             let mut hook = self.hook.take().expect("bobbing hook removed");
@@ -407,7 +407,7 @@ impl Game<'_> {
         .enumerate()
         {
             let mut state = (Vec3::new(x, 301.1, z), motion, State::Flying, false);
-            let mut random = LegacyRandom::new(0);
+            let mut random = EntityRandom::own(LegacyRandom::new(0));
             for tick in 0..5 {
                 state = self.client_hook_step(1, None, state, &mut random);
                 rows.push(serde_json::json!({
@@ -494,7 +494,7 @@ impl Game<'_> {
                 p.position.z - f64::from(y_cos) * 0.3,
             );
             // The hook's own random (`Entity.random`).
-            let mut random = random_source::entity();
+            let mut random = EntityRandom::own(random_source::entity());
             let v = cast_velocity(y_sin, y_cos, dir_y, &mut random);
             self.next_entity += 1;
             self.hook = Some(Hook {
@@ -1455,7 +1455,7 @@ pub(super) struct RemoteHook {
     state: State,
     on_ground: bool,
     lerp: HookLerp,
-    pub(super) random: LegacyRandom,
+    pub(super) random: EntityRandom,
 }
 
 /// The `onGround` of a server's update (`handleMoveEntity`), except that a
@@ -1553,7 +1553,7 @@ impl Hook {
             lure: 0,
             medium: None,
             lerp: HookLerp::default(),
-            random: random_source::entity(),
+            random: EntityRandom::own(random_source::entity()),
         }
     }
     /// `FishingHook`'s entity for the players tracking it: the owner's id in
@@ -1613,7 +1613,7 @@ impl Game<'_> {
                 state: State::Flying,
                 on_ground: false,
                 lerp: HookLerp::default(),
-                random: random_source::entity(),
+                random: EntityRandom::own(random_source::entity()),
             });
         }
     }
@@ -1770,7 +1770,7 @@ impl Game<'_> {
         id: u32,
         owner: Option<Vec3>,
         (mut position, mut velocity, state, mut on_ground): (Vec3, Vec3, State, bool),
-        random: &mut impl RandomSource,
+        random: &mut EntityRandom,
     ) -> (Vec3, Vec3, State, bool) {
         let b = [
             position.x.floor() as i32,
@@ -1985,7 +1985,7 @@ mod tests {
     #[test]
     #[ignore = "requires prepared resources and the vanilla fishing reference"]
     fn fishing_retrieve_reference() {
-        use horizon_core::random::{LegacyRandom, LevelRandom, RandomSource};
+        use horizon_core::random::{EntityRandom, LegacyRandom, LevelRandom, RandomSource};
         use horizon_world::loot::{LootData, PackOverlay};
         let resources = std::env::var_os("HORIZON_FISHING_RESOURCES").unwrap();
         let path = std::env::var_os("HORIZON_FISHING_REFERENCE").unwrap();
@@ -2045,7 +2045,7 @@ mod tests {
         .unwrap();
         assert_eq!(casts.len(), 5, "missing vanilla cast cases");
         for row in casts {
-            let mut random = LegacyRandom::new(row["seed"].as_i64().unwrap());
+            let mut random = EntityRandom::own(LegacyRandom::new(row["seed"].as_i64().unwrap()));
             let (sin, cos, vertical) = super::cast_direction(
                 row["yaw"].as_f64().unwrap() as f32,
                 row["pitch"].as_f64().unwrap() as f32,
