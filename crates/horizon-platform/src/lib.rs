@@ -46,5 +46,26 @@ pub use horizon_server_files as server_files;
 /// [`hooks::register`] it before the game starts (docs/layers.md, "How a Horizon crate plugs
 /// in"). The engine's dispatch side is not part of the API.
 pub mod hooks {
-    pub use horizon_hooks::{Hooks, Started, TooLate, register};
+    /// The players the game shows (`horizon_hooks::players`): the views [`Hooks::frame`] and
+    /// [`Hooks::tick`] get, and the pose a crate lays over a player's body.
+    pub use horizon_hooks::players::{
+        BODY_PARTS, BodyPose, Frame, Kind, PlayerModel, PlayerModels,
+    };
+    pub use horizon_hooks::{Hooks, Started, TooLate, register, seat, tunnel};
+}
+
+/// The settings store (`horizon_hooks::settings`): a crate's own `key:value` lines in the game
+/// folder, loaded and saved with the player's settings (docs/layers.md, "Platform registries").
+pub mod settings {
+    pub use horizon_hooks::settings::{Store, register};
+}
+
+/// Settings pages a crate adds to the options screens (docs/layers.md, "Platform registries").
+pub mod pages {
+    pub use horizon_hooks::pages::{Act, Label, Page, Place, Row, register};
+}
+
+/// Drawing on the HUD (docs/layers.md, "Platform registries").
+pub mod hud {
+    pub use horizon_hooks::hud::{Canvas, Corner, Layer, register};
 }

@@ -823,7 +823,7 @@ impl Game<'_> {
         for (location, rgba) in ready {
             self.store_skin(location, rgba);
         }
-        self.cosmetics_frame();
+        self.client_hooks_frame();
     }
     /// `Hud.extractTabList`: the player list while the player-list key is
     /// held. A local world shows it with a joined LAN guest or a `list`
@@ -902,7 +902,7 @@ impl Game<'_> {
         let up = |id: u128| upside_down.contains(&id);
         // Horizon's mark before the names of Horizon players (the cosmetics service's cache).
         let horizon = self.horizon_players(players.iter().map(|p| p.uuid));
-        let horizon_mark: tab_list::NameMark = &horizon_cosmetics::mark::MARK;
+        let horizon_mark = super::cosmetics::MARK;
         let marked = |id: u128| horizon.contains(&id).then_some(horizon_mark);
         let inputs = TabInputs {
             players: &players,

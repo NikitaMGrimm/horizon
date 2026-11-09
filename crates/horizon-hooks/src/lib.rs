@@ -11,10 +11,22 @@
 //! A new hook is a new method with an empty default body, so existing implementations keep
 //! compiling, and a dispatch function in [`engine`] that the engine calls at the place vanilla
 //! does the matching thing.
+//!
+//! The platform registries (docs/layers.md, "Platform registries") have the same shape:
+//! [`settings`] for the settings each crate keeps in its own lines, [`pages`] for its settings
+//! pages, [`hud`] for what it draws on the HUD.
 #![forbid(unsafe_code)]
 
+pub mod hud;
+pub mod pages;
+pub mod players;
+mod registry;
+pub mod settings;
+pub mod tunnel;
+
+use registry::Registry;
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
 
 /// What a crate above the engine hears from the game. Every method has an empty default:
 /// implement only those you need. Hooks run on the game's thread (the render thread) unless a
@@ -31,6 +43,21 @@ pub trait Hooks: Sync {
 
     /// The game is ending normally: its window closed and the world is saved. Not after a crash.
     fn shutdown(&self) {}
+
+    /// Once a frame, before drawing. Only a window's game calls it (each splitscreen player in
+    /// turn, [`seat`]), never the integrated server's thread or a dedicated server.
+    fn frame(&self, _frame: &players::Frame) {}
+
+    /// Once a client tick while a world is shown: the player models in view. Called as
+    /// [`Hooks::frame`] is.
+    fn tick(&self, _models: &mut dyn players::PlayerModels) {}
+
+    /// The resolver of `friend:` addresses this crate offers ([`tunnel`]); the first hook that
+    /// offers one is used. Asked on the network thread when joining and on the game thread when
+    /// an address is shown, never per frame.
+    fn tunnel(&self) -> Option<&dyn tunnel::Resolver> {
+        None
+    }
 }
 
 /// What [`Hooks::started`] gets.
@@ -46,10 +73,7 @@ impl<'a> Started<'a> {
     }
 }
 
-/// Hooks registered before the game seals the list.
-static PENDING: Mutex<Vec<&'static dyn Hooks>> = Mutex::new(Vec::new());
-/// The list the engine dispatches to, fixed at its first dispatch.
-static SEALED: OnceLock<Box<[&'static dyn Hooks]>> = OnceLock::new();
+static HOOKS: Registry<dyn Hooks> = Registry::new();
 
 /// Why [`register`] refused a hook.
 #[derive(Debug, PartialEq, Eq)]
@@ -67,29 +91,42 @@ impl std::error::Error for TooLate {}
 /// `main`, before it runs the game); once the engine has dispatched, the list is fixed and this
 /// returns [`TooLate`]. Hooks are called in the order they registered.
 pub fn register(hooks: &'static dyn Hooks) -> Result<(), TooLate> {
-    let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
-    // Checked under the lock: `all` seals under it too, so a hook is never lost in between.
-    if SEALED.get().is_some() {
-        return Err(TooLate);
-    }
-    pending.push(hooks);
-    Ok(())
+    HOOKS.register(hooks)
 }
 
 /// The registered hooks, sealing the list on the first call.
 fn all() -> &'static [&'static dyn Hooks] {
-    SEALED.get_or_init(|| {
-        std::mem::take(&mut *PENDING.lock().unwrap_or_else(|e| e.into_inner())).into_boxed_slice()
-    })
+    HOOKS.all()
+}
+
+thread_local! {
+    static SEAT: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The splitscreen player whose turn it is: 0 for P1 (and without splitscreen), 1 for P2...
+/// Splitscreen players are one process, each `Game` in turn on the game's thread, so a crate's
+/// statics are shared by them: a crate that keeps per-player state (settings, pages, HUD) indexes
+/// it by this. A player keeps its seat while it plays. Other threads always see 0.
+pub fn seat() -> usize {
+    SEAT.get()
 }
 
 /// The engine's side: where it calls the hooks. Only the engine calls these.
 pub mod engine {
     use super::*;
 
-    /// Seals the list; `started` and the first frame do it anyway. Call where registration ends.
+    /// The player whose turn starts on this thread ([`seat`]).
+    pub fn set_seat(seat: usize) {
+        SEAT.set(seat);
+    }
+
+    /// Seals every list (hooks and the registries); their first use does it anyway. Call where
+    /// registration ends.
     pub fn seal() {
         all();
+        crate::settings::all();
+        crate::pages::engine::all();
+        crate::hud::engine::all();
     }
 
     /// [`Hooks::started`].
@@ -119,11 +156,36 @@ pub mod engine {
             hooks.shutdown();
         }
     }
+
+    /// Whether any hook is registered: without one the engine builds no view to hand them.
+    pub fn any() -> bool {
+        !all().is_empty()
+    }
+
+    /// [`Hooks::frame`].
+    pub fn frame(frame: &players::Frame) {
+        for hooks in all() {
+            hooks.frame(frame);
+        }
+    }
+
+    /// [`Hooks::tick`].
+    pub fn tick(models: &mut dyn players::PlayerModels) {
+        for hooks in all() {
+            hooks.tick(models);
+        }
+    }
+
+    /// [`Hooks::tunnel`]: the first registered hook's resolver.
+    pub fn tunnel() -> Option<&'static dyn tunnel::Resolver> {
+        all().iter().find_map(|hooks| hooks.tunnel())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use players::PlayerModels as _;
     use std::sync::Mutex as StdMutex;
 
     /// Records what it heard. One process-wide list, as the game has: this test is the only
@@ -139,6 +201,55 @@ mod tests {
         }
         fn published(&self, open: bool) {
             self.0.lock().unwrap().push(format!("published {open}"));
+        }
+        fn frame(&self, frame: &players::Frame) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("frame {}", frame.connection));
+        }
+        fn tick(&self, models: &mut dyn players::PlayerModels) {
+            let mut ids = Vec::new();
+            models.for_each(&mut |m| ids.push(m.id));
+            for id in ids {
+                models.set_body_pose(id, Some(std::sync::Arc::new(Still)));
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct Still;
+    impl players::BodyPose for Still {
+        fn pose(&self, _: f32, _: &[[f32; 9]; 6], _: &mut [[f32; 9]; 6]) -> bool {
+            false
+        }
+    }
+
+    /// Two models, poses by id.
+    struct Two(std::collections::BTreeMap<u32, std::sync::Arc<dyn players::BodyPose>>);
+    impl players::PlayerModels for Two {
+        fn connection(&self) -> u64 {
+            1
+        }
+        fn for_each(&self, f: &mut dyn FnMut(players::PlayerModel)) {
+            for id in [3, 7] {
+                f(players::PlayerModel::new(
+                    id,
+                    players::Kind::Player,
+                    None,
+                    0,
+                    false,
+                ));
+            }
+        }
+        fn body_pose(&self, id: u32) -> Option<&std::sync::Arc<dyn players::BodyPose>> {
+            self.0.get(&id)
+        }
+        fn set_body_pose(&mut self, id: u32, pose: Option<std::sync::Arc<dyn players::BodyPose>>) {
+            match pose {
+                Some(p) => self.0.insert(id, p),
+                None => self.0.remove(&id),
+            };
         }
     }
 
@@ -158,9 +269,19 @@ mod tests {
             engine::published(open);
         }
         engine::shutdown();
+        assert!(engine::any());
+        engine::frame(&players::Frame::new(4));
+        let mut models = Two(Default::default());
+        engine::tick(&mut models);
+        assert!(models.body_pose(3).is_some() && models.body_pose(7).is_some());
         assert_eq!(
             *RECORDER.0.lock().unwrap(),
-            ["started 0.2.31", "published true", "published false"]
+            [
+                "started 0.2.31",
+                "published true",
+                "published false",
+                "frame 4"
+            ]
         );
         assert_eq!(register(&Silent), Err(TooLate));
     }
