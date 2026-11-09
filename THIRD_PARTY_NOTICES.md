@@ -351,3 +351,9 @@ Horizon (Copyright (c) 2026 Ludovic Marie and the Horizon contributors).
 `crates/horizon-client-render/src/android_gamepad.rs` is adapted from Starling's controller decoder
 (`crates/horizon-client-render/src/android_gamepad.rs`) and the input-mode part of its
 `android_runtime.rs`, at the same commit.
+
+`crates/horizon-client-render/src/touch.rs` and `touch/tests/` are adapted from the touch input
+state of Starling's `crates/horizon-client-render/src/touch.rs` at the same commit.
+
+`crates/horizon-client-render/src/android_runtime.rs` and `android_runtime/tests/` are adapted from the
+input part of Starling's `crates/horizon-client-render/src/android_runtime.rs` at the same commit.
