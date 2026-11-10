@@ -1222,7 +1222,7 @@ fn a_strider_landing_in_lava_takes_no_fall_damage() {
                 m.fall_distance = 6.0;
                 let start = m.health;
                 let mut events = Vec::new();
-                m.check_fall_damage(w, Vec3::ZERO, &mut events);
+                m.check_fall_damage(w, Vec3::ZERO, &mut events, &mut level_random(0));
                 let dust = events
                     .iter()
                     .any(|e| matches!(e, MobEvent::LandingDust { .. }));
