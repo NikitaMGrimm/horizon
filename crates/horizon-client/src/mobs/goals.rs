@@ -4,7 +4,7 @@ use super::{Mob, MobEvent, MobWorld, Seen, Species, Who, world::TargetInfo};
 use horizon_core::{
     geometry::{Aabb, Vec3},
     jmath,
-    random::{LegacyRandom, RandomSource},
+    random::{LevelRandom, RandomSource},
 };
 use std::sync::Arc;
 
@@ -18,7 +18,7 @@ pub struct Cx<'a, 'w> {
     pub w: &'a MobWorld<'w>,
     /// The level's random (`level.getRandom()`), for the draws vanilla's
     /// behaviours make from it rather than from the mob's own.
-    pub lr: &'a mut LegacyRandom,
+    pub lr: &'a mut LevelRandom,
     pub events: &'a mut Vec<MobEvent>,
 }
 pub trait Goal: std::fmt::Debug {
@@ -3071,7 +3071,7 @@ mod peaceful_targets_tests {
             let mut wolf = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
             wolf.ai.last_hurt_by = Some(Who::Player);
             wolf.ai.last_hurt_by_time = 5;
-            let mut random = LegacyRandom::new(0);
+            let mut random = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w: &w,
@@ -3117,7 +3117,7 @@ mod peaceful_targets_tests {
         with_test_world(&seen, |w, types| {
             let kind = Arc::new(types.types["minecraft:cow"].clone());
             let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,
@@ -3377,7 +3377,7 @@ mod melee_continue_tests {
 
     /// Tick one `<MeleeAttack>` goal through the real selector.
     fn tick(goals: &mut GoalSelector, m: &mut Mob, world: &MobWorld) {
-        let mut lr = LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let mut events = Vec::new();
         let mut cx = Cx {
             w: world,
@@ -3493,7 +3493,7 @@ mod hurt_by_anger_tests {
                 m.ai.last_hurt_by = Some(Who::Player);
                 m.ai.last_hurt_by_time = 1;
                 m.ai.goals.add(1, HurtByTarget::new());
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,

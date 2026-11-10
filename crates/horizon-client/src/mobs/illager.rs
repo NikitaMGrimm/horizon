@@ -948,7 +948,7 @@ mod tests {
                 let mut mob = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
                 let mut goals = std::mem::take(&mut mob.ai.targets);
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w: &w,
                     lr: &mut lr,
