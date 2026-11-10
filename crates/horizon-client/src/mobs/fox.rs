@@ -1427,7 +1427,6 @@ mod consume_tests {
         use super::*;
         use crate::mobs::sensor_scan_tests::kind;
         use crate::mobs::world::with_test_world;
-        use horizon_core::random::LegacyRandom;
         use std::sync::Arc;
 
         /// `Fox.FoxSleepGoal.canUse` refuses to sleep while `xxa`, `yya` or
@@ -1445,7 +1444,7 @@ mod consume_tests {
                         fox.ai.xxa = 1.0;
                     }
                     fox.ai.goals.add(1, Sleep { countdown: 0 });
-                    let mut lr = LegacyRandom::new(0);
+                    let mut lr = crate::mobs::world::level_random(0);
                     let mut events = Vec::new();
                     let mut cx = Cx {
                         w,

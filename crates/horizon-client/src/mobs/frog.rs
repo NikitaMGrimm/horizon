@@ -1267,7 +1267,7 @@ mod tests {
                 m.position = Vec3::new(8.5, 64.0, 8.5);
                 m.on_ground = true;
                 set_pregnant(&mut m, true);
-                let mut lr = LegacyRandom::new(3);
+                let mut lr = crate::mobs::world::level_random(3);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,
