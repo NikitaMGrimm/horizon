@@ -2705,7 +2705,7 @@ impl Goal for BreathAir {
         );
         m.move_relative(0.02, input);
         let mut ev = Vec::new();
-        m.do_move(cx.w, &mut ev);
+        m.do_move(cx.w, &mut ev, cx.lr);
         cx.events.extend(ev);
     }
 }
