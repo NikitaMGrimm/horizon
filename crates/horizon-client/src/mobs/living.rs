@@ -498,6 +498,19 @@ impl Mob {
         if self.kind.flags.climber {
             return self.climbing;
         }
+        // `AbstractHorse.onClimbable`, `Ghast.onClimbable`, `Phantom.onClimbable`
+        // and `HappyGhast.onClimbable` are a plain false: no horse, donkey,
+        // mule, undead horse, llama, trader llama, camel or camel husk (nor
+        // those flying monsters) is ever on a climbable block, whatever it
+        // stands in.
+        if super::equine::is_equine(self.species())
+            || matches!(
+                self.species(),
+                super::Species::Ghast | super::Species::Phantom | super::Species::HappyGhast
+            )
+        {
+            return false;
+        }
         let (x, y, z) = (
             self.position.x.floor() as i32,
             self.position.y.floor() as i32,
@@ -982,6 +995,13 @@ impl Mob {
     ) {
         if !self.fluids.in_water {
             self.update_fluids(w, events);
+        }
+        // Strider.checkFallDamage: in lava the fall is reset and the base never
+        // runs, so a strider that drops into a lava sea lands with no damage and
+        // no dust, and walks out of it owing nothing.
+        if self.species() == super::Species::Strider && self.fluids.in_lava {
+            self.fall_distance = 0.0;
+            return;
         }
         if !self.fluids.in_water && moved.y < 0.0 {
             self.fall_distance -= f64::from(moved.y as f32);
@@ -2257,6 +2277,9 @@ impl RestitutionWorld for MobRestitution<'_> {
     }
 }
 
+#[cfg(test)]
+#[path = "living_climbable_tests.rs"]
+mod climbable_tests;
 #[cfg(test)]
 #[path = "living_tests.rs"]
 mod tests;
