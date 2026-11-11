@@ -1496,7 +1496,7 @@ pub struct Renderer {
     shadow_seen_scratch: crate::fast_hash::FxHashSet<SectionKey>,
     /// Shadow translucent section draws, retained between frames.
     shadow_translucent_scratch: Vec<(u64, [u32; 5], (u32, Option<u32>))>,
-    /// Lava's sprite layers, which a pack's solid terrain draws (`pack_atlas::terrain_parts`).
+    /// Lava's sprite layers, which a pack's solid terrain draws (`pack_atlas::game_terrain`).
     pack_lava_layers: Vec<u16>,
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
@@ -1577,9 +1577,9 @@ fn requested_split() -> Option<u32> {
         .and_then(|v| v.parse().ok())
         .filter(|&n| (1..=SPRITE_SPLIT).contains(&n))
 }
-fn adapter_requested_split(info: &wgpu::AdapterInfo, requested: Option<u32>) -> Option<u32> {
-    // Metal can fail to sample large mipmapped array textures despite advertising the layer limit.
-    requested.or_else(|| (info.backend == wgpu::Backend::Metal).then_some(512))
+fn adapter_requested_split(info: &wgpu::AdapterInfo, asked: Option<u32>, n: u32) -> Option<u32> {
+    // Metal can fail on big mipmapped arrays (#8471): 512 layers each, more only for n > 8 x 512.
+    asked.or((info.backend == wgpu::Backend::Metal).then(|| n.div_ceil(SPRITE_ARRAYS).max(512)))
 }
 /// The split the CPU mip chains are cut by before the adapter is known.
 fn sprite_split() -> u32 {
@@ -2108,7 +2108,7 @@ fn check_layers(adapter: &wgpu::Adapter, layers: u32) -> Result<u32> {
     Ok(layer_split(
         adapter.limits().max_texture_array_layers,
         info.backend == wgpu::Backend::Gl,
-        adapter_requested_split(&info, requested_split()),
+        adapter_requested_split(&info, requested_split(), layers),
         layers,
     )?)
 }
@@ -2823,10 +2823,8 @@ impl Renderer {
         // Computed once: the sprite arrays, the shaders' constants and the
         // shader pack atlas all cut the sprites by it.
         let split = check_layers(&adapter, layers)?;
-        if split < sprite_split() {
-            log::info!("Horizon: {split} block textures per array (the GPU's limit)");
-        }
         let info = adapter.get_info();
+        surface_setup::log_sprite_split(&info, split, layers);
         crate::graphics::suggest_reduced_far_detail(crate::graphics::lod_capped(&info));
         let size = window.inner_size();
         let max_side = device.limits().max_texture_dimension_2d;
@@ -7540,10 +7538,6 @@ impl Renderer {
                 }
             });
         horizon_shaders::GameInputs {
-            terrain_parts: terrain
-                .as_ref()
-                .map(|t| pack_atlas::terrain_parts(t, &self.pack_lava_layers)),
-            terrain,
             terrain_geometry,
             entity_geometry: Some(pack_entities::geometry_inputs()),
             sky: Some(pack_sky::inputs()),
@@ -7553,6 +7547,7 @@ impl Renderer {
             weather: Some(pack_weather::inputs()),
             lines: Some(pack_lines::inputs()),
             hand: Some(pack_hand::inputs()),
+            ..pack_atlas::game_terrain(terrain, &self.pack_lava_layers)
         }
     }
 
@@ -11610,13 +11605,12 @@ impl Renderer {
                 self.draw_hand(&mut pass, hand_quads, world_quads + additive_quads);
             }
         }
-        // A 0.2 pack is shown at paper white: HDR output lifts nothing of its world.
-        let lifts_world = !frame.title
-            && self.output.frame.format != LINEAR_FRAME
-            && self
-                .native
-                .as_ref()
-                .is_none_or(|n| n.frame.api == horizon_shader_api::Api::V0_1);
+        let lifts_world = output::lifts_world(
+            frame.title,
+            self.output.frame.format == LINEAR_FRAME,
+            self.shader_pack_kind() == Some("iris"),
+            self.native.as_ref().map(|n| n.frame.api),
+        );
         if let Some((color, depth)) = &scaled
             && pack_post
             && let Some((dimension, Some(mut post))) = self.pack_post.take()
@@ -15065,11 +15059,21 @@ mod sprite_upload_tests {
             limit_bucket: None,
         };
         info.backend = wgpu::Backend::Metal;
-        assert_eq!(adapter_requested_split(&info, None), Some(512));
-        assert_eq!(adapter_requested_split(&info, Some(1024)), Some(1024));
+        assert_eq!(adapter_requested_split(&info, None, 1200), Some(512));
+        assert_eq!(
+            adapter_requested_split(&info, None, 512 * SPRITE_ARRAYS),
+            Some(512)
+        );
+        assert_eq!(adapter_requested_split(&info, Some(1024), 1200), Some(1024));
+        // More sprites than the arrays hold at 512: the arrays grow, up to the GPU's layers.
+        let split = adapter_requested_split(&info, None, 10_271);
+        assert_eq!(split, Some(1284));
+        assert_eq!(layer_split(2048, false, split, 10_271), Ok(1284));
+        let split = adapter_requested_split(&info, None, 2048 * SPRITE_ARRAYS + 1);
+        assert!(layer_split(2048, false, split, 2048 * SPRITE_ARRAYS + 1).is_err());
 
         info.backend = wgpu::Backend::Vulkan;
-        assert_eq!(adapter_requested_split(&info, None), None);
+        assert_eq!(adapter_requested_split(&info, None, 10_271), None);
     }
 
     #[test]
