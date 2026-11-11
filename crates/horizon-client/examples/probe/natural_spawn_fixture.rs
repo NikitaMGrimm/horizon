@@ -772,7 +772,7 @@ pub fn main() -> horizon_client::Result<()> {
         };
         let mut random = LegacyRandom::new(get("seed", "0").parse()?);
         let mut log: Vec<String> = Vec::new();
-        let mut spawn = |l: &World, _: &mut LegacyRandom, r: &SpawnRequest| -> Option<Spawned> {
+        let mut spawn = |l: &World, r: &SpawnRequest| -> Option<Spawned> {
             let bounds = neutral_box(l, r);
             l.entities.borrow_mut().push((r.entity.to_owned(), bounds));
             Some(Spawned {
@@ -802,7 +802,7 @@ pub fn main() -> horizon_client::Result<()> {
                 chunk,
                 &mut gen_random,
                 &mut rules,
-                &mut |l, r, _| spawn(l, &mut LegacyRandom::new(0), r).is_some(),
+                &mut |l, r, _| spawn(l, r).is_some(),
                 &mut |e| match e {
                     GenEvent::Column(x, z) => log.push(format!("col {x} {z}")),
                     GenEvent::Spawn(t, p, yaw) => spawns.push(format!(

@@ -693,18 +693,19 @@ impl<'a> Game<'a> {
     }
     /// Creates a mob the spawner accepted, finalized the game's way; the
     /// caller adds it with [`Game::add_spawned`].
-    fn finalize_spawned(
-        &self,
-        r: &SpawnRequest,
-        random: &mut LegacyRandom,
-        pending: &mut Vec<Mob>,
-    ) -> Option<Spawned> {
+    fn finalize_spawned(&self, r: &SpawnRequest, pending: &mut Vec<Mob>) -> Option<Spawned> {
         let kind = self.res.mob_types().get(r.entity)?.clone();
         let [x, y, z] = r.position;
         let mut mob = Mob::new(0, kind, Vec3::new(x, y, z), r.yaw);
         let facts = self.biome_facts(x.floor() as i32, y.floor() as i32, z.floor() as i32);
         let difficulty = self.local_difficulty(r.position);
-        horizon_client::mobs::spawning::finalize(&mut mob, &facts, &difficulty, random);
+        // Natural packs still finalize on the mob's own random until #11574
+        // ports them. The draws `finalize` leaves on the mob's own get a
+        // stream apart for that call, so they don't repeat these rolls.
+        let mut random = mob.random.clone();
+        mob.random = LegacyRandom::new(random.clone().next_long());
+        horizon_client::mobs::spawning::finalize(&mut mob, &facts, &difficulty, &mut random);
+        mob.random = random;
         horizon_client::mobs::raider::finalize(
             &mut mob,
             horizon_client::mobs::raider::Reason::Natural,
@@ -893,8 +894,8 @@ impl<'a> Game<'a> {
                     if !level.can_spawn_in_chunk(chunk.0, chunk.1) {
                         continue;
                     }
-                    let mut spawn = |l: &GameLevel, random: &mut LegacyRandom, r: &SpawnRequest| {
-                        let spawned = l.game.finalize_spawned(r, random, &mut pending);
+                    let mut spawn = |l: &GameLevel, r: &SpawnRequest| {
+                        let spawned = l.game.finalize_spawned(r, &mut pending);
                         if let Some(s) = &spawned {
                             l.pending.borrow_mut().push(s.bounds);
                         }

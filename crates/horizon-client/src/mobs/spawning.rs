@@ -165,8 +165,8 @@ fn populate_armor(m: &mut Mob, d: &LocalDifficulty, r: &mut impl RandomSource) {
 }
 /// `finalizeSpawn` of a fresh mob. `random` is the level's
 /// (`ServerLevelAccessor.getRandom()`), which `Mob.finalizeSpawn` and most
-/// overrides draw from; `Zombie.handleAttributes`, `Piglin.createSpawnWeapon`,
-/// the salmon's size and the zombie villager's data draw from the mob's own.
+/// overrides draw from; `Zombie.handleAttributes`, `Piglin.createSpawnWeapon`
+/// and the salmon's size draw from the mob's own.
 pub fn finalize(
     m: &mut Mob,
     biome: &BiomeFacts,
