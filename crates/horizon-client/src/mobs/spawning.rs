@@ -173,6 +173,25 @@ pub fn finalize(
     difficulty: &LocalDifficulty,
     random: &mut impl RandomSource,
 ) {
+    finalize_with(m, biome, difficulty, random, |_, _| {});
+}
+/// [`finalize`] with every roll on the mob's own random, in one stream.
+pub fn finalize_on_own_random(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
+    let mut random = m.random.clone();
+    // The stream changes hands around the draws `finalize` makes on the mob's own.
+    finalize_with(m, biome, difficulty, &mut random, |m, r| {
+        std::mem::swap(&mut m.random, r)
+    });
+    m.random = random;
+}
+/// `own` runs before and after each group of draws on the mob's own random.
+fn finalize_with<R: RandomSource>(
+    m: &mut Mob,
+    biome: &BiomeFacts,
+    difficulty: &LocalDifficulty,
+    random: &mut R,
+    own: impl Fn(&mut Mob, &mut R),
+) {
     use Species as S;
     let climate_index = match biome.climate {
         Climate::Temperate => 0,
@@ -227,7 +246,9 @@ pub fn finalize(
                     *slot = Some(format!("minecraft:golden_{piece}").into());
                 }
             }
+            own(m, random);
             let crossbow = m.random.next_float() < 0.5;
+            own(m, random);
             m.extra.set_main_hand(Some(
                 if crossbow {
                     "minecraft:crossbow"
@@ -352,7 +373,9 @@ pub fn finalize(
         S::TropicalFish => super::aquatic::finalize(m, random),
         // Salmon.finalizeSpawn: a weighted size (small 30, medium 50, large 15).
         S::Salmon => {
+            own(m, random);
             let r = m.random.next_int_bound(95).unwrap_or(0);
+            own(m, random);
             m.extra.variant = if r < 30 {
                 0
             } else if r < 80 {
@@ -370,11 +393,13 @@ pub fn finalize(
         m.species(),
         S::Zombie | S::Husk | S::Drowned | S::ZombieVillager | S::ZombifiedPiglin
     ) {
+        own(m, random);
         super::finalize::zombie_attributes(
             m,
             difficulty.special(),
             super::finalize::Reason::Natural,
         );
+        own(m, random);
     }
     // Drowned.finalizeSpawn, once Zombie.finalizeSpawn is done: a nautilus
     // shell in an empty offhand, as a guaranteed drop.

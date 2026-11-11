@@ -699,13 +699,8 @@ impl<'a> Game<'a> {
         let mut mob = Mob::new(0, kind, Vec3::new(x, y, z), r.yaw);
         let facts = self.biome_facts(x.floor() as i32, y.floor() as i32, z.floor() as i32);
         let difficulty = self.local_difficulty(r.position);
-        // Natural packs still finalize on the mob's own random until #11574
-        // ports them. The draws `finalize` leaves on the mob's own get a
-        // stream apart for that call, so they don't repeat these rolls.
-        let mut random = mob.random.clone();
-        mob.random = LegacyRandom::new(random.clone().next_long());
-        horizon_client::mobs::spawning::finalize(&mut mob, &facts, &difficulty, &mut random);
-        mob.random = random;
+        // Natural packs still finalize on the mob's own random until #11574 ports them.
+        horizon_client::mobs::spawning::finalize_on_own_random(&mut mob, &facts, &difficulty);
         horizon_client::mobs::raider::finalize(
             &mut mob,
             horizon_client::mobs::raider::Reason::Natural,
@@ -729,7 +724,7 @@ impl<'a> Game<'a> {
             self.enchant_spawn_equipment(id);
             self.halloween_spawn_head(id);
             if !persistent {
-                self.spawn_jockeys(id, true);
+                self.spawn_jockeys_on(id, true, true);
             }
         }
     }
