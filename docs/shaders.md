@@ -135,8 +135,9 @@ with `horizon_`. Code shared by several stages goes in files listed in `shared`,
 
 ## Sprite tags
 
-The material stage can tell block sprites apart through tags the manifest declares. Each `[[tags]]` is a bit of
-`input.tags`, in the order they appear (32 at most); its `sprites` are sprite names, the namespace `minecraft` by
+The material stage can tell block sprites apart through tags the manifest declares, and so can a traced ray's hit
+(`RayHit.tags`, [ray tracing](#ray-tracing)): a pack with tags has a `[material]` stage or `[ray_tracing]`. Each
+`[[tags]]` is a bit of `input.tags`, in the order they appear (32 at most); its `sprites` are sprite names, the namespace `minecraft` by
 default, each with at most one `*`:
 
 ```toml
@@ -151,7 +152,7 @@ Terrain carries its sprite, not its block, so a sprite drawn by several blocks g
 
 Tags answer "is it one of these"; a pack that treats hundreds of kinds of surface differently numbers them
 instead. Each sprite takes the `id` of the first `[[materials]]` entry that names it, 0 without one, as
-`input.material`. Patterns may hold any number of `*`:
+`input.material` (and a traced ray's `RayHit.material`). Patterns may hold any number of `*`:
 
 ```toml
 [[materials]]

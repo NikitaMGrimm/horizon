@@ -788,10 +788,12 @@ impl Manifest {
             }
             options.push(option);
         }
-        if !raw.tags.is_empty() && raw.material.is_none() {
-            return Err(err(
-                "tags are read by the material stage: give it a [material]".into(),
-            ));
+        // `RayHit` has a surface's tags and material id, as `MaterialInput` does.
+        let traced = raw.ray_tracing.is_some();
+        if !raw.tags.is_empty() && raw.material.is_none() && !traced {
+            return Err(err("tags are read by the material stage and by `trace`: \
+                 give it a [material] or a [ray_tracing]"
+                .into()));
         }
         if raw.tags.len() > MAX_TAGS {
             return Err(err(format!(
@@ -815,10 +817,11 @@ impl Manifest {
             }
         }
         let solid_ids = raw.shadow.iter().any(|s| !s.solid_materials.is_empty());
-        if !raw.materials.is_empty() && raw.material.is_none() && !solid_ids {
+        if !raw.materials.is_empty() && raw.material.is_none() && !solid_ids && !traced {
             return Err(err(
-                "materials are read by the material stage and shadow.solid_materials: \
-                 give it a [material] or use them there"
+                "materials are read by the material stage, `trace` and \
+                 shadow.solid_materials: give it a [material] or a [ray_tracing], or use \
+                 them there"
                     .into(),
             ));
         }

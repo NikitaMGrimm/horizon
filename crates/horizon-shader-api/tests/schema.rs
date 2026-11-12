@@ -863,6 +863,25 @@ fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass() {
     assert!(Manifest::parse(SMALLEST_0_2).unwrap().ray_tracing.is_none());
     let asked = Manifest::parse(&format!("{SMALLEST_0_2}[ray_tracing]\n")).unwrap();
     assert!(asked.ray_tracing.is_some());
+    // A traced ray's hit reads the tags and material ids: no material stage is needed.
+    let tags = "[[tags]]\nid = \"glass\"\nsprites = [\"block/glass\"]\n";
+    let materials = "[[materials]]\nid = 7\nsprites = [\"block/stone\"]\n";
+    let traced =
+        Manifest::parse(&format!("{SMALLEST_0_2}[ray_tracing]\n{tags}{materials}")).unwrap();
+    assert!(traced.material.is_none());
+    let sprites = [("minecraft:block/glass", 3), ("minecraft:block/stone", 5)];
+    assert_eq!(traced.sprite_tags(sprites), [(3, 1)]);
+    assert_eq!(traced.sprite_materials(sprites), [(5, 7)]);
+    for (list, message) in [
+        (tags, "tags are read by the material stage and by `trace`"),
+        (
+            materials,
+            "materials are read by the material stage, `trace`",
+        ),
+    ] {
+        let e = Manifest::parse(&format!("{SMALLEST_0_2}{list}")).unwrap_err();
+        assert!(e.to_string().contains(message), "{e}");
+    }
     // `trace` is a name like any other for a pack that doesn't ask.
     let named = SMALLEST_0_2.replace(
         "[[post]]\n",

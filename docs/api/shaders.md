@@ -90,7 +90,7 @@ min = 0.0
 max = 2.0
 step = 0.05
 
-[[materials]]              # 1024 at most: MaterialInput.material, the first entry that matches
+[[materials]]              # 1024 at most: MaterialInput.material (and RayHit.material), the first entry that matches
 id = 10                    # 1 to 65535; 0 is a sprite no entry names
 sprites = ["block/*_leaves"]   # sprite names, any number of * each
 blocks = ["oak_log", "grass_block:snowy=true"]   # optional: the sprites these blocks' models draw with, where no entry's sprites name them
@@ -123,7 +123,7 @@ particles = ["firefly"]    # names, `firefly` or `minecraft:firefly`; the first 
 color = [0.8, 0.9, 0.4]    # each channel 0 to 1; the particle's alpha is its intensity
 reach = 4.0                # blocks, 0.25 to 16; the 16 nearest lights shine, read by MaterialInput.colored_light
 
-[[tags]]                   # 32 at most: bit i of MaterialInput.tags is the i-th tag
+[[tags]]                   # 32 at most: bit i of MaterialInput.tags (and RayHit.tags) is the i-th tag
 id = "glass"
 sprites = ["block/glass", "block/*_stained_glass"]   # sprite names, at most one * each
 
@@ -245,8 +245,9 @@ and particles (the material stage covers terrain only).
   `fn trace(origin, direction, max_distance) -> RayHit` and `fn trace_any(...) -> bool`, which read the terrain around
   the camera where the game traces rays (`HORIZON_RAY_TRACING=1` on a GPU with ray queries) and miss where it doesn't,
   and its `Frame` gets `has_ray_tracing` and `ray_distance`, in what was a gap before `luminance`. `horizon-shader
-  check` builds such a post stage both ways and refuses a pack that names a ray query itself. A pack without the key
-  is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
+  check` builds such a post stage both ways and refuses a pack that names a ray query itself. `[[tags]]` and
+  `[[materials]]` need no `[material]` stage in such a pack: `RayHit.tags` and `RayHit.material` read them. A pack
+  without the key is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
 - 2026-11-10: API 0.2 (additions, experimental): `[frame] primaries`, `"bt709"` (the default) or `"bt2020"`, and
   `Frame.primaries` and `luminance` after `black_level`. `horizon-shader check` takes `"bt2020"` with
   `blend = "linear"` only, and the game refuses it for now. The reference's "Room to grow" gains the rule for new
