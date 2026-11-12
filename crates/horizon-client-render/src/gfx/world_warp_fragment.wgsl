@@ -57,5 +57,5 @@ fn warp_fragment(in: TerrainOut, front: bool) -> Fragment {
     if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 {
         return vec4(hdr_written(finished.rgb, 1.0, globals.hdr_settings, globals.hdr_gains), finished.a);
     }
-    return finished;
+    return frame_stored(finished);
 }
