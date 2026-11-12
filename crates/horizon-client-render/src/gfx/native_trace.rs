@@ -12,7 +12,7 @@ use horizon_shader_api::stages::{
 };
 
 use super::{INTERMEDIATE, NativePost, post_pipeline};
-pub(in crate::gfx) use crate::gfx::surface_setup::ray_query::ray_scene::Traced;
+pub(in crate::gfx) use crate::gfx::surface_setup::ray_query::ray_scene::{RayScene, Traced};
 
 /// What the scene's passes are built against besides the scene: the terrain's sprites and the
 /// pack's tables of them.

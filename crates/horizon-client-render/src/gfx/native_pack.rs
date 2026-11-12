@@ -9,6 +9,7 @@ use super::native_post::{NativeFrame, NativePost};
 use super::native_shadow::{NativeShadow, ShadowGrid};
 use super::native_sky::NativeSky;
 use super::pack_timing::PassTiming;
+use super::surface_setup::ray_query::ray_scene::RayScene;
 
 pub struct NativePack {
     pub frame: NativeFrame,
@@ -79,6 +80,22 @@ fn chosen_shadow(
 }
 
 impl NativePack {
+    /// Writes this frame's inputs (`NativeFrame::write`), and for a `[ray_tracing]` pack where
+    /// its post passes trace `scene` from, once it is built.
+    pub(in crate::gfx) fn write(
+        &mut self,
+        queue: &wgpu::Queue,
+        frame: &super::Frame,
+        size: [u32; 2],
+        display: super::output::DisplayValues,
+        scene: Option<&RayScene>,
+    ) {
+        let scene = scene.and_then(|s| s.traced(frame.camera));
+        let post = self.post.as_ref();
+        self.frame.ray_distance = post.and_then(|post| post.trace(queue, scene.as_ref()));
+        self.frame.write(queue, frame, size, display);
+    }
+
     /// The pack of the checked stages `report` with the option values `constants`, drawing
     /// onto the world's targets as `terrain` describes; the sky reads the terrain's group 0.
     /// Also returns its stages' labels, in the order they draw. Errors name the stage wgpu

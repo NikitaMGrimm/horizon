@@ -9958,15 +9958,8 @@ impl Renderer {
                 .size()
                 .filter(|_| scaled.is_some())
                 .unwrap_or([self.config.width, self.config.height]);
-            // A `[ray_tracing]` pack's post passes trace this frame's scene, once it is built.
-            let scene = self.ray_scene.as_ref().and_then(|s| s.traced(frame.camera));
-            native.frame.ray_distance = native
-                .post
-                .as_ref()
-                .and_then(|post| post.trace(&self.queue, scene.as_ref()));
-            native
-                .frame
-                .write(&self.queue, frame, size, output.display());
+            let scene = self.ray_scene.as_ref();
+            native.write(&self.queue, frame, size, output.display(), scene);
             native.frame.block_light.update(
                 &self.queue,
                 frame.camera,
@@ -11554,18 +11547,16 @@ impl Renderer {
             && let Some(native) = &mut self.native
             && let Some(post) = &mut native.post
         {
-            let size = self.world_post.size().unwrap_or([1, 1]);
             let history_reset = native.frame.take_history_reset();
-            let scene = self.ray_scene.as_ref().and_then(|s| s.traced(frame.camera));
             post.run(
                 &self.device,
                 &mut encoder,
                 (color, depth, &native.frame.surface_view),
                 &view_target,
-                size,
+                self.world_post.size().unwrap_or([1, 1]),
                 history_reset,
                 native.timing.as_mut(),
-                scene.as_ref(),
+                self.ray_scene.as_ref().map(|s| (s, frame.camera)),
             );
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
             let world = self

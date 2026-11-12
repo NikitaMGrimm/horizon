@@ -1447,8 +1447,9 @@ impl NativePost {
     }
 
     /// Runs the passes over the world target `world` (colour, depth) of `size`, the last onto
-    /// `screen`, timed by `timing` when it times this frame. With `scene`, the frame's scene
-    /// (`trace` said this frame's `frame` has it), the passes built against it draw.
+    /// `screen`, timed by `timing` when it times this frame. With `scene`, the terrain's scene
+    /// and the camera (`trace` said this frame's `frame` has it), the passes built against
+    /// it draw.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn run(
         &mut self,
@@ -1459,9 +1460,11 @@ impl NativePost {
         size: [u32; 2],
         history_reset: bool,
         mut timing: Option<&mut super::pack_timing::PassTiming>,
-        scene: Option<&trace::Traced<'_>>,
+        scene: Option<(&trace::RayScene, glam::DVec3)>,
     ) {
         let window = [screen.texture().width(), screen.texture().height()];
+        let scene = scene.and_then(|(scene, camera)| scene.traced(camera));
+        let scene = scene.as_ref();
         self.prepare(device, world, size, window, history_reset, scene);
         if let Some(t) = timing.as_deref_mut() {
             t.mark(device, encoder, (world.0, self.format));
