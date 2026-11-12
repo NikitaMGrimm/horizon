@@ -598,6 +598,13 @@ impl Presenter {
                             return;
                         }
                     };
+                    // A surface that refused its new configuration (HDR's, once the window is
+                    // on a display without it) still gives frames of the old one's size, which
+                    // these frames don't fit: copying would be a validation error, fatal here.
+                    if target.texture.size() != texture.size() {
+                        failed_here.store(true, Ordering::Relaxed);
+                        return;
+                    }
                     let mut encoder = device.create_command_encoder(&Default::default());
                     encoder.copy_texture_to_texture(
                         texture.as_image_copy(),
