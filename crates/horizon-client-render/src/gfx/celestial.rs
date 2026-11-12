@@ -17,7 +17,7 @@ impl Celestial {
         layout: &wgpu::PipelineLayout,
         shader: &wgpu::ShaderModule,
         vertex: &[Option<wgpu::VertexBufferLayout<'_>>],
-        format: wgpu::TextureFormat,
+        (format, linear): (wgpu::TextureFormat, bool),
     ) -> Self {
         let pipeline = |label, entry, blend, write_mask| {
             kept.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -45,10 +45,7 @@ impl Celestial {
                     module: shader,
                     entry_point: Some(entry),
                     compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &[(
-                            "HDR_WRITE_LIGHT",
-                            f64::from(u8::from(format == super::LINEAR_FRAME)),
-                        )],
+                        constants: &super::linear_blend::frame_constants(format, linear),
                         ..Default::default()
                     },
                     targets: &[Some(wgpu::ColorTargetState {
