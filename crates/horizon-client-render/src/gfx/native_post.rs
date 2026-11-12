@@ -1616,7 +1616,9 @@ pub fn frame_inputs(
         black_level: 0.0,
         // No pack is served another space yet (`[frame] primaries`).
         primaries: Primaries::Bt709 as u32,
-        luminance_gap: [0; 2],
+        // No pack's post passes trace the scene yet.
+        has_ray_tracing: 0,
+        ray_distance: 0.0,
         luminance: Primaries::Bt709.luminance(),
         padding: 0,
     }

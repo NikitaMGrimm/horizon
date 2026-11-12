@@ -143,7 +143,16 @@ pub struct Manifest {
     pub shadow: Option<Shadow>,
     /// Relief as geometry near the camera, if the pack asks for it; needs `[material]`.
     pub displacement: Option<Displacement>,
+    /// 0.2: the scene the post stage's `trace` reads, if the pack asks for it; needs `[[post]]`.
+    pub ray_tracing: Option<RayTracing>,
 }
+
+/// `[ray_tracing]` (0.2): the pack's post passes get `trace` and `trace_any`, which read the
+/// terrain around the camera where the device traces rays (`frame.has_ray_tracing`) and miss
+/// where it doesn't. No keys yet.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RayTracing {}
 
 /// `[displacement]`: within `distance` of the camera, the faces of solid terrain whose
 /// resource pack textures have LabPBR heights are drawn as a grid of `cells` by `cells`, each
@@ -519,6 +528,7 @@ struct Raw {
     reflection: Option<Reflection>,
     shadow: Option<Shadow>,
     displacement: Option<RawDisplacement>,
+    ray_tracing: Option<RayTracing>,
 }
 
 #[derive(Deserialize)]
@@ -552,8 +562,10 @@ struct RawBudget {
 
 /// `[[post]] scale` and `output`: scales from `POST_SCALES`, below 1 only with an output,
 /// the last pass drawing the picture itself, outputs named as WGSL names no other resource
-/// takes, each at one scale, `MAX_POST_TARGETS` at most.
-fn check_post_targets(post: &[Stage]) -> Result<(), String> {
+/// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'), each at one scale,
+/// `MAX_POST_TARGETS` at most.
+fn check_post_targets(post: &[Stage], ray_tracing: bool) -> Result<(), String> {
+    let traced = ["trace", "trace_any"];
     let reserved = [
         "frame",
         "scene_color",
@@ -595,7 +607,9 @@ fn check_post_targets(post: &[Stage]) -> Result<(), String> {
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
             && !name.starts_with("horizon_");
-        if !valid || reserved.contains(&name.as_str()) {
+        let taken =
+            reserved.contains(&name.as_str()) || (ray_tracing && traced.contains(&name.as_str()));
+        if !valid || taken {
             return Err(format!(
                 "{}: output {name:?} is not a free WGSL name ([a-z][a-z0-9_]*, at most 32)",
                 p.file
@@ -641,6 +655,7 @@ impl Manifest {
             for (present, key) in [
                 (raw.tonemap.is_some(), "[tonemap]"),
                 (raw.frame.is_some(), "[frame]"),
+                (raw.ray_tracing.is_some(), "[ray_tracing]"),
             ] {
                 if present {
                     return Err(err(format!(
@@ -717,7 +732,12 @@ impl Manifest {
         {
             return Err(err("`scale` and `output` are keys of [[post]] only".into()));
         }
-        check_post_targets(&raw.post).map_err(err)?;
+        check_post_targets(&raw.post, raw.ray_tracing.is_some()).map_err(err)?;
+        if raw.ray_tracing.is_some() && raw.post.is_empty() {
+            return Err(err(
+                "[ray_tracing] needs a [[post]] pass: `trace` is the post stage's".into(),
+            ));
+        }
         if raw.post.len() > MAX_POST_PASSES {
             return Err(err(format!(
                 "{} post passes; a pack may chain {MAX_POST_PASSES}",
@@ -1068,6 +1088,7 @@ impl Manifest {
             reflection: raw.reflection,
             shadow: raw.shadow,
             displacement,
+            ray_tracing: raw.ray_tracing,
         })
     }
 

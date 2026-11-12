@@ -858,6 +858,44 @@ fn the_0_2_keys_are_refused_under_0_1_and_checked_under_0_2() {
     }
 }
 
+#[test]
+fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass() {
+    assert!(Manifest::parse(SMALLEST_0_2).unwrap().ray_tracing.is_none());
+    let asked = Manifest::parse(&format!("{SMALLEST_0_2}[ray_tracing]\n")).unwrap();
+    assert!(asked.ray_tracing.is_some());
+    // `trace` is a name like any other for a pack that doesn't ask.
+    let named = SMALLEST_0_2.replace(
+        "[[post]]\n",
+        "[[post]]\nfile = \"t.wgsl\"\noutput = \"trace\"\n[[post]]\n",
+    );
+    assert_eq!(
+        Manifest::parse(&named).unwrap().post_targets()[0].0,
+        "trace"
+    );
+    let cases = [
+        (
+            SMALLEST_0_2.replace("0.2", "0.1") + "[ray_tracing]\n",
+            "[ray_tracing] is shader API 0.2",
+        ),
+        (
+            SMALLEST_0_2.replace("[[post]]", "[sky]") + "[ray_tracing]\n",
+            "[ray_tracing] needs a [[post]] pass",
+        ),
+        (
+            format!("{SMALLEST_0_2}[ray_tracing]\nbounces = 2\n"),
+            "unknown field",
+        ),
+        (
+            format!("{named}[ray_tracing]\n"),
+            "output \"trace\" is not a free WGSL name",
+        ),
+    ];
+    for (text, needle) in cases {
+        let e = refused(&text);
+        assert!(e.contains(needle), "{needle:?} not in {e:?}");
+    }
+}
+
 fn float_option_manifest(fields: &str) -> String {
     format!(
         "schema = 1\nid = \"finite_options\"\nname = \"Finite options\"\nversion = \"1.0\"\napi = \"0.1\"\n[sky]\nfile = \"sky.wgsl\"\n[[options]]\nid = \"gain\"\nname = \"Gain\"\ntype = \"float\"\n{fields}"
