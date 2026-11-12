@@ -8,8 +8,11 @@ const REACH: f32 = 512.0;
 
 fn post(input: PostInput) -> vec4<f32> {
     let sun = frame.sun_direction;
-    // The sky, the night, and a device that doesn't trace: the picture as it is.
-    if frame.has_ray_tracing == 0u || input.depth == 0.0 || sun.y <= 0.0 {
+    // The sky, the night, and a device that doesn't trace: the picture as it is. So are the
+    // Nether and the End: the frame has a sun direction there too, and every ray would end in
+    // rock.
+    let sunless = frame.dimension != 0 || sun.y <= 0.0;
+    if frame.has_ray_tracing == 0u || input.depth == 0.0 || sunless {
         return input.color;
     }
     let position = view_position(input.uv, input.depth);
