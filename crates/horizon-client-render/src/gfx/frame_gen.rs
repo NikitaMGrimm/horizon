@@ -55,6 +55,11 @@ pub struct FrameGen {
     /// The present thread failed to show a frame (or died): until the renderer has
     /// acquired a frame itself, the normal path runs and handles the surface.
     pub paused: bool,
+    /// The surface refused its last configuration (HDR's colour space, once the window is on
+    /// a display without it) and kept its old swapchain, while wgpu describes its frames by
+    /// the new size: the present thread's copy would overrun, a validation error that is
+    /// fatal there. Frame generation stays off until the next attempt (`stop_to_configure`).
+    pub refused: bool,
     gpu: Option<Gpu>,
     presenter: Option<Presenter>,
     /// When the last real frame was handed over, and the time between real frames.
@@ -113,6 +118,7 @@ impl FrameGen {
         Self {
             on: false,
             paused: false,
+            refused: false,
             gpu: None,
             presenter: None,
             last: None,
@@ -127,6 +133,12 @@ impl FrameGen {
             shown_since: Instant::now(),
             made_share: None,
         }
+    }
+
+    /// `stop`, before the surface is configured again: what it `refused` no longer counts.
+    pub fn stop_to_configure(&mut self) {
+        self.refused = false;
+        self.stop();
     }
 
     /// Ends frame generation's frames and present thread: before the surface is

@@ -5313,7 +5313,7 @@ impl Renderer {
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        self.frame_gen.stop();
+        self.frame_gen.stop_to_configure();
         self.surface = None;
         let surface = match spare {
             Some(surface) => surface,
@@ -6773,12 +6773,10 @@ impl Renderer {
         }
         Ok(())
     }
-    /// Configures the window surface again. One that fails (HDR's colour space, once the
-    /// window is on a display without it) keeps its old swapchain while wgpu describes its
-    /// frames by the new size: no frame is acquired, by frame generation either, until it
-    /// configures (`surface_unconfigured`).
+    /// Configures the window surface again. One that fails is still the one
+    /// wgpu configured before, which acquisition reports as a validation error.
     fn configure_surface(&mut self) {
-        self.frame_gen.stop();
+        self.frame_gen.stop_to_configure();
         // The submit thread may still present to the old swapchain.
         self.queue.wait();
         if let Some(surface) = &self.surface
@@ -6791,7 +6789,7 @@ impl Renderer {
             )
         {
             log::warn!("Horizon renderer: the window surface did not configure ({e})");
-            self.surface_unconfigured = true;
+            self.frame_gen.refused = true;
         }
     }
     /// HDR calibration's test picture (`crate::hdr_calibration`) while it runs, else None.
@@ -7920,7 +7918,7 @@ impl Renderer {
         // passes, HDR output without the HUD's layer (or the 16-bit frame HDR was started
         // with) or the title screen.
         let fg = self.frame_gen.on
-            && !self.frame_gen.paused
+            && !(self.frame_gen.paused || self.frame_gen.refused)
             && (self.hdr.as_ref()).map_or(
                 self.output.frame.format == self.config.format.remove_srgb_suffix(),
                 hdr::Hdr::layered,
