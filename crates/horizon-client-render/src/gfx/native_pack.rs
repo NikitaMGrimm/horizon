@@ -220,7 +220,7 @@ impl NativePack {
             .find(|s| s.kind == StageKind::Weather)
             .map(|s| s.label.clone());
         let has_vertex = report.stages.iter().any(|s| s.kind == StageKind::Vertex);
-        let (post, others): (Vec<_>, Vec<_>) = report
+        let (mut post, others): (Vec<_>, Vec<_>) = report
             .stages
             .into_iter()
             .partition(|s| s.kind == StageKind::Post);
@@ -253,12 +253,26 @@ impl NativePack {
             .transpose()?;
         // A 0.2 pack always has one: its decode and tonemap run without a chain too.
         let tonemap = others.iter().find(|s| s.kind == StageKind::Tonemap);
-        let post = (!post.is_empty() || api == horizon_shader_api::Api::V0_2)
+        // A `[ray_tracing]` pack's passes as the check built them against the scene.
+        let scenes: Vec<(String, naga::Module)> = post
+            .iter_mut()
+            .filter_map(|s| Some((s.label.clone(), s.scene.take()?)))
+            .collect();
+        let mut post = (!post.is_empty() || api == horizon_shader_api::Api::V0_2)
             .then(|| {
                 let manifest = &report.manifest;
                 NativePost::new(device, post, manifest, constants, format, &frame, tonemap)
             })
             .transpose()?;
+        if let Some(post) = post.as_mut().filter(|_| !scenes.is_empty()) {
+            let shape = super::native_post::trace::TraceShape {
+                sprites: terrain.sprite_views,
+                split: terrain.sprites[1] as u32,
+                tags: terrain.sprite_tags,
+                materials: terrain.sprite_materials,
+            };
+            post.trace_scene(device, scenes, constants, &shape);
+        }
         let mut labels: Vec<String> = sky.iter().map(|s| s.label.clone()).collect();
         labels.extend(
             others
@@ -360,6 +374,7 @@ mod tests {
             globals: &globals,
             flat: None,
             sprites: [1.0, 2048.0],
+            sprite_views: &[],
             format: wgpu::TextureFormat::Rgba8Unorm,
             linear: false,
             sprite_tags: &[],

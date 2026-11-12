@@ -7292,6 +7292,7 @@ impl Renderer {
             globals: &self.terrain_layout,
             flat: self.flat.as_ref().map(|f| &f.draw_layout),
             sprites: self.terrain_sprites,
+            sprite_views: &self.sprite_views,
             format: self.output.frame.format,
             linear: self.output.frame.linear_light,
             sprite_tags: &sprite_tags,
@@ -9957,6 +9958,12 @@ impl Renderer {
                 .size()
                 .filter(|_| scaled.is_some())
                 .unwrap_or([self.config.width, self.config.height]);
+            // A `[ray_tracing]` pack's post passes trace this frame's scene, once it is built.
+            let scene = self.ray_scene.as_ref().and_then(|s| s.traced(frame.camera));
+            native.frame.ray_distance = native
+                .post
+                .as_ref()
+                .and_then(|post| post.trace(&self.queue, scene.as_ref()));
             native
                 .frame
                 .write(&self.queue, frame, size, output.display());
@@ -11549,6 +11556,7 @@ impl Renderer {
         {
             let size = self.world_post.size().unwrap_or([1, 1]);
             let history_reset = native.frame.take_history_reset();
+            let scene = self.ray_scene.as_ref().and_then(|s| s.traced(frame.camera));
             post.run(
                 &self.device,
                 &mut encoder,
@@ -11557,6 +11565,7 @@ impl Renderer {
                 size,
                 history_reset,
                 native.timing.as_mut(),
+                scene.as_ref(),
             );
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
             let world = self
