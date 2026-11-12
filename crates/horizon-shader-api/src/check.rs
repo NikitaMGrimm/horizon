@@ -351,7 +351,8 @@ const RAY_QUERY_NAMES: [&str; 5] = [
 ];
 
 /// Where the files of a pack with `[ray_tracing]` name a ray query themselves (a type, a
-/// `rayQuery` function or the `enable` directive), each name once a file; comments don't count.
+/// `rayQuery` function or the `enable` directive), each name once a file; comments don't count
+/// (WGSL's block comments nest).
 fn ray_queries(own: &Composed) -> Vec<Problem> {
     let mut problems = Vec::new();
     for (_, range) in &own.parts[1..] {
@@ -364,9 +365,20 @@ fn ray_queries(own: &Composed) -> Vec<Problem> {
             if text[at..].starts_with("//") {
                 at += text[at..].find('\n').unwrap_or(text.len() - at);
             } else if text[at..].starts_with("/*") {
-                at += text[at + 2..]
-                    .find("*/")
-                    .map_or(text.len() - at, |end| end + 4);
+                let mut depth = 0;
+                while at < bytes.len() {
+                    let (opens, closes) =
+                        (text[at..].starts_with("/*"), text[at..].starts_with("*/"));
+                    depth += i32::from(opens) - i32::from(closes);
+                    // A character of any width: `at` stays on a boundary.
+                    at += match opens || closes {
+                        true => 2,
+                        false => text[at..].chars().next().map_or(1, char::len_utf8),
+                    };
+                    if depth == 0 {
+                        break;
+                    }
+                }
             } else if word(bytes[at]) {
                 let end = at + bytes[at..].iter().take_while(|b| word(**b)).count();
                 let name = &text[at..end];

@@ -603,6 +603,18 @@ fn post(input: PostInput) -> vec4<f32> {
             ("post.wgsl", 4, 47, "RayDesc"),
         ]
     );
+    // Block comments nest: the outer one ends at its own `*/`, and what follows it counts.
+    let nested = format!("/* outer /* inner */ ray_query é */\n{POST}");
+    traced(&nested).unwrap();
+    let after = format!("/* outer /* inner */ */ alias Q = ray_query;\n{POST}");
+    let problems = traced(&after).unwrap_err();
+    assert!(
+        problems[0]
+            .to_string()
+            .starts_with("post.wgsl:1:35: `ray_query`"),
+        "{}",
+        problems[0]
+    );
     let enabled = format!("enable wgpu_ray_query;\n{POST}");
     let problems = traced(&enabled).unwrap_err();
     assert!(
