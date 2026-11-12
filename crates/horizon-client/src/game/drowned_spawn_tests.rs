@@ -133,7 +133,7 @@ fn only_an_empty_offhand_drowned_draws_for_the_shell() {
         m.clone()
     };
     let finalize = |mut m: horizon_client::mobs::Mob, seed: i64| {
-        m.random = LegacyRandom::new(seed);
+        m.random.set_seed(seed);
         let mut level = LegacyRandom::new(seed);
         horizon_client::mobs::spawning::finalize(&mut m, &facts, &difficulty, &mut level);
         (m, level)
