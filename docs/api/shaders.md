@@ -201,10 +201,14 @@ file = "tonemap.wgsl"
 [frame]
 blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
+
+[ray_tracing]              # optional, needs [[post]], no keys: the post stage gets `trace` and `trace_any`
 ```
 
-0.1 is unchanged: the same prelude, entries and reference, and a 0.1 pack that names `[tonemap]` or `[frame]` is
-refused. The example's port is `crates/horizon-shader-api/packs/golden_hour_0_2`, a test pack of the SDK.
+0.1 is unchanged: the same prelude, entries and reference, and a 0.1 pack that names `[tonemap]`, `[frame]` or
+`[ray_tracing]` is refused. The example's port is `crates/horizon-shader-api/packs/golden_hour_0_2`, a test pack of
+the SDK, and `packs/traced_shadows` beside it is the smallest pack that traces rays
+([the guide](../shaders.md#ray-tracing)).
 
 ## Testing a pack frame by frame
 
@@ -237,6 +241,12 @@ and particles (the material stage covers terrain only).
 
 ## Changelog
 
+- 2026-11-12: API 0.2 (additions, experimental): `[ray_tracing]`: the post stage of a pack that sets it gets
+  `fn trace(origin, direction, max_distance) -> RayHit` and `fn trace_any(...) -> bool`, which read the terrain around
+  the camera where the game traces rays (`HORIZON_RAY_TRACING=1` on a GPU with ray queries) and miss where it doesn't,
+  and its `Frame` gets `has_ray_tracing` and `ray_distance`, in what was a gap before `luminance`. `horizon-shader
+  check` builds such a post stage both ways and refuses a pack that names a ray query itself. A pack without the key
+  is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
 - 2026-11-10: API 0.2 (additions, experimental): `[frame] primaries`, `"bt709"` (the default) or `"bt2020"`, and
   `Frame.primaries` and `luminance` after `black_level`. `horizon-shader check` takes `"bt2020"` with
   `blend = "linear"` only, and the game refuses it for now. The reference's "Room to grow" gains the rule for new
