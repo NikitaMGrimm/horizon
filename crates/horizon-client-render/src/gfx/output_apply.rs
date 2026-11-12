@@ -465,7 +465,7 @@ mod tests {
     const NO_PACK: FrameRequest = FrameRequest {
         linear_pack: false,
         linear_blend: false,
-        hdr_float: true,
+        compatibility: false,
     };
     fn on() -> Graphics {
         Graphics {
