@@ -237,17 +237,19 @@ impl Present for Applying<'_> {
             _ => None,
         };
         if let Some(surface) = &r.surface {
-            r.frame_gen.stop();
+            r.frame_gen.stop_to_configure();
             // The submit thread may still present to the old swapchain.
             r.queue.wait();
             let hdr = built.as_ref().or(r.hdr.as_ref());
-            Renderer::configure(
+            let configured = Renderer::configure(
                 &r.device,
                 surface,
                 &surface_config(&r.config, output.encoding),
                 hdr.filter(|_| output.encoding.is_some()),
                 &r.device_lost,
-            )?;
+            );
+            r.frame_gen.refused = configured.is_err();
+            configured?;
             r.surface_unconfigured = false;
         }
         if output.encoding.is_none() {
@@ -263,7 +265,7 @@ impl Present for Applying<'_> {
         r.hdr = None;
         r.mark_hdr_start(false, self.marker);
         if let Some(surface) = &r.surface {
-            r.frame_gen.stop();
+            r.frame_gen.stop_to_configure();
             r.queue.wait();
             r.surface_unconfigured =
                 Renderer::configure(&r.device, surface, &r.config, None, &r.device_lost).is_err();

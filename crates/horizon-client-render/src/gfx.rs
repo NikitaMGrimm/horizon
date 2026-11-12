@@ -7898,7 +7898,7 @@ impl Renderer {
             if self.device_lost.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err("the graphics device was lost".into());
             }
-            self.frame_gen.stop();
+            self.frame_gen.stop_to_configure();
             if Self::configure(
                 &self.device,
                 surface,
