@@ -476,7 +476,6 @@ mod trial_spawner;
 mod trial_visuals;
 mod trident;
 mod tutorial;
-mod tweaks;
 mod ui_control;
 mod use_hand;
 mod using_item;
@@ -2230,7 +2229,7 @@ struct Game<'a> {
     /// `AbstractContainerScreen`'s quick craft and skip-release state.
     inv_clicks: horizon_client::container_screen::Clicks,
     /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
-    tweaks: tweaks::Tweaks,
+    tweaks: extras::mouse_tweaks::Tweaks,
     /// The wheel and hovered slot of `BundleMouseActions`.
     bundle_mouse: bundles::BundleMouse,
     /// The last inventory click, for the double click that gathers a stack.
@@ -7211,14 +7210,14 @@ impl Game<'_> {
         laps.lap("eg_objects");
         // Particles (ParticleEngine.extract): camera-facing quads.
         self.mark_stage(out.len(), "PARTICLES");
-        let world = &self.world;
         let particle_mode = self.settings.horizon.particle_culling;
         if particle_mode == horizon_client::graphics::ParticleCullingMode::Off {
-            self.particles.render(
+            self.particles.render_in_view(
                 camera,
                 self.particle_rotation(),
                 alpha as f32,
-                &|b| world.light(b[0], b[1], b[2]),
+                self.view_frustum.as_ref(),
+                &|b| self.world.light(b[0], b[1], b[2]),
                 &mut out,
             );
         } else {
@@ -7241,7 +7240,7 @@ impl Game<'_> {
                     true,
                     frustum.as_ref(),
                     &mut |min, max| particle_culling.hidden(min, max),
-                    &|b| world.light(b[0], b[1], b[2]),
+                    &|b| self.world.light(b[0], b[1], b[2]),
                     &mut out,
                 );
             }

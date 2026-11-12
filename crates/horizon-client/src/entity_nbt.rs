@@ -2867,7 +2867,7 @@ pub fn evoker_fangs_to_nbt(
         motion: raw.map(motion).unwrap_or(Vec3::ZERO),
         rotation: [yaw, raw.map(rotation).unwrap_or([0.0; 2])[1]],
         on_ground: raw.is_some_and(|t| flag(t, "OnGround")),
-        fall_distance: 0.0,
+        fall_distance: raw.map_or(0.0, |t| ground_from_nbt(t).1),
     }
     .tag(raw);
     put(&mut tag, "Warmup", Tag::Int(warmup));
@@ -4161,6 +4161,28 @@ mod tests {
                 .get("can_break")
                 .is_none()
         );
+    }
+
+    /// `EvokerFangs` extends `Entity` and never moves: `Entity.saveWithoutId`
+    /// writes the `fall_distance` it loaded, and 0 for fangs a spell made.
+    #[test]
+    fn evoker_fangs_keep_their_loaded_fall_distance() {
+        let raw = horizon_world::nbt::parse_snbt(
+            "{id:\"minecraft:evoker_fangs\",Pos:[1d,200d,1d],fall_distance:5.0d,Warmup:100}",
+        )
+        .unwrap()
+        .0;
+        let at = super::Vec3::new(1.0, 200.0, 1.0);
+        let fall = |raw: Option<&super::Tag>| match super::evoker_fangs_to_nbt(
+            at, 0.0, 99, None, [1; 4], raw,
+        )
+        .get("fall_distance")
+        {
+            Some(super::Tag::Double(bits)) => f64::from_bits(*bits),
+            other => panic!("no fall_distance: {other:?}"),
+        };
+        assert_eq!(fall(Some(&raw)), 5.0);
+        assert_eq!(fall(None), 0.0);
     }
 
     /// `Shulker` reads `AttachFace` as a byte before
@@ -8003,6 +8025,14 @@ mod fireball_nbt_tests {
             ("Facing", Tag::Byte(1)),
         ]);
         assert_eq!(item_frame_from_nbt(&frame, 1).unwrap().pos, [-1, 80, 6]);
+        // BlockAttachedEntity.readAdditionalSaveData: a block_pos 16 blocks or
+        // more from the Pos block is refused for that block.
+        let mut far = painting.clone();
+        put(&mut far, "block_pos", Tag::IntArray(vec![28, 80, 22]));
+        assert_eq!(painting_from_nbt(&far).map(|p| p.0), Some([28, 80, 6]));
+        let mut near = painting.clone();
+        put(&mut near, "block_pos", Tag::IntArray(vec![28, 80, 21]));
+        assert_eq!(painting_from_nbt(&near).map(|p| p.0), Some([28, 80, 21]));
     }
 
     #[test]
