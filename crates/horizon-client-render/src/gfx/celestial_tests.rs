@@ -116,7 +116,7 @@ fn draw(
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &attributes,
         })],
-        super::super::LINEAR_FRAME,
+        (super::super::LINEAR_FRAME, false),
     );
     let globals = super::super::Globals {
         view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
