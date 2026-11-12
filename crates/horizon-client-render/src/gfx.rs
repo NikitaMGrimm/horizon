@@ -6773,8 +6773,10 @@ impl Renderer {
         }
         Ok(())
     }
-    /// Configures the window surface again. One that fails is still the one
-    /// wgpu configured before, which acquisition reports as a validation error.
+    /// Configures the window surface again. One that fails (HDR's colour space, once the
+    /// window is on a display without it) keeps its old swapchain while wgpu describes its
+    /// frames by the new size: no frame is acquired, by frame generation either, until it
+    /// configures (`surface_unconfigured`).
     fn configure_surface(&mut self) {
         self.frame_gen.stop();
         // The submit thread may still present to the old swapchain.
@@ -6789,6 +6791,7 @@ impl Renderer {
             )
         {
             log::warn!("Horizon renderer: the window surface did not configure ({e})");
+            self.surface_unconfigured = true;
         }
     }
     /// HDR calibration's test picture (`crate::hdr_calibration`) while it runs, else None.
