@@ -32,7 +32,7 @@ const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
 
 /// entity.wgsl after the OverlayTexture constants it reads.
 fn entity_shader() -> String {
-    crate::overlay::wgsl_constants() + include_str!("hdr_light.wgsl") + include_str!("entity.wgsl")
+    crate::overlay::wgsl_constants() + wgsl_prefix::HDR_LIGHT + include_str!("entity.wgsl")
 }
 
 fn no_pack_hdr_gain(layered: bool, pack: bool, world: bool) -> bool {
@@ -40,11 +40,11 @@ fn no_pack_hdr_gain(layered: bool, pack: bool, world: bool) -> bool {
 }
 
 fn terrain_shader() -> String {
-    include_str!("hdr_light.wgsl").to_owned() + include_str!("terrain.wgsl")
+    wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("terrain.wgsl")
 }
 
 fn border_shader() -> String {
-    include_str!("hdr_light.wgsl").to_owned() + include_str!("border.wgsl")
+    wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("border.wgsl")
 }
 
 /// The static block-entity vertex entry point shares entity shading but lives
@@ -12908,7 +12908,7 @@ mod tests {
                 || name == "border.wgsl"
                 || name == "world_primitives.wgsl"
             {
-                let base = include_str!("hdr_light.wgsl").to_owned() + &text;
+                let base = super::wgsl_prefix::HDR_LIGHT.to_owned() + &text;
                 sources.push((path, crate::overlay::wgsl_constants() + &base));
             } else if name == "hdr.wgsl" {
                 sources.push((path, super::hdr::shader()));

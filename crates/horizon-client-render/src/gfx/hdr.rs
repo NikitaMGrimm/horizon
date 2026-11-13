@@ -214,7 +214,7 @@ pub struct Hdr {
 }
 
 pub(super) fn shader() -> String {
-    include_str!("../hdr_light.wgsl").to_owned() + include_str!("../hdr.wgsl")
+    super::wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("../hdr.wgsl")
 }
 
 impl Hdr {
@@ -976,7 +976,7 @@ mod tests {
         // All 8-bit marks, non-grey and over-white colours, look, debug, headroom, tier shares
         // and the unused lane; half-float neighbours straddle mark boundaries. The writers take
         // the gain that a share gives.
-        let source = include_str!("../hdr_light.wgsl").to_owned()
+        let source = super::super::wgsl_prefix::HDR_LIGHT.to_owned()
             + r#"
 struct ReferenceParams { peak: f32, unused: f32, world: f32, debug: f32, share: vec4<f32> }
 var<private> params: ReferenceParams;
@@ -1984,7 +1984,7 @@ var<private> params: ReferenceParams;
             &super::shader(),
             &super::super::terrain_shader(),
             include_str!("../hdr_stats.wgsl"),
-            &(include_str!("../hdr_light.wgsl").to_owned() + include_str!("stars.wgsl")),
+            &(super::super::wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("stars.wgsl")),
             &entity,
         ] {
             let module = naga::front::wgsl::parse_str(source).unwrap();

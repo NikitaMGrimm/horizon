@@ -109,12 +109,12 @@ fn composed() -> Vec<(&'static str, Vec<&'static str>, String)> {
         (
             "stars",
             vec!["stars.wgsl"],
-            include_str!("../hdr_light.wgsl").to_owned() + include_str!("stars.wgsl"),
+            super::wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("stars.wgsl"),
         ),
         (
             "custom sky",
             vec!["custom_sky.wgsl"],
-            include_str!("../hdr_light.wgsl").to_owned() + include_str!("custom_sky.wgsl"),
+            super::wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("custom_sky.wgsl"),
         ),
         ("entity", vec!["entity.wgsl"], entity.clone()),
         (

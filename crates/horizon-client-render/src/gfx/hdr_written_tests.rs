@@ -749,7 +749,7 @@ fn float_stars_keep_the_original_rgb_with_brightness_as_coverage() {
     let mut hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
     let (settings, gains) = hdr.draw_params(true);
     // Frozen f030d9c80 fragment: the original written branch and its marked fallback.
-    let source = include_str!("../hdr_light.wgsl").to_owned()
+    let source = super::super::wgsl_prefix::HDR_LIGHT.to_owned()
         + include_str!("stars.wgsl")
         + r#"
 @vertex fn fixture(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {

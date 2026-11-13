@@ -216,8 +216,7 @@ impl CustomSky {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Custom sky shader"),
             source: wgpu::ShaderSource::Wgsl(
-                (include_str!("../hdr_light.wgsl").to_owned() + include_str!("custom_sky.wgsl"))
-                    .into(),
+                (super::wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("custom_sky.wgsl")).into(),
             ),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -544,7 +543,7 @@ mod tests {
     #[test]
     fn the_shader_validates() {
         let module = naga::front::wgsl::parse_str(
-            &(include_str!("../hdr_light.wgsl").to_owned() + include_str!("custom_sky.wgsl")),
+            &(super::super::wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("custom_sky.wgsl")),
         )
         .unwrap();
         naga::valid::Validator::new(
@@ -573,7 +572,7 @@ mod tests {
         };
         let (device, queue) =
             pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-        let source = include_str!("../hdr_light.wgsl").to_owned()
+        let source = super::super::wgsl_prefix::HDR_LIGHT.to_owned()
             + include_str!("custom_sky.wgsl")
             + r#"
 @vertex fn test_vertex(@builtin(vertex_index) i: u32) -> Out {

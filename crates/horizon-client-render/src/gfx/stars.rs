@@ -101,7 +101,7 @@ impl Stars {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Stars shader"),
             source: wgpu::ShaderSource::Wgsl(
-                (include_str!("../hdr_light.wgsl").to_owned() + include_str!("stars.wgsl")).into(),
+                (super::wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("stars.wgsl")).into(),
             ),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
