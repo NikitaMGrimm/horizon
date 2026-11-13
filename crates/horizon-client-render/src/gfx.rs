@@ -223,6 +223,7 @@ mod linear_blend;
 use frame_policy::frame_format;
 use frame_policy::{frame_configuration, hand_depth_store, horizon_tone_curve, overlay_format};
 mod lod;
+pub mod native_entity;
 mod native_material;
 mod native_pack;
 mod native_post;
@@ -7072,6 +7073,7 @@ impl Renderer {
             sprite_tags: &sprite_tags,
             sprite_materials: &sprite_materials,
             entities: &self.entity_bindings,
+            retained_entities: &self.static_entity_pipeline.get_bind_group_layout(1),
             weather_groups: [&self.weather.entity_layout, &self.weather.time_layout],
             pbr: self.pbr_maps.as_ref().and_then(|arrays| arrays.first()),
         };
@@ -10014,13 +10016,11 @@ impl Renderer {
             native.frame.fit_surface(&self.device, size);
         }
         laps.lap("r_mirror");
-        // One of Horizon's own packs with a material stage: terrain draws with its pipelines,
-        // which read the pack's frame at group 3.
-        let material = self
-            .native
-            .as_ref()
-            .filter(|_| !frame.title && !warp_on)
-            .and_then(|n| Some((n.material.as_ref()?, &n.frame.group)));
+        // One of Horizon's own packs with a material stage, or an entity stage: terrain, or the
+        // entities, draw with its pipelines, which read the pack's frame at group 3.
+        let native = self.native.as_ref().filter(|_| !frame.title && !warp_on);
+        let material = native.and_then(|n| Some((n.material.as_ref()?, &n.frame.group)));
+        let entity_stage = native.and_then(|n| Some((n.entity.as_ref()?, &n.frame.group)));
         // Without HDR output, the solid shaders without its lighting (`SolidPipeline`).
         let hdr = self.hdr.is_some();
         // A world warp's pipelines in place of the terrain's and the entities' (`warp_on`).
@@ -10541,9 +10541,8 @@ impl Renderer {
             }
             if static_entity_quads > 0 {
                 pass.stage(self.own_timing.as_mut(), "static block entities");
-                pass.set_pipeline(
-                    warped.map_or(&self.static_entity_pipeline, |w| &w.static_entities),
-                );
+                let own = warped.map_or(&self.static_entity_pipeline, |w| &w.static_entities);
+                native_entity::set_pipeline(&mut pass, entity_stage, own, true);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_bind_group(1, &self.static_entity_group, &[]);
                 pass.set_index_buffer(
@@ -10567,7 +10566,8 @@ impl Renderer {
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             if entity_quads > 0 {
                 pass.stage(self.own_timing.as_mut(), "entities");
-                pass.set_pipeline(warped.map_or(&self.entity_pipeline, |w| &w.entities));
+                let own = warped.map_or(&self.entity_pipeline, |w| &w.entities);
+                native_entity::set_pipeline(&mut pass, entity_stage, own, false);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);

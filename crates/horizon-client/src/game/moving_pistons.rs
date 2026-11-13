@@ -13,6 +13,9 @@ impl Game<'_> {
         alpha: f64,
         out: &mut Vec<Vertex>,
     ) {
+        // `minecraft:moving_piston` is a block entity. The transient blocks drawn after these
+        // are lit with them.
+        self.mark_block_entities(out.len());
         let partial = alpha as f32;
         let live = self
             .world

@@ -6554,9 +6554,7 @@ impl Game<'_> {
         let mut static_block_entities = std::sync::Arc::from([]);
         let mut visible_static_block_entity_sections = Vec::new();
         let mut static_block_entity_stats = StaticCacheFrameStats::default();
-        self.entity_spans.borrow_mut().clear();
-        self.entity_motion.borrow_mut().clear();
-        self.entity_motion_posed.borrow_mut().clear();
+        self.clear_entity_marks();
         self.maps.slots.next_frame();
         // LevelExtractor.extract: the transient blocks queued since the last frame.
         self.drain_transient_block_queue();
@@ -6937,6 +6935,7 @@ impl Game<'_> {
             // through the per-vertex occlusion callback both repeats that work
             // and disables their per-section GPU cache. Shader packs still need
             // per-entity span marks, so they keep the callback path.
+            self.mark_block_entities(out.len());
             if self.pack_ids.is_some() {
                 let section_revision = |pos| r.block_entity_section_revision(pos);
                 static_block_entity_stats = self
@@ -7684,9 +7683,7 @@ impl Game<'_> {
         self.see_through_vertices.clear();
         self.glowing_vertices.get_mut().clear();
         self.shadow_only_vertices.get_mut().clear();
-        self.entity_spans.borrow_mut().clear();
-        self.entity_motion.borrow_mut().clear();
-        self.entity_motion_posed.borrow_mut().clear();
+        self.clear_entity_marks();
         self.skin_models
             .borrow_mut()
             .restart(&mut self.skin_frame.borrow_mut());
@@ -9776,6 +9773,7 @@ impl Game<'_> {
                 } else {
                     horizon_client::debug_overlay::GPU_TIMING_GAP
                 });
+                renderer.take_entity_kinds(self.native_shaders.entity_kinds.get_mut());
                 horizon_client::spans::time("renderer", || renderer.render(&frame))
             }
             None => Err("renderer".into()),

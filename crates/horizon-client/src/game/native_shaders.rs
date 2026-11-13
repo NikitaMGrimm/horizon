@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use horizon_client::gfx::native_entity::EntityKind;
 use horizon_client::text::Text;
 use horizon_shader_api::{Manifest, Pack, Primaries, check};
 
@@ -68,6 +69,9 @@ pub(super) struct NativeShaders {
     selection: String,
     resolved: PathBuf,
     resolved_at: Option<Instant>,
+    /// What this frame's entities are to the pack's `[entity]` stage (`Game::mark_kind`), up
+    /// to the renderer taking them (`Renderer::take_entity_kinds`).
+    pub entity_kinds: std::cell::RefCell<Vec<(u32, Option<EntityKind>)>>,
 }
 
 impl NativeShaders {
@@ -109,7 +113,51 @@ impl NativeShaders {
     }
 }
 
+/// What a pack's `[entity]` stage lights of entity type `name`'s geometry (`Game::mark_entity`).
+/// Items (dropped, thrown, shown by a block or a display), text and the fire on an entity get
+/// Horizon's lighting: items and particles are the stage's later steps (#14583).
+pub(super) fn entity_kind(name: &str) -> Option<EntityKind> {
+    let own = matches!(
+        name,
+        "" | "minecraft:item"
+            | "minecraft:item_display"
+            | "minecraft:ominous_item_spawner"
+            | "minecraft:splash_potion"
+            | "minecraft:firework_rocket"
+            | "minecraft:entity_flame"
+            | "minecraft:name_tag"
+            | "minecraft:text_display"
+            | "minecraft:test_instance_block"
+    );
+    (!own).then_some(EntityKind::Entity)
+}
+
 impl Game<'_> {
+    /// From vertex `start` of the entity geometry on, what the pack's `[entity]` stage lights
+    /// it as, up to the next mark; `None`: Horizon lights it. Kept only while the pack in use
+    /// has the stage.
+    pub(super) fn mark_kind(&self, start: usize, kind: Option<EntityKind>) {
+        if !self
+            .renderer
+            .as_ref()
+            .is_some_and(|r| r.draws_entity_stage())
+        {
+            return;
+        }
+        let mut kinds = self.native_shaders.entity_kinds.borrow_mut();
+        // A mark that drew nothing gives way to the next.
+        match kinds.last_mut() {
+            Some(last) if last.0 == start as u32 => last.1 = kind,
+            _ => kinds.push((start as u32, kind)),
+        }
+    }
+
+    /// Block entities start at vertex `start`: without a `shaders/` pack they aren't marked
+    /// one by one (`mark_block_entity`).
+    pub(super) fn mark_block_entities(&self, start: usize) {
+        self.mark_kind(start, Some(EntityKind::BlockEntity));
+    }
+
     /// Builds the pack at `path` when its files changed since it was last read.
     pub(super) fn tick_native_shader_pack(&mut self, path: &Path) {
         // A reload would replace the pack a `screenshot-sequence` draws: it waits for the reply.
@@ -246,16 +294,11 @@ fn manifest_refused(path: &Path) -> Option<String> {
 }
 
 /// Why the game doesn't draw a pack the check may still pass: `[frame] primaries = "bt2020"`
-/// isn't served yet (#14584), and neither is the `[entity]` stage.
+/// isn't served yet (#14584).
 fn not_drawn(m: &Manifest) -> Option<&'static str> {
-    if m.primaries == Primaries::Bt2020 {
-        return Some(
-            "[frame] primaries = \"bt2020\" isn't served yet: leave it out, or set \"bt709\"",
-        );
-    }
-    m.entity
-        .is_some()
-        .then_some("the [entity] stage isn't drawn yet: leave it out")
+    (m.primaries == Primaries::Bt2020).then_some(
+        "[frame] primaries = \"bt2020\" isn't served yet: leave it out, or set \"bt709\"",
+    )
 }
 
 /// A hash of the names, sizes and modification times of the pack's files and of its saved
@@ -411,11 +454,6 @@ mod tests {
                 "[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n",
                 "primaries = \"bt2020\" isn't served yet",
             ),
-            (
-                "0.2",
-                "[entity]\nfile = \"e.wgsl\"\n",
-                "[entity] stage isn't drawn yet",
-            ),
             ("0.2", "[frame\n", "horizon-shaders.toml"),
         ] {
             write(api, extra);
@@ -427,11 +465,12 @@ mod tests {
 
     #[test]
     fn a_pack_is_drawn_but_for_what_isnt_served_yet() {
-        // Either blend: `"linear"` is drawn as `"gamma"` is.
+        // Either blend: `"linear"` is drawn as `"gamma"` is. The entity stage is drawn too.
         for frame in [
             "",
             "[frame]\nblend = \"linear\"\n",
             "[frame]\nprimaries = \"bt709\"\n",
+            "[entity]\nfile = \"e.wgsl\"\n",
         ] {
             assert_eq!(not_drawn(&manifest(frame)), None, "{frame}");
         }
@@ -441,7 +480,32 @@ mod tests {
             why.contains("primaries = \"bt2020\" isn't served yet"),
             "{why}"
         );
-        let why = not_drawn(&manifest("[entity]\nfile = \"e.wgsl\"\n"));
-        assert!(why.unwrap().contains("[entity] stage isn't drawn yet"));
+    }
+
+    /// The entity stage lights entities, whatever they are drawn as; items, text and the fire
+    /// on an entity stay Horizon's, and so does what has no name.
+    #[test]
+    fn the_entity_stage_takes_entities_and_leaves_items_and_text() {
+        use super::{EntityKind, entity_kind};
+        for name in [
+            "minecraft:cow",
+            "minecraft:player",
+            "minecraft:armor_stand",
+            "minecraft:item_frame",
+            "minecraft:falling_block",
+            "minecraft:block_display",
+        ] {
+            assert_eq!(entity_kind(name), Some(EntityKind::Entity), "{name}");
+        }
+        for name in [
+            "",
+            "minecraft:item",
+            "minecraft:item_display",
+            "minecraft:splash_potion",
+            "minecraft:name_tag",
+            "minecraft:entity_flame",
+        ] {
+            assert_eq!(entity_kind(name), None, "{name}");
+        }
     }
 }

@@ -105,9 +105,19 @@ const ENTITY_NOTES: &str = "\
 `entity` lights what is no block terrain: `input.kind` says which. It returns the same `Surface` as `material` (rgb
 linear light, 0 or more and unbounded; alpha its coverage), so a pack writes its lighting once and calls it from both
 stages. Around it Horizon keeps vanilla's order: the alpha test on the returned alpha, then the enchantment glint
-added on top, then fog. `horizon-shader check` takes the stage; **the game doesn't draw it yet** and refuses a pack
-that has it. A pack without `[entity]` is drawn as before, and sees none of this stage's names. Until the game draws
-the stage its prelude may still gain names; from then on the rule for new names holds for it too.
+added on top, then fog. A pack without `[entity]` is drawn as before, and sees none of this stage's names; the rule
+for new names holds for the stage as for the others.
+
+**What the game draws through the stage so far: entities and block entities** (`kind` 0 and 1). Until a later
+release brings them in, Horizon lights the rest itself, as without the stage: dropped and framed items and what a
+block or a display entity shows of one (`kind` 2), thrown potions and firework rockets, particles (`kind` 4), the
+fire on a burning entity, name tags and text, and the first-person hand. Some draws stay Horizon's for good: beacon
+beams, End portals and gateways, breaking cracks, energy swirls, lightning and other additive glows.
+
+An item an entity holds or wears as its model (a sword in a hand, a block on a head) reaches the stage with the
+entity, and so does a block drawn as an entity (a falling block, primed TNT, a block display) or as a block entity
+(a block a piston moves). These have vanilla's shade already in `tint`, and `shade` 1: their vertices carry the two
+as one colour so far. A sign's board is block terrain, the material stage's.
 
 Vanilla's own, the picture a pack without the stage gets:
 

@@ -635,6 +635,7 @@ impl Game<'_> {
     }
 
     fn mark_entity_part(&self, start: usize, name: &str, translucent: bool) {
+        self.mark_kind(start, super::native_shaders::entity_kind(name));
         let id = match &self.pack_ids {
             Some(ids) => ids
                 .entities
@@ -655,6 +656,7 @@ impl Game<'_> {
 
     /// Starts a span for the block entity of block state `state`.
     pub(super) fn mark_block_entity(&self, start: usize, state: u32) {
+        self.mark_block_entities(start);
         let Some(ids) = &self.pack_ids else {
             if native_spans() {
                 self.push_span(start, "BLOCK_ENTITIES", state as i32);
@@ -713,9 +715,18 @@ impl Game<'_> {
 
     /// Starts a span of geometry that is not an entity (`PARTICLES`, `DESTROY`...).
     pub(super) fn mark_stage(&self, start: usize, stage: &str) {
+        self.mark_kind(start, None);
         if self.pack_ids.is_some() || native_spans() {
             self.push_span(start, stage, 0);
         }
+    }
+
+    /// Forgets the last frame's marks.
+    pub(super) fn clear_entity_marks(&self) {
+        self.entity_spans.borrow_mut().clear();
+        self.entity_motion.borrow_mut().clear();
+        self.entity_motion_posed.borrow_mut().clear();
+        self.native_shaders.entity_kinds.borrow_mut().clear();
     }
 
     fn push_span(&self, start: usize, stage: &str, id: i32) {
