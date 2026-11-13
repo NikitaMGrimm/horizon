@@ -100,7 +100,9 @@ fn every_0_2_stage_compiles_under_ray_tracing() {
     let traces = "fn post(input: PostInput) -> vec4<f32> {\n    \
                   let hit = trace(view_position(input.uv, input.depth), frame.sun_direction, frame.ray_distance);\n    \
                   let maps = hit_normal_map(hit) * hit_specular_map(hit) * f32(block_pbr_maps()) + hit.tangent;\n    \
-                  let own = maps * hit.emission * f32(hit.fluid) * f32(hit.translucent);\n    \
+                  let water = trace_layers(hit.position, frame.sun_direction, 8.0, RAY_SOLID | RAY_TRANSLUCENT);\n    \
+                  let wet = f32(trace_any_layers(hit.position, hit.normal, 8.0, RAY_TRANSLUCENT)) * water.albedo.a;\n    \
+                  let own = maps * hit.emission * f32(hit.fluid) * f32(hit.translucent) + wet;\n    \
                   return select(input.color, hit.albedo * hit.tint + own, hit.distance >= 0.0 && frame.has_ray_tracing == 1u);\n}\n";
     let shaded = "fn material(input: MaterialInput) -> Surface {\n    \
                   let lit = f32(!trace_any(input.position, frame.sun_direction, frame.ray_distance))\n        \
@@ -125,15 +127,15 @@ fn every_0_2_stage_compiles_under_ray_tracing() {
 }
 
 /// The SHA-256 of the material stage's 0.2 prelude for a `[ray_tracing]` pack whose material
-/// calls `trace` or `trace_any`, without the scene and with it.
+/// calls a trace function, without the scene and with it.
 const PINNED_TRACED_MATERIAL: [(Tracing, &str); 2] = [
     (
         Tracing::Stub,
-        "1566806337532c021d0a56d7ff74e63c8a180ff8c4949d8e1390869a81e5e33f",
+        "509a036742047c228933bcac041d2946358e6841b6a9aea843aebc47e65cb3b3",
     ),
     (
         Tracing::Scene,
-        "7f2d5f54a5be6ed2b6b11e2a30f0f87cf6bf8aaf46f412a2968d113ce2c15312",
+        "a4ee696804159c443dc44bba26523689ab58cce84ff91892384dcbe266c6b3e2",
     ),
 ];
 

@@ -250,6 +250,15 @@ draws them itself (the material stage covers terrain only). The first-person han
 
 ## Changelog
 
+- 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` the scene holds translucent terrain (water,
+  stained glass, ice) in a second layer. Where `trace` is, the prelude gets
+  `fn trace_layers(origin, direction, max_distance, layers) -> RayHit`, `fn trace_any_layers(...) -> bool` and the
+  constants `RAY_SOLID` and `RAY_TRANSLUCENT` to name the layers with; `trace` and `trace_any` keep reading solid
+  terrain alone, so a picture made with them doesn't change. A hit in the translucent layer has `translucent` true
+  and `fluid` 1 on water; a ray stops there at any texel but a clear one (alpha below 0.01), as the translucent pass
+  draws. The check refuses a pack's own function, constant or post `output` by the four names there, and a
+  `displacement` or `vertex` that reaches the new functions, as `trace`'s. Packs without `[ray_tracing]` are built
+  from the same WGSL as before, a test holds.
 - 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` `RayHit` gains `emission`, `fluid`,
   `translucent` (false for every hit: the scene holds no translucent terrain yet) and `tangent`, as `MaterialInput` has
   them, and `horizon_sprite`, Horizon's own. Where `trace` is, the prelude gets `hit_normal_map(hit)` and

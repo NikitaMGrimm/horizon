@@ -216,6 +216,10 @@ fn ray_tracing_brings_its_names_to_the_stages_of_the_pack_that_trace() {
                     "RayHit",
                     "trace",
                     "trace_any",
+                    "trace_layers",
+                    "trace_any_layers",
+                    "RAY_SOLID",
+                    "RAY_TRANSLUCENT",
                     "hit_normal_map",
                     "hit_specular_map",
                 ];

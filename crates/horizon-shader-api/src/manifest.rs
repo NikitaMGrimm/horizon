@@ -152,8 +152,9 @@ pub struct Manifest {
 }
 
 /// `[ray_tracing]` (0.2): the pack's post passes, and its material stage where it calls them,
-/// get `trace` and `trace_any`, which read the terrain around the camera where the device
-/// traces rays (`frame.has_ray_tracing`) and miss where it doesn't. No keys yet.
+/// get `trace`, `trace_layers` and the other trace functions, which read the terrain around the
+/// camera where the device traces rays (`frame.has_ray_tracing`) and miss where it doesn't. No
+/// keys yet.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RayTracing {}
@@ -574,6 +575,10 @@ fn check_post_targets(post: &[Stage], ray_tracing: bool) -> Result<(), String> {
     let traced = [
         "trace",
         "trace_any",
+        "trace_layers",
+        "trace_any_layers",
+        "RAY_SOLID",
+        "RAY_TRANSLUCENT",
         "hit_normal_map",
         "hit_specular_map",
         "block_pbr_maps",
