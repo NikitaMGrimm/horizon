@@ -581,6 +581,14 @@ fn block_pbr_maps() -> bool {
 
 /// The LabPBR maps at a hit, in every stage that traces, with the scene or without it.
 const RAY_PBR: &str = "\
+// One texel of a LabPBR map at a hit, whatever the stage's sampler filters: the centre of the
+// texel `hit.uv` is in at the maps' own full size, kept inside the sprite as the hit's albedo.
+fn horizon_hit_pbr(hit: RayHit, map: u32) -> vec4<f32> {
+    let inside = hit.uv - max(ceil(hit.uv) - 1.0, vec2<f32>(0.0));
+    let size = horizon_block_pbr_size();
+    let texel = clamp(floor(inside * size), vec2<f32>(0.0), size - 1.0);
+    return horizon_block_pbr((texel + 0.5) / size, hit.horizon_sprite, -32.0, map);
+}
 // The resource packs' LabPBR normal map at a hit: its sprite's texel at `hit.uv`, at full size
 // (mip level 0), as `block_normal_map_level(uv, 0.0)` reads a drawn surface's (rg the normal's
 // x and y in the texture's space, x along `hit.tangent`, y down the texture; 0..1 for -1..1,
@@ -589,7 +597,7 @@ fn hit_normal_map(hit: RayHit) -> vec4<f32> {
     if hit.distance < 0.0 {
         return vec4<f32>(0.5, 0.5, 1.0, 1.0);
     }
-    return horizon_block_pbr(hit.uv, hit.horizon_sprite, 0.0, 0u);
+    return horizon_hit_pbr(hit, 0u);
 }
 // The LabPBR specular map at a hit, as `block_specular_map_level(uv, 0.0)` (r perceptual
 // smoothness, g F0 or a metal's id, b porosity or subsurface scattering, a emission, 1 none).
@@ -598,7 +606,7 @@ fn hit_specular_map(hit: RayHit) -> vec4<f32> {
     if hit.distance < 0.0 {
         return vec4<f32>(0.0);
     }
-    return horizon_block_pbr(hit.uv, hit.horizon_sprite, 0.0, 1u);
+    return horizon_hit_pbr(hit, 1u);
 }
 ";
 
