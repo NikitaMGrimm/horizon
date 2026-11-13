@@ -39,7 +39,8 @@ struct HorizonMaterialOut {
     @location(6) spherical: f32,
     @location(7) cylindrical: f32,
     @location(8) @interpolate(flat) face: u32,
-    @location(9) @interpolate(flat) fluid_quad: u32,
+    // Bit 0: a fluid's quad. Bit 1: a light source that shines all over (`mesher::WHOLE`).
+    @location(9) @interpolate(flat) quad: u32,
     @location(10) @interpolate(flat) emission: f32,
     // How far the section's fade-in is from whole, of 65535 (`horizon_material_faded`).
     @location(11) @interpolate(flat) fade: u32,
@@ -96,11 +97,11 @@ fn horizon_material_out(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f
     let high = flags >> 4u;
     let fluid = high >= 8u && (high & 7u) < 6u;
     out.face = select(0u, high & 7u, fluid);
-    out.fluid_quad = u32(fluid);
     // The tier (0 none, 1 low, 2 incandescent, 3 bright, 4 very bright) as how strongly the
     // face shines: a redstone torch 7/15, a torch 14/15, glowstone 1.
     let code = 15u - (flags & 15u);
     // Codes above 4 are the same tiers, shining all over rather than in their bright parts.
+    out.quad = u32(fluid) | (u32(code > 4u) << 1u);
     let tier = select(code, code - 4u, code > 4u);
     out.emission = select(min(f32(tier) * 7.0 / 15.0, 1.0), 0.0, tier == 0u);
     out.base = pos;
@@ -174,7 +175,7 @@ fn horizon_material_color(in: HorizonMaterialOut, translucent: bool) -> vec4<f32
     let footprint = max(dot(dpdx(texels), dpdx(texels)), dot(dpdy(texels), dpdy(texels)));
     horizon_block_lod = max(0.5 * log2(max(footprint, 1e-8)), 0.0);
     // Water draws translucent and lava solid, so the pass resolves the fluid kind.
-    let fluid = select(0u, select(2u, 1u, translucent), in.fluid_quad != 0u);
+    let fluid = select(0u, select(2u, 1u, translucent), (in.quad & 1u) != 0u);
     // `[displacement]`'s grid hands down its face's normal: its relief is the pack's to shade.
     let normal = select(horizon_material_normal(in.position), in.normal,
         dot(in.normal, in.normal) > 0.5);
@@ -187,8 +188,19 @@ fn horizon_material_color(in: HorizonMaterialOut, translucent: bool) -> vec4<f32
         horizon_sprite_material(in.layer & 0x7fffu), in.clip.xy / frame.resolution,
         in.face, fluid, in.emission, normal, tangent,
         horizon_line_in(horizon_terrain_native_colored_light(in.position)), in.displaced,
-        0.0)).color;
+        horizon_material_emission_threshold(in))).color;
     return vec4(horizon_line_out(out.rgb), out.a);
+}
+// `MaterialInput.emission_threshold`, as Horizon's own lift reads it (terrain.wgsl
+// `solid_finish_at`): the sprite's measured threshold (gfx/hdr_stats.rs) for a light source
+// whose bright parts shine, and 0 for one that shines all over and for what is none.
+fn horizon_material_emission_threshold(in: HorizonMaterialOut) -> f32 {
+    if in.emission == 0.0 || (in.quad & 2u) != 0u {
+        return 0.0;
+    }
+    let l = i32(in.layer & 0x7fffu);
+    let split = i32(horizon_terrain_SPRITE_SPLIT);
+    return textureLoad(horizon_terrain_emission_thresholds, vec2(l % split, l / split), 0).r;
 }
 var<private> horizon_material_face_normal: vec3<f32>;
 struct HorizonMaterialSolid {
@@ -575,12 +587,11 @@ impl NativeMaterial {
 }
 
 #[cfg(test)]
-/// A material pack's terrain shader, its frame holding linear light where `linear`, with a
-/// full-screen `test_vertex`.
-pub(super) fn coverage_test_shader(linear: bool) -> String {
+/// The terrain shader of a pack whose material stage is `material` (its `material` and, for
+/// `[displacement]`, its `displacement`), its frame holding linear light where `linear`.
+pub(super) fn test_shader(material: &str, linear: bool) -> String {
     use horizon_shader_api::{MANIFEST, Pack, StageKind, check};
     let manifest = "schema = 1\nid = \"coverage\"\nname = \"Coverage\"\nversion = \"1\"\napi = \"0.2\"\n[material]\nfile = \"material.wgsl\"\n[displacement]\n";
-    let material = "fn material(input: MaterialInput) -> Surface { return Surface(vec4<f32>(1.4, 0.3, 0.1, 0.7)); }\nfn displacement(input: DisplacementInput) -> f32 { return 0.0; }\n";
     let files = [(MANIFEST, manifest), ("material.wgsl", material)]
         .map(|(n, text)| (n.to_owned(), text.as_bytes().to_vec()))
         .into();
@@ -591,6 +602,14 @@ pub(super) fn coverage_test_shader(linear: bool) -> String {
         .find(|s| s.kind == StageKind::Material)
         .unwrap();
     shader_source(&stage.source, &[], &[], (false, true), linear)
+}
+
+#[cfg(test)]
+/// A material pack's terrain shader, its frame holding linear light where `linear`, with a
+/// full-screen `test_vertex`.
+pub(super) fn coverage_test_shader(linear: bool) -> String {
+    let material = "fn material(input: MaterialInput) -> Surface { return Surface(vec4<f32>(1.4, 0.3, 0.1, 0.7)); }\nfn displacement(input: DisplacementInput) -> f32 { return 0.0; }\n";
+    test_shader(material, linear)
         + r#"
 override TEST_TIER: u32 = 0u;
 override TEST_OVERLAY: u32 = 0u;

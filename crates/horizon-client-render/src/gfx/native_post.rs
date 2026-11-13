@@ -765,15 +765,17 @@ impl NativeFrame {
     }
 
     /// Writes this frame's inputs, for a world of `size` drawn for `display`
-    /// (`EffectiveOutput::display`).
+    /// (`EffectiveOutput::display`) under `lightmap` (`Renderer::lightmap_pixels`).
     pub(crate) fn write(
         &mut self,
         queue: &wgpu::Queue,
         frame: &Frame,
         size: [u32; 2],
         display: super::output::DisplayValues,
+        lightmap: &[u8; 16 * 16 * 4],
     ) {
-        let inputs = self.next_inputs(frame, size, display);
+        let mut inputs = self.next_inputs(frame, size, display);
+        inputs.full_light = full_light(lightmap);
         queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(&inputs));
     }
 
@@ -1447,6 +1449,13 @@ fn decoded(c: [f32; 3]) -> [f32; 3] {
     c.map(|v| if v > 0.0 { v.powf(2.2) } else { 0.0 })
 }
 
+/// `Frame.full_light`: `lightmap` (RGBA rows of sky level by block level) at sky 15, block 15,
+/// the texel terrain.wgsl's `sample_lightmap(15.0, 15.0)` reads for Horizon's own lift.
+fn full_light(lightmap: &[u8; 16 * 16 * 4]) -> [f32; 3] {
+    let texel = &lightmap[(15 * 16 + 15) * 4..];
+    decoded([0, 1, 2].map(|i| f32::from(texel[i]) / 255.0))
+}
+
 /// `wetness` after `dt` seconds of `rain`: halfway there in 30 seconds while it rains
 /// harder, in 10 while it dries (the half-lives of the `shaders/` format's `wetness`).
 fn wetness(wetness: f32, rain: f32, dt: f32) -> f32 {
@@ -1563,6 +1572,7 @@ pub fn frame_inputs(
         luminance_gap: [0; 2],
         luminance: Primaries::Bt709.luminance(),
         full_light_gap: 0,
+        // Filled by `NativeFrame::write`, from the frame's lightmap.
         full_light: [1.0; 3],
         padding: 0,
     }
@@ -1699,6 +1709,16 @@ mod tests {
     use horizon_shader_api::{MANIFEST, Pack, check};
 
     const SDR: DisplayValues = DisplayValues::SDR;
+
+    /// `Frame.full_light` is the lightmap's last texel, sky 15 and block 15, in linear light.
+    #[test]
+    fn full_light_is_the_lightmap_at_sky_and_block_15() {
+        let mut lightmap = [40u8; 16 * 16 * 4];
+        lightmap[(15 * 16 + 15) * 4..].copy_from_slice(&[255, 128, 0, 255]);
+        let [r, g, b] = full_light(&lightmap);
+        assert_eq!((r, b), (1.0, 0.0));
+        assert!((g - (128.0f32 / 255.0).powf(2.2)).abs() < 1e-6, "{g}");
+    }
 
     #[test]
     fn wetness_rises_slower_than_it_dries() {

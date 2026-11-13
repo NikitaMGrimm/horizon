@@ -55,6 +55,10 @@ override TEST_OVERLAY: u32 = 0u;
 "#;
 
 const TERRAIN_EXTRA_VERTICES: &str = r#"
+// The lightmap at full light, as the lift samples it (`solid_finish_at`).
+@fragment fn test_full_light() -> @location(0) vec4<f32> {
+    return sample_lightmap(15.0, 15.0);
+}
 @vertex fn test_model(@builtin(vertex_index) i: u32) -> NativeModelOut {
     let p = vec2(f32((i << 1u) & 2u), f32(i & 2u));
     var o: NativeModelOut;
@@ -88,6 +92,10 @@ struct Draw<'a> {
     raw: bool,
     hdr_lighting: bool,
     material_frame: Option<super::super::native_post::NativeFrame>,
+    /// What a pack's stage shader puts before the names of Horizon's shader it wraps.
+    prefix: &'static str,
+    /// The terrain's lightmap, as `Renderer::lightmap_pixels` holds it.
+    lightmap: [u8; 16 * 16 * 4],
 }
 impl<'a> Draw<'a> {
     fn render_oit(
@@ -358,9 +366,24 @@ impl<'a> Draw<'a> {
         queue: &'a wgpu::Queue,
         terrain: bool,
         globals: &super::super::Globals,
-        [r, g, b]: [u8; 3],
+        texel: [u8; 3],
         alpha: u8,
         full: u8,
+    ) -> Self {
+        Self::with_light(device, queue, terrain, globals, texel, alpha, [full; 3], 0)
+    }
+    /// `with_lightmap` with a colour at full light, and the brightness the sprite's texels must
+    /// reach to shine (hdr_stats.wgsl's r), of 255, where the others have 0.
+    #[allow(clippy::too_many_arguments)]
+    fn with_light(
+        device: &'a wgpu::Device,
+        queue: &'a wgpu::Queue,
+        terrain: bool,
+        globals: &super::super::Globals,
+        [r, g, b]: [u8; 3],
+        alpha: u8,
+        full: [u8; 3],
+        threshold: u8,
     ) -> Self {
         let source = if terrain {
             super::super::terrain_shader() + TERRAIN_VERTEX + TERRAIN_EXTRA_VERTICES
@@ -445,9 +468,9 @@ impl<'a> Draw<'a> {
             ..Default::default()
         });
         let image = texture(1, &[r, g, b, alpha]).create_view(&Default::default());
-        let threshold = texture(1, &[0, 0, 0, 0]).create_view(&Default::default());
+        let threshold = texture(1, &[threshold, 0, 0, 0]).create_view(&Default::default());
         let mut levels = [0u8; 16 * 16 * 4];
-        levels[16 * 16 * 4 - 4..].copy_from_slice(&[full, full, full, 255]);
+        levels[16 * 16 * 4 - 4..].copy_from_slice(&[full[0], full[1], full[2], 255]);
         let lightmap = device
             .create_texture_with_data(
                 queue,
@@ -505,15 +528,23 @@ impl<'a> Draw<'a> {
             raw: false,
             hdr_lighting: true,
             material_frame: None,
+            prefix: "",
+            lightmap: levels,
         }
     }
 
     fn material(&mut self) {
         let source = super::super::native_material::coverage_test_shader(false);
+        self.stage(source, "horizon_terrain_");
+    }
+    /// Draws with a pack's stage shader `source`, whose names of Horizon's own shader start
+    /// with `prefix`, and the pack's frame at its group.
+    fn stage(&mut self, source: String, prefix: &'static str) {
+        self.prefix = prefix;
         self.shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("actual assembled material wrappers"),
+                label: Some("actual assembled stage wrappers"),
                 source: wgpu::ShaderSource::Wgsl(source.into()),
             });
         let frame = super::super::native_post::NativeFrame::new(
@@ -547,29 +578,19 @@ impl<'a> Draw<'a> {
         overlay: u32,
         background: [f64; 4],
     ) -> [f32; 4] {
+        let (write_light, lighting) = (
+            self.prefix.to_owned() + "HDR_WRITE_LIGHT",
+            self.prefix.to_owned() + "HDR_LIGHTING",
+        );
         let mut constants = vec![
-            (
-                if self.material_frame.is_some() {
-                    "horizon_terrain_HDR_WRITE_LIGHT"
-                } else {
-                    "HDR_WRITE_LIGHT"
-                },
-                f64::from(u8::from(written)),
-            ),
+            (write_light.as_str(), f64::from(u8::from(written))),
             ("TEST_TIER", f64::from(tier)),
             ("TEST_OVERLAY", f64::from(overlay)),
         ];
         if self.terrain {
-            constants.push((
-                if self.material_frame.is_some() {
-                    "horizon_terrain_HDR_LIGHTING"
-                } else {
-                    "HDR_LIGHTING"
-                },
-                f64::from(u8::from(self.hdr_lighting)),
-            ));
+            constants.push((lighting.as_str(), f64::from(u8::from(self.hdr_lighting))));
         }
-        if self.material_frame.is_some() {
+        if self.terrain && self.material_frame.is_some() {
             constants.push((
                 "horizon_displace_distance",
                 if entry == "horizon_material_fs_displaced" {
@@ -845,23 +866,27 @@ fn float_stars_keep_the_original_rgb_with_brightness_as_coverage() {
     }
 }
 
-#[test]
-fn float_material_wrappers_keep_rgb_and_coverage_including_displacement() {
+/// A device for a pack's material shader: the real material layout binds the terrain arrays and
+/// the pack's frame together.
+fn material_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = super::super::test_gpu::instance();
-    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
-        return;
-    };
-    // The real material layout binds the terrain arrays and the pack's frame together.
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
     if adapter.limits().max_sampled_textures_per_shader_stage < 19 {
-        return;
+        return None;
     }
-    let Ok((device, queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         required_limits: wgpu::Limits {
             max_sampled_textures_per_shader_stage: 19,
             ..Default::default()
         },
         ..Default::default()
-    })) else {
+    }))
+    .ok()
+}
+
+#[test]
+fn float_material_wrappers_keep_rgb_and_coverage_including_displacement() {
+    let Some((device, queue)) = material_gpu() else {
         return;
     };
     let globals = super::super::Globals {
@@ -1339,4 +1364,193 @@ fn actual_oit_cloud_writes_its_own_light() {
 #[test]
 fn actual_oit_additive_adds_converted_light_without_coverage() {
     check_oit_writer(false, "lightning", 0, 4, &[180]);
+}
+
+/// A full-screen corner of a pack's terrain, through the wrapper's own vertex work
+/// (`horizon_material_out`): white, at full light, its colour's alpha byte as the mesher packs
+/// a light source's (`mesher::emitting`: 15 minus `TEST_TIER`, the tier and 4 more for one that
+/// shines all over).
+const MATERIAL_STAGE_VERTEX: &str = r#"
+override TEST_TIER: u32 = 0u;
+override TEST_OVERLAY: u32 = 0u;
+@vertex fn test_vertex(@builtin(vertex_index) i: u32) -> HorizonMaterialOut {
+    let color = vec4(vec3(1.0), f32(0xF0u | (15u - TEST_TIER)) / 255.0);
+    var o = horizon_material_out(vec3(0.0), vec2(0.5), 0u, color, vec2(240.0));
+    o.clip = vec4(vec2(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
+    return o;
+}
+"#;
+
+/// The brightness Horizon's lift gives a texel (hdr_look.wgsl `brightness`).
+fn brightness(texel: [u8; 3]) -> f32 {
+    let light = texel.map(|c| (f32::from(c) / 255.0).powf(2.2));
+    let top = light[0].max(light[1]).max(light[2]);
+    0.5 * (0.2126 * light[0] + 0.7152 * light[1] + 0.0722 * light[2] + top)
+}
+
+/// `MaterialInput.emission_threshold` is what Horizon's own lift reads of a light source's
+/// sprite: the sprite's measured threshold where its bright parts shine, and 0 where all of it
+/// does and on what is no light source. So a texel lifts on Horizon's path exactly where it is
+/// as bright as the stage's threshold.
+#[test]
+fn a_material_stage_reads_the_threshold_horizons_lift_reads() {
+    let Some((device, queue)) = material_gpu() else {
+        return;
+    };
+    let hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
+    let globals = super::super::Globals {
+        fog_ends: [100.0, 100.0, 0.0, 0.0],
+        misc: [0.0, 1.0, 0.0, 0.0],
+        filtering: [0.0, 1.0, 0.0, 0.0],
+        hdr_light: [0.0, 0.0, 1.0, 1.0],
+        hdr_settings: hdr.draw_params(true),
+        ..bytemuck::Zeroable::zeroed()
+    };
+    const TEXEL: [u8; 3] = [200, 100, 50];
+    let material = "fn material(input: MaterialInput) -> Surface {\n    \
+        return Surface(vec4<f32>(input.emission_threshold, input.emission, 0.0, 1.0));\n}\n\
+        fn displacement(input: DisplacementInput) -> f32 { return 0.0; }\n";
+    let source =
+        super::super::native_material::test_shader(material, false) + MATERIAL_STAGE_VERTEX;
+    // Below the texel's brightness (0.40), above it, and unmeasured.
+    for threshold in [90u8, 200, 0] {
+        let light = ([255; 3], threshold);
+        let own = Draw::with_light(
+            &device, &queue, true, &globals, TEXEL, 255, light.0, light.1,
+        );
+        let mut staged = Draw::with_light(
+            &device, &queue, true, &globals, TEXEL, 255, light.0, light.1,
+        );
+        staged.stage(source.clone(), "horizon_terrain_");
+        let plain = own.render(true, "fs_solid", 0, 0, [0.0; 4]);
+        // The mesher's codes: no light source, the four tiers by their bright parts, and all over.
+        for code in 0..=8u32 {
+            let drawn = staged.render(true, "horizon_material_fs_solid", code, 0, [0.0; 4]);
+            // The stage's colours are encoded for the frame.
+            let [read, emission] = [drawn[0], drawn[1]].map(|c| c.powf(2.2));
+            let parts = (1..=4).contains(&code);
+            let want = if parts {
+                f32::from(threshold) / 255.0
+            } else {
+                0.0
+            };
+            assert!(
+                (read - want).abs() < 1e-3,
+                "threshold {threshold} code {code}: {read}"
+            );
+            let tier = [0.0, 7.0 / 15.0, 14.0 / 15.0, 1.0, 1.0][((code + 3) % 4 + 1) as usize];
+            let shines = if code == 0 { 0.0 } else { tier };
+            assert!((emission - shines).abs() < 1e-3, "code {code}: {emission}");
+            let lifted = own.render(true, "fs_solid", code, 0, [0.0; 4]) != plain;
+            assert_eq!(
+                lifted,
+                code > 0 && brightness(TEXEL) >= read,
+                "threshold {threshold} code {code}: the stage reads {read}"
+            );
+        }
+    }
+}
+
+/// `Frame.full_light` is the lightmap's colour at full light, which Horizon's own lift samples
+/// (terrain.wgsl `sample_lightmap(15.0, 15.0)`), in linear light.
+#[test]
+fn a_material_stage_reads_the_full_light_horizons_lift_reads() {
+    let Some((device, queue)) = material_gpu() else {
+        return;
+    };
+    let globals = super::super::Globals {
+        filtering: [0.0, 1.0, 0.0, 0.0],
+        ..bytemuck::Zeroable::zeroed()
+    };
+    let material = "fn material(input: MaterialInput) -> Surface {\n    \
+        return Surface(vec4<f32>(frame.full_light, 1.0));\n}\n\
+        fn displacement(input: DisplacementInput) -> f32 { return 0.0; }\n";
+    let source =
+        super::super::native_material::test_shader(material, false) + MATERIAL_STAGE_VERTEX;
+    // As under the Darkness effect and a wither's bar: dimmed, and no longer white.
+    const FULL: [u8; 3] = [77, 128, 230];
+    let draw = |staged: bool| {
+        let texel = [200, 100, 50];
+        let mut draw = Draw::with_light(&device, &queue, true, &globals, texel, 255, FULL, 0);
+        if !staged {
+            return draw.render(true, "test_full_light", 0, 0, [0.0; 4]);
+        }
+        draw.stage(source.clone(), "horizon_terrain_");
+        let hud = crate::hud::HudBatch::new([4, 4]);
+        let frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+        let display = crate::gfx::output::DisplayValues::SDR;
+        let lightmap = draw.lightmap;
+        let inputs = draw.material_frame.as_mut().unwrap();
+        inputs.write(&queue, &frame, [1, 1], display, &lightmap);
+        draw.render(true, "horizon_material_fs_solid", 0, 0, [0.0; 4])
+    };
+    let (own, staged) = (draw(false), draw(true));
+    for i in 0..3 {
+        assert!(
+            (own[i] - f32::from(FULL[i]) / 255.0).abs() < 1e-3,
+            "{own:?}"
+        );
+        assert!(
+            (staged[i] - own[i]).abs() < 1e-3,
+            "{staged:?} against {own:?}"
+        );
+    }
+}
+
+/// A full-screen corner of an entity's quad, through the wrapper's own vertex work
+/// (`horizon_entity_vertex`): its tier in the layer's bits from 16, as the game packs it, and
+/// with `TEST_OVERLAY` a retained block entity's, as `horizon_entity_vs_static` flags it.
+const ENTITY_STAGE_VERTEX: &str = r#"
+override TEST_TIER: u32 = 0u;
+override TEST_OVERLAY: u32 = 0u;
+@vertex fn test_vertex(@builtin(vertex_index) i: u32) -> horizon_entity_out {
+    var o = horizon_entity_vertex(vec3(0.0), vec2(0.5), TEST_TIER << 16u, vec4(0.8, 0.9, 0.7, 1.0),
+        vec4(240u, 240u, 0u, 0u), vec4(0.0), vec2(0.0), 1u);
+    o.clip = vec4(vec2(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
+    o.flags |= select(0u, 64u, TEST_OVERLAY != 0u);
+    return o;
+}
+"#;
+
+/// `EntityInput.light_source` is the tier Horizon's own lift reads of an entity's quad, on
+/// `MaterialInput.emission`'s scale with the very bright past it, and 0 on a retained block
+/// entity's, which Horizon draws without the lift.
+#[test]
+fn an_entity_stage_reads_the_tier_horizons_lift_reads() {
+    let Some((device, queue)) = gpu() else {
+        return;
+    };
+    let hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
+    let globals = super::super::Globals {
+        fog: [0.0, 100.0, 0.0, 100.0],
+        fog_ends: [100.0, 100.0, 0.0, 0.0],
+        hdr_light: [0.0, 0.0, 1.0, 1.0],
+        hdr_settings: hdr.draw_params(true),
+        ..bytemuck::Zeroable::zeroed()
+    };
+    let entity = "fn entity(input: EntityInput) -> Surface {\n    \
+        return Surface(vec4<f32>(input.light_source, input.emission, 0.0, 1.0));\n}\n";
+    let source = super::super::native_entity::tests::shader(entity) + ENTITY_STAGE_VERTEX;
+    let own = Draw::new(&device, &queue, false, &globals, 255);
+    let mut staged = Draw::new(&device, &queue, false, &globals, 255);
+    staged.stage(source, "horizon_vanilla_");
+    let plain = own.render(true, "fs_entity", 0, 0, [0.0; 4]);
+    let scale = [0.0, 7.0 / 15.0, 14.0 / 15.0, 1.0, 2.0];
+    for (tier, want) in scale.into_iter().enumerate() {
+        let tier = tier as u32;
+        let drawn = staged.render(true, "horizon_entity_fs", tier, 0, [0.0; 4]);
+        let [read, full] = [drawn[0], drawn[1]].map(|c| c.powf(2.2));
+        assert!((read - want).abs() < 1e-3, "tier {tier}: {read}");
+        // The vertex is at full light, which `emission` says apart from the tier.
+        assert!((full - 1.0).abs() < 1e-3, "tier {tier}: emission {full}");
+        let lifted = own.render(true, "fs_entity", tier, 0, [0.0; 4]) != plain;
+        assert_eq!(lifted, read > 0.0, "tier {tier}");
+        let retained = staged.render(true, "horizon_entity_fs", tier, 1, [0.0; 4]);
+        assert_eq!(retained[0], 0.0, "tier {tier}, retained");
+        assert_eq!(
+            own.render(true, "fs_entity_unmarked", tier, 0, [0.0; 4]),
+            own.render(true, "fs_entity_unmarked", 0, 0, [0.0; 4]),
+            "tier {tier}, retained"
+        );
+    }
 }

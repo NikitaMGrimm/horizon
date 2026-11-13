@@ -181,6 +181,14 @@ fn horizon_entity_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: 
     out.flags |= 64u;
     return out;
 }
+// `EntityInput.light_source`: the quad's tier (`mesher::LOW` to `VERY_BRIGHT`) on
+// `MaterialInput.emission`'s scale, with the very bright past it, where Horizon's own lift reads
+// the tier (entity.wgsl `hdr_entity_mark`); 0 on a retained block entity's quad, which Horizon
+// draws without it.
+fn horizon_entity_light_source(flags: u32) -> f32 {
+    let tier = select((flags >> 8u) & 0xffu, 0u, (flags & 64u) != 0u);
+    return select(min(f32(tier) * 7.0 / 15.0, 1.0), 2.0, tier > 3u);
+}
 // A quad Horizon draws itself, as `entity_vertex` hands it to entity.wgsl's fragment.
 fn horizon_entity_own(in: horizon_entity_out) -> horizon_vanilla_Out {
     var out: horizon_vanilla_Out;
@@ -233,7 +241,7 @@ fn horizon_entity_own(in: horizon_entity_out) -> horizon_vanilla_Out {
         horizon_decode(lightmap), horizon_decode(vec3(shade)).x, position,
         f32((in.flags >> 1u) & 1u), horizon_entity_normal(position), kind - 1u,
         horizon_decode(colored), (in.flags & 4u) != 0u, min(light / 240.0, vec2(1.0)),
-        in.uv, in.clip.xy / frame.resolution, 0.0)).color;
+        in.uv, in.clip.xy / frame.resolution, horizon_entity_light_source(in.flags))).color;
     if lit.a < 0.1 { discard; }
     // Vanilla's order from here: the glint, then fog, both in vanilla's gamma.
     var color = vec4(horizon_encode(lit.rgb), lit.a);

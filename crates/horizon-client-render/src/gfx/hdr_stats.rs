@@ -161,3 +161,18 @@ impl EmissionStats {
         queue.submit([encoder.finish()]);
     }
 }
+
+impl super::Renderer {
+    /// Measures which pixels of each block sprite may shine, at the current masks. Only for
+    /// what reads them: Horizon's look with HDR output on, and a pack's material stage
+    /// (`MaterialInput.emission_threshold`), on any output.
+    pub fn measure_emission(&mut self) {
+        let material = self.native.as_ref().is_some_and(|n| n.material.is_some());
+        if self.hdr.is_some() || material {
+            let masks = self.hdr.as_ref().map_or(super::hdr::MASKS, |hdr| hdr.masks);
+            let views = super::sprite_views(&self.sprite_textures, &self.sprite_unused, None);
+            self.emission_stats
+                .measure(&self.device, &self.queue, &views, masks);
+        }
+    }
+}

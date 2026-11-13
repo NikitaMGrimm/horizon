@@ -6646,15 +6646,6 @@ impl Renderer {
             self.config.format,
         )
     }
-    /// Measures which pixels of each block sprite may shine (`hdr_stats`), at the current
-    /// masks. Only with HDR output on: nothing else reads them.
-    pub fn measure_emission(&mut self) {
-        if let Some(hdr) = &self.hdr {
-            let views = sprite_views(&self.sprite_textures, &self.sprite_unused, None);
-            self.emission_stats
-                .measure(&self.device, &self.queue, &views, hdr.masks);
-        }
-    }
     /// The share of real frames frame generation shows a made frame before (1 while it
     /// keeps up), `None` while it isn't running.
     /// The posed models' store size (`SkinFrame::base`), with entity skinning.
@@ -7085,6 +7076,7 @@ impl Renderer {
             lights,
         )?;
         self.native = Some(pack);
+        self.measure_emission();
         self.pack_post = None;
         self.pack_atlas = None;
         self.pack_material_atlases = None;
@@ -9725,9 +9717,10 @@ impl Renderer {
                 .size()
                 .filter(|_| scaled.is_some())
                 .unwrap_or([self.config.width, self.config.height]);
+            let lightmap = &self.lightmap_pixels;
             native
                 .frame
-                .write(&self.queue, frame, size, output.display());
+                .write(&self.queue, frame, size, output.display(), lightmap);
             native.frame.block_light.update(
                 &self.queue,
                 frame.camera,
