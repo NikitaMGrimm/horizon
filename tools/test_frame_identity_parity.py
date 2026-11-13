@@ -11,7 +11,8 @@ must leave the picture alone carries the frame-identity label (docs/release-flow
 Sessions, each a fresh game and world (seed 7) per build:
 
 - vanilla: HDR off and no shader pack: day over water, night with light sources, stained glass, the Nether,
-  entities (a hurt cow, a spider, an armour stand in enchanted armour, a chest, a bell, a banner, a framed item),
+  entities (a hurt cow, a spider, an armour stand in enchanted armour, an arrow, an End crystal, a chest, a bell,
+  a banner, a framed item),
   and the HUD over light: chat over the sun, chat and the crosshair over lava, the pause
   menu over it.
 - golden_hour: the Golden Hour example pack in SDR, the same scenes.
@@ -24,7 +25,8 @@ Sessions, each a fresh game and world (seed 7) per build:
 - float_unlit: HDR on and HDR Lighting off, on that display.
 - entity_off, entity_stage, and each with _hdr: the entity stage's fixture pack
   (crates/horizon-shader-api/tests/samples/entity-stage) without and with its [entity] stage, which is vanilla's
-  own: the entities, in SDR, and with HDR output on and the block entities kept on the GPU.
+  own: the entities, in SDR, and with HDR output on and the block entities kept on the GPU; and items, which the
+  stage doesn't draw, under a dynamic light (Horizon Extras' dynamic lights are on in these sessions).
 
 The float frame's HDR shots are also held to their SDR ones in each build (hdr_gates, Tests 3 and 4): with HDR
 Lighting off the picture is HDR off's, and with it on the SDR screenshot is the HDR shot clipped at white, white
@@ -36,7 +38,7 @@ Markdown outside crates/), the base reuses the change's binaries: the comparison
 Each session also checks it drew what it is for (the pack changes the picture, HDR shots have their -hdr.png), so a
 pack that fails to load, or HDR that stays off, in both builds doesn't pass as identical.
 In each build the fixture's entity stage must draw the entities as the pack without it does, within the rounding of
-the decode and encode around the stage (entity_gates).
+the decode and encode around the stage, and leave what it doesn't draw exactly as it is (entity_gates).
 --build-base builds it anyway. The base builds in a worktree and target folder of its own under .local/frame-identity/,
 kept between runs so that a later base rebuilds only what changed.
 
@@ -78,6 +80,8 @@ BUILD = ['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-clien
 X, Y, Z = 8, 160, 8
 # 🤖 Agent: The entities' corner, out of every other viewpoint's sight.
 EX, EZ = X - 28, Z - 30
+# 🤖 Agent: And the items' corner, as far on the other side.
+IX, IZ = X + 30, Z - 30
 # 🤖 Agent: The packs sessions draw with: where each is, and the table its manifest is cut at with the file it then
 # has no use for (the entity stage's fixture without its stage and the keys only that stage reads).
 SAMPLES = ROOT / 'crates/horizon-shader-api/tests/samples'
@@ -334,8 +338,8 @@ def prepare(game):
     game.command('kill @e[type=!player]')
     # 🤖 Agent: Entities, after the sweep: the world is frozen (HORIZON_STILL), so they stay as summoned. A cow
     # (shoot hurts it), a cutout texture with full-bright eyes (the spider), enchanted armour and a held enchanted
-    # item, block entities (a chest, a bell, a banner) and a framed item. No dropped item: it spins from an angle
-    # that differs from run to run.
+    # item, an arrow and an End crystal (drawn apart from the mobs), block entities (a chest, a bell, a banner) and a
+    # framed item. No dropped item: it spins from an angle that differs from run to run.
     game.command(f'fill {EX - 5} {Y - 1} {EZ - 5} {EX + 5} {Y - 1} {EZ + 4} minecraft:stone')
     game.command(f'fill {EX - 5} {Y} {EZ + 4} {EX + 5} {Y + 3} {EZ + 4} minecraft:white_concrete')
     still = 'NoAI:1b,Silent:1b,NoGravity:1b,Rotation:[180f,0f]'
@@ -352,6 +356,24 @@ def prepare(game):
     game.command(f'setblock {EX + 5} {Y} {EZ + 3} minecraft:red_banner[rotation=8]')
     game.command(f'summon minecraft:item_frame {EX} {Y + 2} {EZ + 3} '
                  '{Facing:2b,Item:{id:"minecraft:diamond",count:1}}')
+    game.command(f'summon minecraft:arrow {EX + 2.0} {Y + 1.5} {EZ - 1.0} {{NoGravity:1b}}')
+    game.command(f'summon minecraft:end_crystal {EX - 4.5} {Y} {EZ + 2.5} {{ShowBottom:0b}}')
+    # 🤖 Agent: Items, which Horizon lights itself under any pack: two shown three blocks large by displays and one in
+    # an unseen frame, at night over a dynamic light, so the light changes across each of their faces. The light is
+    # a torch a husk holds in a closed cell under the floor (dynamic lights shine through blocks).
+    game.command(f'fill {IX - 5} {Y - 1} {IZ - 5} {IX + 5} {Y - 1} {IZ + 4} minecraft:stone')
+    game.command(f'fill {IX - 5} {Y} {IZ + 4} {IX + 5} {Y + 4} {IZ + 4} minecraft:white_concrete')
+    game.command(f'fill {IX - 1} {Y - 4} {IZ} {IX + 1} {Y - 2} {IZ + 2} minecraft:stone')
+    game.command(f'fill {IX} {Y - 3} {IZ + 1} {IX} {Y - 2} {IZ + 1} minecraft:air')
+    game.command(f'summon minecraft:husk {IX + 0.5} {Y - 3} {IZ + 1.5} {{{still},PersistenceRequired:1b,'
+                 'equipment:{mainhand:{id:"minecraft:torch",count:1}}}')
+    large = ('transformation:{left_rotation:[0f,0f,0f,1f],right_rotation:[0f,0f,0f,1f],translation:[0f,0f,0f],'
+             'scale:[3f,3f,3f]}')
+    for x, item in ((-2.5, 'white_concrete'), (2.5, 'paper')):
+        game.command(f'summon minecraft:item_display {IX + 0.5 + x} {Y + 2} {IZ + 1.5} '
+                     f'{{item:{{id:"minecraft:{item}",count:1}},{large}}}')
+    game.command(f'summon minecraft:item_frame {IX} {Y + 3} {IZ + 3} '
+                 '{Facing:2b,Invisible:1b,Item:{id:"minecraft:diamond",count:1}}')
 
 
 SCENES = {
@@ -361,6 +383,7 @@ SCENES = {
     'glass': ('overworld', 6000, (X - 23.5, Y, Z - 3.5), 0, 5),
     'nether': ('the_nether', 18000, (0.5, 61, -4.5), 0, 15),
     'entities': ('overworld', 6000, (EX + 0.5, Y, EZ - 4.5), 0, 5),
+    'items': ('overworld', 18000, (IX + 0.5, Y, IZ - 4.5), 0, 5),
     # 🤖 Agent: The HUD over light (HUD below): chat over the sun high in the sky, the hotbar over the sky; and the same
     # view without chat, which shows where the sun's light passes white (hdr_gates).
     'hud_sun': ('overworld', 4000, (X + 0.5, Y + 3, Z - 9.5), -70, -85),
@@ -458,12 +481,12 @@ SESSIONS = {
     # 🤖 Agent: The entity stage's fixture without its stage and with it (entity_gates): in SDR with the block
     # entities drawn each frame, as by default, and with HDR on with them kept on the GPU (blockEntityCache), which
     # draws them with a pipeline of their own.
-    'entity_off': ('', {'HORIZON_SHADER_PACK': 'entity_off'}, ['entities'], False),
-    'entity_stage': ('', {'HORIZON_SHADER_PACK': 'entity_stage'}, ['entities'], False),
+    'entity_off': ('', {'HORIZON_SHADER_PACK': 'entity_off'}, ['entities', 'items'], False),
+    'entity_stage': ('', {'HORIZON_SHADER_PACK': 'entity_stage'}, ['entities', 'items'], False),
     'entity_off_hdr': ('hdr:true\nblockEntityCache:true\n',
-                       {'HORIZON_SHADER_PACK': 'entity_off', 'HORIZON_HDR_OUTPUT': 'pq'}, ['entities'], False),
-    'entity_stage_hdr': ('hdr:true\nblockEntityCache:true\n',
-                         {'HORIZON_SHADER_PACK': 'entity_stage', 'HORIZON_HDR_OUTPUT': 'pq'}, ['entities'], False),
+                       {'HORIZON_SHADER_PACK': 'entity_off', 'HORIZON_HDR_OUTPUT': 'pq'}, ['entities', 'items'], False),
+    'entity_stage_hdr': ('hdr:true\nblockEntityCache:true\n', {'HORIZON_SHADER_PACK': 'entity_stage',
+                                                               'HORIZON_HDR_OUTPUT': 'pq'}, ['entities', 'items'], False),
 }
 # 🤖 Agent: Auto paper white and peak are 203 and 1000 offscreen; written out so a change of Auto doesn't move the
 # pictures. TAA and frame generation build on earlier frames, which HORIZON_STILL doesn't cover: off, as by default.
@@ -479,6 +502,9 @@ def run_session(name, label, bin_dir, out, env_base, args):
     # 🤖 Agent: No chat, no tutorial toasts, no pause when the offscreen window has no focus.
     options = 'chatVisibility:2\ntutorialStep:none\npauseOnLostFocus:false\n'
     (folder / 'options.txt').write_text(options)
+    if name.startswith('entity_'):
+        # 🤖 Agent: The items scene's light.
+        (folder / 'horizon-extras.txt').write_text('dynamicLights:true\n')
     if 'HORIZON_SHADER_PACK' in extra:
         pack = extra['HORIZON_SHADER_PACK']
         source, cut, unused = PACKS[pack]
@@ -556,14 +582,15 @@ def session_checks(shots, sessions):
     return problems
 
 
-# 🤖 Agent: The most a channel may differ between the entity stage's fixture and the same pack without the stage:
-# the stage's colours are decoded going in and its result encoded again, which rounds differently in places.
-ENTITY_STEP = 1
+# 🤖 Agent: The most a channel may differ between the entity stage's fixture and the same pack without the stage.
+# Entities: the stage's colours are decoded going in and its result encoded again, which rounds differently in
+# places. Items: the stage doesn't draw them, so nothing.
+ENTITY_STEPS = {'entities': 1, 'items': 0}
 
 
 def entity_gates(shots, sessions):
-    """The fixture's entity stage is vanilla's own, so its pictures are the pack's without the stage, within
-    ENTITY_STEP on any channel: the 8-bit screenshots and, with HDR on, the HDR shots' 10-bit codes."""
+    """The fixture's entity stage is vanilla's own, so its pictures are the pack's without the stage, within the
+    scene's ENTITY_STEPS on any channel: the 8-bit screenshots and, with HDR on, the HDR shots' 10-bit codes."""
     problems = []
     for suffix in ('', '_hdr'):
         off, on = f'entity_off{suffix}', f'entity_stage{suffix}'
@@ -577,9 +604,10 @@ def entity_gates(shots, sessions):
                 differing, largest = sum(1 for s in steps if s), max(steps)
                 print(f'  {on}.{scene}{kind} against {off}: {differing} of {len(steps)} pixels differ, '
                       f'largest step {largest}', flush=True)
-                if largest > ENTITY_STEP:
-                    problems.append(f'{on}.{scene}{kind}: {sum(1 for s in steps if s > ENTITY_STEP)} pixels differ '
-                                    f'from {off} by more than {ENTITY_STEP}, largest step {largest}')
+                step = ENTITY_STEPS[scene]
+                if largest > step:
+                    problems.append(f'{on}.{scene}{kind}: {sum(1 for s in steps if s > step)} pixels differ '
+                                    f'from {off} by more than {step}, largest step {largest}')
     return problems
 
 
