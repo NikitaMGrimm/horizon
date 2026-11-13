@@ -55,6 +55,52 @@ fn hdr_lighting_is_greyed_only_while_a_pack_runs() {
     );
 }
 
+/// Under a `shaders/` pack HDR output shows the pack's picture, the HUD in it, at paper white:
+/// UI Brightness waits, greyed. The rest stay live, Peak Brightness too: it is still the peak
+/// the metadata declares and where the black level's lift fades out. Under no pack or one of
+/// Horizon's own, on the layered frame, all of them are live.
+#[test]
+fn ui_brightness_is_greyed_under_a_shaders_pack() {
+    use crate::gfx::{FrameRequest, HdrOutput, output::tests};
+    let mut s = Settings::default();
+    s.horizon.hdr = HdrMode::On;
+    let (caps, reading) = tests::window(Some(HdrOutput::Pq), Some(true));
+    let shown = |shaders_pack| {
+        let request = FrameRequest {
+            shaders_pack,
+            ..Default::default()
+        };
+        tests::snapshot(&s.horizon, request, caps, reading).with_pack(shaders_pack)
+    };
+    let (layered, flat) = (shown(false), shown(true));
+    assert!(layered.hdr_on() && flat.hdr_on());
+    let ui_brightness = Item::Horizon(H::HdrUiBrightness);
+    assert_eq!(ui_brightness.blocked(&s, &layered), None);
+    assert_eq!(
+        ui_brightness.blocked(&s, &flat),
+        Some("The shader pack's picture is shown at Paper White.")
+    );
+    for h in [
+        H::Hdr,
+        H::HdrCalibrate,
+        H::HdrBlackLevel,
+        H::HdrPeak,
+        H::HdrPaperWhite,
+    ] {
+        assert_eq!(Item::Horizon(h).blocked(&s, &flat), None, "{h:?}");
+    }
+    // The greyed slider takes no press, and its saved value waits; Peak Brightness's drags.
+    let saved = s.horizon.hdr_ui_nits;
+    let mut ui = ui();
+    ui.screen.output = flat;
+    let (tx, _) = Columns::of(SIZE.0, SIZE.1).track();
+    let greyed = row(&mut ui, &s, ui_brightness);
+    assert!(press(&mut ui, &mut s, (tx + 2.0, greyed[1] + 4.0)).is_empty());
+    assert_eq!(s.horizon.hdr_ui_nits, saved);
+    let peak = row(&mut ui, &s, Item::Horizon(H::HdrPeak));
+    assert_eq!(press(&mut ui, &mut s, (tx + 2.0, peak[1] + 4.0)), [DRAGGED]);
+}
+
 #[test]
 fn hdr_auto_can_be_selected_before_querying_and_brightness_waits_for_output() {
     let mut s = Settings::default();

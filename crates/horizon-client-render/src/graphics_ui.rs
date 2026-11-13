@@ -1125,7 +1125,8 @@ impl Item {
     /// (`graphics::translucent_batching_offered`), its saved value waiting for one that can,
     /// and GPU Culling only where it is offered (`graphics::gpu_culling_offer`), with the
     /// reason it isn't. HDR Lighting has nothing to switch where the running shader pack lights
-    /// the world itself.
+    /// the world itself, and UI Brightness nothing to change where HDR output shows a
+    /// `shaders/` pack's picture, the HUD in it, at paper white.
     fn blocked(self, s: &Settings, out: &EffectiveOutput) -> Option<&'static str> {
         if !self.available() {
             return Some("This feature is not yet available in Horizon.");
@@ -1162,6 +1163,10 @@ impl Item {
             }),
             Item::Horizon(H::HdrLighting) if out.pack_lights => {
                 Some("The shader pack lights the world itself.")
+            }
+            // HDR output without the HUD's layer: a `shaders/` pack's frame (`FrameRequest`).
+            Item::Horizon(H::HdrUiBrightness) if out.hdr_on() && !out.frame.hud_layer => {
+                Some("The shader pack's picture is shown at Paper White.")
             }
             Item::Horizon(H::TranslucentBatching)
                 if !crate::graphics::translucent_batching_offered() =>
