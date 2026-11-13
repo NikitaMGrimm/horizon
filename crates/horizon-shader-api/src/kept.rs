@@ -1,11 +1,13 @@
 //! Shader API 0.2's kept resources and compute passes (#16011 item 4): `[kept]`, `[[resource]]`,
-//! `[[post]] compute = true` and options' `resets`. The check takes them;
+//! `[[before_world]]`, `[[post]] compute = true` and options' `resets`. The check takes them;
 //! the game doesn't run them yet and refuses a pack that declares any (`Manifest::computes`).
 use crate::manifest::{POST_SCALES, Stage};
 use serde::Deserialize;
 
 /// `[[resource]]` entries a pack may declare.
 pub const MAX_RESOURCES: usize = 8;
+/// `[[before_world]]` entries a pack may declare.
+pub const MAX_BEFORE_WORLD: usize = 4;
 /// `[[post]]` entries with `compute = true` a pack may declare.
 pub const MAX_COMPUTE_POST: usize = 8;
 /// The bytes of every buffer of a pack together, per view.
@@ -151,6 +153,9 @@ pub struct Kept {
     /// `[kept] reach`: a teleport further than this, in blocks, clears the world resources.
     pub reach: Option<u32>,
     pub resources: Vec<Resource>,
+    /// `[[before_world]]`: compute passes after the ray scene and shadow inputs are prepared,
+    /// before the world draws, in order.
+    pub before_world: Vec<Stage>,
     /// Options whose change clears kept resources (`resets`), by id.
     pub resets: Vec<(String, Keep)>,
 }
@@ -379,6 +384,7 @@ fn post_entries(post: &[Stage]) -> Result<(), String> {
 pub(crate) fn check(
     kept: Option<RawKept>,
     raw: Vec<RawResource>,
+    before_world: Vec<Stage>,
     post: &[Stage],
     ray_tracing: bool,
     resets: Vec<(String, String)>,
@@ -451,8 +457,23 @@ pub(crate) fn check(
         }
         None => None,
     };
+    if before_world.len() > MAX_BEFORE_WORLD {
+        return Err(format!(
+            "{} [[before_world]] entries; a pack may have {MAX_BEFORE_WORLD}",
+            before_world.len()
+        ));
+    }
+    for s in &before_world {
+        if s.compute {
+            return Err(format!(
+                "{}: a [[before_world]] entry computes: no `compute` key",
+                s.file
+            ));
+        }
+        compute_shape(s)?;
+    }
     post_entries(post)?;
-    for s in post {
+    for s in before_world.iter().chain(post) {
         access(s, &resources)?;
     }
     let mut kept_resets = Vec::new();
@@ -470,6 +491,7 @@ pub(crate) fn check(
     Ok(Kept {
         reach,
         resources,
+        before_world,
         resets: kept_resets,
     })
 }
