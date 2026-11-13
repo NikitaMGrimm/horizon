@@ -6526,7 +6526,7 @@ impl Renderer {
         self.packed_quads = want;
         packed::pack_quads(want);
         let laid_out = self.sections.values().any(|s| s.packed)
-            || self.lods.values().any(|t| t.drawn().packed);
+            || self.lods.values().any(|t| t.holds_packed());
         if !want && laid_out {
             self.sections_dropped = true;
             self.clear_sections(self.layout);
