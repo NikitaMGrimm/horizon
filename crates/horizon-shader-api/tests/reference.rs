@@ -207,8 +207,9 @@ fn the_0_2_wgsl_of_a_pack_without_ray_tracing_is_unchanged() {
     let pack = Pack::read(&dir).unwrap();
     let glow = compose(&pack, StageKind::Post, "post/glow.wgsl");
     assert_eq!(
-        sha256_hex(glow.text.as_bytes()),
-        "5aa4bbb586c5e8a4584538e587e16522b52e2b840b93a0583205ad7c8c53d6fb"
+        // As the repository holds the files: a Windows checkout may give them CRLF.
+        sha256_hex(glow.text.replace('\r', "").as_bytes()),
+        "ba23f7e523ae846f9122cb2d5b1560adadc02279b344b5b331ba7ed5a0e699d7"
     );
 }
 
