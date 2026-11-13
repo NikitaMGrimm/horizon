@@ -206,7 +206,8 @@ keeps drawing. What a pack works with:
   the light colour at full light, for a light source that shines the same whatever light falls on it.
   `MaterialInput.shading` is the shading that light source leaves behind, and every other block keeps: vanilla's
   own, the vertex colour under the light colour multiplied at each corner of the face, which `tint` times `lightmap`
-  only comes close to.
+  only comes close to. `crates/horizon-shader-api/packs/horizon_hdr` is that look written this way, from the look
+  file the renderer's own shaders start with; its README lists what a pack can't draw of it yet.
 
 ```toml
 [tonemap]                  # optional: the pack's own tone curve

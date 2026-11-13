@@ -268,7 +268,7 @@ pack path keeps those features; each is its own piece of work.
 
 **One look file, two users.** `hdr_look.wgsl` holds the look's constants (the tiers' windows and gains,
 `HDR_SCENE_PEAK`, `HDR_SUN_CAP`) and pure functions (brightness, the lift's window and gain, `hdr_unshade`, the sun's
-peak from the headroom, the tone curve), with no engine name in it.
+peak from the headroom, the tone curve), with no engine name in it. There is one copy, in the pack's folder.
 
 - The default pipelines compile it in: today's bytes and cost. The display reaches it as `Frame.headroom` does a
   pack (the sun's peak is the headroom clamped between `HDR_SCENE_PEAK` and `HDR_SUN_CAP`), so the uniforms that
@@ -276,7 +276,8 @@ peak from the headroom, the tone curve), with no engine name in it.
 - `packs/horizon_hdr` (in `horizon-shader-api`, beside Golden Hour) is a real 0.2 pack that lists the same file as
   its shared source: a material stage, an entity stage and a `[tonemap]` with the scene's peak. It is the proof
   that the API suffices, and the example to copy from. The frame identity harness draws it and holds it to the
-  default path's picture within a stated tolerance (decode and encode rounding, glint).
+  default path's picture within a stated tolerance: a step of 255 in the screenshot and two of 1023 in the HDR
+  shot, the rounding of the pack's route (`look_gates`).
 
 **What the API gains**, none of it breaking a 0.2 pack:
 
@@ -431,9 +432,14 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
      fourth field missing: `shading`, since the terrain multiplies the vertex colour and the light at each corner,
      and a stage that multiplies `tint` and `lightmap` itself was up to 6 steps of 255 off in a room's lit corners.
    - 7e: light sources lift before fog. A change of look, with captures.
-   - 7f: `packs/horizon_hdr`, and its session in the frame identity harness, held to the default path. The gate
-     widens as inputs arrive: terrain and entities first, items and particles with the entity stage's later
-     steps, the sky with `[glow]`.
+   - 7f (done): `packs/horizon_hdr`, and its sessions in the frame identity harness, held to the default path
+     (`look_gates`): blocks, entities and block entities, by day and by night, in the Nether, behind glass, and on
+     a 300-nit display where the tone curve bends. The look file moved into the pack's folder, and the renderer
+     reads it from there. The pack is the SDK's, as Golden Hour is: the game doesn't ship or pick it. Set apart in
+     the gate: the HUD's pixels, a screenshot's light above white (Horizon maps a frame into SDR by its own rule,
+     and channel by channel under a pack), and the End crystal, whose back faces the look lifts by their front's
+     brightness. The gate widens as inputs arrive: items and particles with the entity stage's later steps, the
+     sky with `[glow]`, light sources in fog with 7e.
    - 7g: the lift's 8-bit steps go. A change of rounding, with captures.
 
 The HUD's layer and the tone curve come before light is written: once a shader writes light above white into the
