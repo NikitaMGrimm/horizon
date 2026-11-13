@@ -117,7 +117,7 @@ beams, End portals and gateways, breaking cracks, energy swirls, lightning and o
 An item an entity holds or wears as its model (a sword in a hand, a block on a head) reaches the stage with the
 entity, and so does a block drawn as an entity (a falling block, primed TNT, a block display) or as a block entity
 (a block a piston moves). These have vanilla's shade already in `tint`, and `shade` 1: their vertices carry the two
-as one colour so far. A sign's board is block terrain, the material stage's.
+as one colour so far. A sign's board and a bed are block terrain, the material stage's.
 
 Vanilla's own, the picture a pack without the stage gets:
 

@@ -339,7 +339,7 @@ One point of the surface of an entity, a block entity, an item or a particle, fo
 | `position` | `vec3<f32>` | The point, camera-relative, in blocks. |
 | `emission` | `f32` | 1 on a layer vanilla draws at full brightness (spider and enderman eyes, the warden's glow), else 0. There `lightmap` is full light; `shade` stays vanilla's, which shades the warden's glow and not the eyes. |
 | `normal` | `vec3<f32>` | The surface's geometric normal, a unit vector in world axes, facing the camera, from the position's screen derivatives (as `MaterialInput.normal`, without its snap to the axes). |
-| `kind` | `u32` | What is drawn: 0 an entity (mobs, players, armour, vehicles), 1 a block entity (chests, signs, banners, beds), 2 a dropped or framed item, 3 reserved for the first-person hand, 4 a particle. |
+| `kind` | `u32` | What is drawn: 0 an entity (mobs, players, armour, vehicles), 1 a block entity (chests, banners, bells, shulker boxes), 2 a dropped or framed item, 3 reserved for the first-person hand, 4 a particle. |
 | `colored_light` | `vec3<f32>` | As `MaterialInput.colored_light`: the frame's coloured lights at this point, 0..1; 0 where none reaches. |
 | `translucent` | `bool` | Drawn with blending. |
 | `light` | `vec2<f32>` | Block and sky light, 0..1. |
@@ -361,7 +361,7 @@ beams, End portals and gateways, breaking cracks, energy swirls, lightning and o
 An item an entity holds or wears as its model (a sword in a hand, a block on a head) reaches the stage with the
 entity, and so does a block drawn as an entity (a falling block, primed TNT, a block display) or as a block entity
 (a block a piston moves). These have vanilla's shade already in `tint`, and `shade` 1: their vertices carry the two
-as one colour so far. A sign's board is block terrain, the material stage's.
+as one colour so far. A sign's board and a bed are block terrain, the material stage's.
 
 Vanilla's own, the picture a pack without the stage gets:
 

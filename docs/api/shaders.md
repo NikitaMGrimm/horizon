@@ -244,7 +244,7 @@ While the API is experimental, a line is served until the next one is on by defa
 
 An overlay showing what each pass draws (F3 already shows what each costs), and items and particles drawn through a
 pack: shader API 0.2's `[entity]` stage has their kinds, and the game draws entities and block entities through it,
-but still lights dropped and framed items and particles itself. Block entities kept on the GPU (chests, signs) cast
+but still lights dropped and framed items and particles itself. Block entities kept on the GPU (chests, banners) cast
 no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
