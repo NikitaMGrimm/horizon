@@ -109,9 +109,10 @@ python3 tools/pr_ready.py --base upstream/main   # or origin/main if you work on
 ```
 
 It looks at what your branch changes and runs what matters: rustfmt, clippy with warnings denied, the tests of the
-crates you touched (and the launcher's), generated files, `Cargo.lock`, the Python tests, and the vanilla harnesses
-your change can affect. Without the vanilla data on your machine it lists those harnesses instead; CI runs them.
-`--quick` skips the harnesses. It exits non-zero when something fails.
+crates you touched (and the launcher's), generated files, `Cargo.lock` and the Python tests. Like CI, it runs the
+vanilla harnesses only when your branch changes a harness, an oracle, a probe or the runner; otherwise it lists the
+ones your change can affect, and main's parity run checks them after the merge. `--harnesses` runs them on your
+machine anyway (it needs the vanilla data). It exits non-zero when something fails.
 
 For the game workspace, Clippy checks all targets of the touched crates and their transitive workspace dependents,
 including examples. The dependency scope includes optional, platform, build and development dependencies. Tests run
@@ -143,7 +144,9 @@ it (edited on every push, never repeated): talk to its author in the thread befo
 
 - **Small.** One change per pull request, under about 500 lines of code where you can; split bigger work into
   pieces that each make sense alone. Small pull requests get reviewed and merged the same day. Bigger than that:
-  [large pull requests](#large-pull-requests).
+  [large pull requests](#large-pull-requests). What counts: lines added plus lines removed, outside Markdown (`.md`)
+  files and test files (any `tests/` or `test/` folder, and `test_*.py`). Tests written inside a source file do count.
+  pr_ready counts it the same way and warns when a pull request is over.
 - **Fill in the template**: what and why, the vanilla reference, the pr_ready block, screenshots for anything you
   can see.
 - **Tick "Allow edits by maintainers".** When something small is left (a lint, a rebase, a nit) we push the fixup
@@ -168,7 +171,8 @@ How agents, checks, releases and signed updates keep this safe: [security](docs/
 
 ### Large pull requests
 
-500 lines stays the default. A pull request that can't be split below it starts from a spec:
+500 lines of code ([what counts](#pull-requests)) stays the default. A pull request that can't be split below it
+starts from a spec:
 
 1. **Open an issue with the spec** before the code: what changes, the files it touches, the behaviour players and
    other code will see, and the tests or harnesses that prove it.
