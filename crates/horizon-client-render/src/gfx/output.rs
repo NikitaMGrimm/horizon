@@ -192,6 +192,12 @@ impl EffectiveOutput {
             ..self
         }
     }
+    /// This output as the options show it over a world (`world`) or at the title. No pack
+    /// draws the title's panorama, and the picks made there load with the next world, while
+    /// the renderer keeps the last world's pack: there the rows read as with none running.
+    pub(crate) fn shown(self, world: bool) -> Self {
+        self.with_pack(self.pack_lights && world)
+    }
     /// Whether the destination offers HDR output.
     pub fn hdr_offered(&self) -> bool {
         self.offered.is_some()

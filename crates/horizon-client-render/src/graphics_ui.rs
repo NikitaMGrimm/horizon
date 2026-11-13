@@ -1137,7 +1137,7 @@ impl Item {
     /// reason it isn't. Look has nothing to pick where the running shader pack lights the
     /// world, and UI Brightness nothing to change where HDR output shows a `shaders/` pack's
     /// picture, the HUD in it, at paper white.
-    fn blocked(self, s: &Settings, out: &EffectiveOutput) -> Option<&'static str> {
+    pub(crate) fn blocked(self, s: &Settings, out: &EffectiveOutput) -> Option<&'static str> {
         if !self.available() {
             return Some("This feature is not yet available in Horizon.");
         }

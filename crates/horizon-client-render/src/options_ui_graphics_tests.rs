@@ -27,6 +27,35 @@ fn calibrates(ui: &mut OptionsUi, s: &mut Settings, atlas: &HudAtlas) -> bool {
     ui.page() == Page::HdrCalibration
 }
 
+/// The renderer keeps the last world's shader pack at the title, where it draws nothing and
+/// another pick waits for the next world: the Look row is the pack's over a world only.
+#[test]
+fn look_is_the_packs_only_over_a_world() {
+    use crate::graphics_ui::{H, Item};
+    let atlas = atlas();
+    let mut s = Settings::default();
+    s.horizon.hdr = crate::graphics::HdrMode::On;
+    s.running_pack = Some("Sunny Day".into());
+    let running = auto_window(Some(true)).with_pack(true);
+    let look = Item::Horizon(H::HdrLook);
+    let mut ui = OptionsUi::default();
+    for (in_world, label, greyed) in [
+        (true, "Look: Sunny Day", true),
+        (false, "Look: Horizon", false),
+    ] {
+        ui.open(in_world);
+        ui.draw(
+            &s,
+            running,
+            &mut HudBatch::new([480, 480]),
+            &atlas,
+            (0.0, 0.0),
+        );
+        assert_eq!(look.label(&s, &ui.output).plain(), label);
+        assert_eq!(look.blocked(&s, &ui.output).is_some(), greyed);
+    }
+}
+
 /// Opening the graphics screen keeps the offer and report of the renderer the options are
 /// drawn for: the screen opens afresh, the output doesn't go with it.
 #[test]

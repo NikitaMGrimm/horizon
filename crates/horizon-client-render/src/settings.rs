@@ -217,7 +217,7 @@ pub struct Settings {
     pub shader_packs: Vec<crate::shader_pack_list::Entry>,
     /// The picked pack's options while its Shader Options page is open.
     pub shader_options: Option<crate::shader_options::ShaderOptions>,
-    /// The running Horizon shader pack's name, from the manifest the renderer loaded (set by
+    /// The name of the Horizon shader pack the renderer has loaded, from its manifest (set by
     /// the game, not saved): `shader_packs` holds no titles until its page was opened.
     pub running_pack: Option<String>,
 }
