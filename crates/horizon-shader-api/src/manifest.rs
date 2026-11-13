@@ -149,7 +149,7 @@ pub struct Manifest {
     /// 0.2: the scene the post and material stages' `trace` reads, if the pack asks for it;
     /// needs `[[post]]` or `[material]`.
     pub ray_tracing: Option<RayTracing>,
-    /// 0.2: kept resources. Checked, not yet run.
+    /// 0.2: kept resources and compute passes. Checked, not yet run.
     pub kept: crate::kept::Kept,
 }
 
@@ -424,6 +424,21 @@ pub struct Stage {
     /// chain's last picture.
     #[serde(default)]
     pub output: Option<String>,
+    /// 0.2, a `[[post]]` entry only: a compute dispatch in the chain, not a pass that draws.
+    #[serde(default)]
+    pub compute: bool,
+    /// 0.2, a compute pass only (`compute = true`): its invocations.
+    #[serde(default)]
+    pub dispatch: Option<crate::kept::Dispatch>,
+    /// 0.2, a compute pass only: its workgroup's size.
+    #[serde(default)]
+    pub workgroup: Option<[u32; 3]>,
+    /// 0.2: the `[[resource]]` names the pass reads, `x` this frame's, `x_previous` last frame's.
+    #[serde(default)]
+    pub reads: Vec<String>,
+    /// 0.2, a compute pass only: the `[[resource]]` names it writes.
+    #[serde(default)]
+    pub writes: Vec<String>,
 }
 
 /// The scales a post pass may draw at.
@@ -706,6 +721,7 @@ impl Manifest {
                 (raw.ray_tracing.is_some(), "[ray_tracing]"),
                 (raw.kept.is_some(), "[kept]"),
                 (!raw.resource.is_empty(), "[[resource]]"),
+                (raw.post.iter().any(|p| p.compute), "[[post]] compute"),
                 (
                     raw.options.iter().any(|o| o.resets.is_some()),
                     "an option's `resets`",
@@ -790,11 +806,35 @@ impl Manifest {
         {
             return Err(err("`scale` and `output` are keys of [[post]] only".into()));
         }
+        // Compute keys: `[[post]]` only, which `kept::check` reads.
+        let computes = |s: &Stage| {
+            s.compute
+                || s.dispatch.is_some()
+                || s.workgroup.is_some()
+                || !s.reads.is_empty()
+                || !s.writes.is_empty()
+        };
+        if raw
+            .sky
+            .iter()
+            .chain(&raw.material)
+            .chain(&raw.vertex)
+            .chain(&raw.weather)
+            .chain(&raw.tonemap)
+            .chain(&raw.entity)
+            .any(computes)
+        {
+            return Err(err(
+                "`compute`, `dispatch`, `workgroup`, `reads` and `writes` are keys of [[post]]"
+                    .into(),
+            ));
+        }
         let resets = (raw.options.iter())
             .filter_map(|o| Some((o.id.clone(), o.resets.clone()?)))
             .collect();
         let traced = raw.ray_tracing.is_some();
-        let kept = crate::kept::check(raw.kept, raw.resource, traced, resets).map_err(err)?;
+        let kept =
+            crate::kept::check(raw.kept, raw.resource, &raw.post, traced, resets).map_err(err)?;
         check_post_targets(&raw.post, traced, &kept.resources).map_err(err)?;
         if raw.ray_tracing.is_some() && raw.post.is_empty() && raw.material.is_none() {
             return Err(err(
@@ -802,10 +842,10 @@ impl Manifest {
                     .into(),
             ));
         }
-        if raw.post.len() > MAX_POST_PASSES {
+        let passes = raw.post.iter().filter(|p| !p.compute).count();
+        if passes > MAX_POST_PASSES {
             return Err(err(format!(
-                "{} post passes; a pack may chain {MAX_POST_PASSES}",
-                raw.post.len()
+                "{passes} post passes; a pack may chain {MAX_POST_PASSES}"
             )));
         }
         let stages = raw
@@ -1262,7 +1302,7 @@ impl Manifest {
     /// Whether the pack declares kept resources or compute passes, which the game doesn't run
     /// yet.
     pub fn computes(&self) -> bool {
-        !self.kept.resources.is_empty()
+        !self.kept.resources.is_empty() || self.post.iter().any(|p| p.compute)
     }
 
     /// Every WGSL file the manifest names, shared files first, each once.
