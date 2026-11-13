@@ -90,7 +90,8 @@ pub(super) fn picked_pack(settings: &horizon_client::settings::Settings) -> &str
     )
 }
 
-/// What a renderer readies for the pick, unless it was refused, is missing or its owner is off.
+/// What a renderer readies for the pick, unless it was refused with no version of it left
+/// drawing (`native_shaders::remember_look`), is missing or its owner is off.
 #[derive(Clone, Copy)]
 pub(crate) struct PickedPack {
     /// It draws flat where the device can (`pack_draws_flat`): the sections are laid out so.
@@ -1141,6 +1142,40 @@ mod native_pack_tests {
         let missing = picked_pack_shape(&settings);
         assert_eq!(missing.linear, None);
         assert!(!missing.compatibility);
+    }
+
+    /// A running pack whose new version fails in a stage keeps drawing its last good one: the
+    /// pick asks for the frame it asked for, with HDR off and on alike, so the renderer isn't
+    /// made again. A pack that never ran, or one whose manifest is refused, asks as no pack.
+    #[test]
+    fn a_stage_that_fails_keeps_the_running_packs_frame() {
+        use crate::game::native_shaders::{fingerprint, remember_look};
+        use horizon_client::settings::Settings;
+        use horizon_client_render::graphics::HdrMode;
+        let root = std::env::temp_dir().join(format!("horizon-kept-frame-{}", std::process::id()));
+        let path = root.join("kept");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join(horizon_shader_api::MANIFEST),
+            "schema = 1\nid = \"kept\"\nname = \"Kept\"\nversion = \"1\"\napi = \"0.2\"\n[[post]]\nfile = \"p.wgsl\"\n").unwrap();
+        std::fs::write(path.join("p.wgsl"), "a stage that fails the check").unwrap();
+        let mut settings = Settings::default();
+        settings.horizon.shader_pack = path.to_string_lossy().into_owned();
+        for hdr in [HdrMode::Off, HdrMode::On] {
+            settings.horizon.hdr = hdr;
+            remember_look(&path, fingerprint(&path), true, false, false);
+            let running = picked_pack_shape(&settings).frame();
+            assert!(running.linear_pack);
+            // The stage fails while that version runs.
+            remember_look(&path, fingerprint(&path), false, false, true);
+            assert_eq!(picked_pack_shape(&settings).frame(), running, "{hdr:?}");
+            // It fails with nothing running, or the manifest is refused while it runs.
+            for (manifest_refused, running) in [(false, false), (true, true)] {
+                remember_look(&path, fingerprint(&path), false, manifest_refused, running);
+                let none = picked_pack_shape(&settings).frame();
+                assert_eq!(none, Default::default(), "{hdr:?}");
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

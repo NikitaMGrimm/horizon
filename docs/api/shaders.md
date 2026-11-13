@@ -168,7 +168,8 @@ and the registry lists it. A pack for another line is refused (`needs shader API
 A pack draws the world
 into a float frame where the device can (else the 8-bit one): the frame follows the picked pack,
 rebuilding the renderer and remeshing the world when needed. A refused or missing pack, or one whose owner mod is off,
-uses the no-pack frame. What a pack works with:
+uses the no-pack frame; a running pack whose new version fails in a stage keeps its frame, and its last good version
+keeps drawing. What a pack works with:
 
 - **Linear light.** Every colour a stage reads or returns is linear light, 1.0 at paper white and more brighter. Horizon
   decodes vanilla's values with a 2.2 power and encodes the results the frame stores. Depth, normals, light levels,

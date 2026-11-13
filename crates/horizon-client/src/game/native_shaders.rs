@@ -2,10 +2,11 @@
 //! folder with `horizon-shaders.toml`, or a `.hshader`; `game/shader_packs.rs`) runs once it
 //! passes `horizon_shader_api::check`. The pack is looked at twice a second: a saved file (or
 //! saved option values) is checked and the pack rebuilt, and a
-//! pack that fails is refused with its problems in the chat while the last good one keeps
-//! drawing. A pack whose manifest is refused (`manifest_refused`) stops drawing instead: the
-//! one that ran was built for another manifest, and the pick asks for its frame as no pack
-//! does (`picked_pack_shape`).
+//! pack that fails is refused with its problems in the chat. Where a stage fails, the last
+//! good version keeps drawing, on the frame it has: the pick keeps asking for it
+//! (`remember_look`). A pack whose manifest is refused (`manifest_refused`) stops drawing
+//! instead: the manifest decides the frame, the one that ran was built for another, and the
+//! pick asks for its frame as no pack does (`picked_pack_shape`).
 
 use std::{
     hash::{Hash, Hasher},
@@ -23,18 +24,34 @@ const RED: u32 = 0xFF5555;
 
 thread_local! {
     // Loader outcomes survive renderer replacement; rejected files must not cause a rebuild loop.
-    // Each is the pack's files (`fingerprint`) and whether they were taken.
+    // Each is the pack's files (`fingerprint`) and whether a version of the pack draws since:
+    // those files, or the last good ones before them (`remember_look`).
     static OUTCOMES: std::cell::RefCell<std::collections::HashMap<PathBuf, (Option<u64>, bool)>> =
         std::cell::RefCell::default();
 }
 
-/// Whether the pack at `path` was taken when it was last looked at: `None` before that.
+/// Whether a version of the pack at `path` draws since it was last looked at: `None` before
+/// that.
 pub(super) fn outcome(path: &Path) -> Option<bool> {
-    OUTCOMES.with_borrow(|packs| packs.get(path).map(|(_, taken)| *taken))
+    OUTCOMES.with_borrow(|packs| packs.get(path).map(|(_, draws)| *draws))
 }
 
-pub(super) fn remember(path: &Path, stamp: Option<u64>, taken: bool) {
-    OUTCOMES.with_borrow_mut(|packs| packs.insert(path.to_owned(), (stamp, taken)));
+pub(super) fn remember(path: &Path, stamp: Option<u64>, draws: bool) {
+    OUTCOMES.with_borrow_mut(|packs| packs.insert(path.to_owned(), (stamp, draws)));
+}
+
+/// Remembers a look at one of Horizon's own packs: its files were `taken`, or they failed
+/// while a version of the pack was `running`. A stage that fails leaves that version drawing,
+/// so the pick keeps asking for its frame and the renderer isn't made again; a refused
+/// manifest stops it (`manifest_refused`), and a pack that never ran has nothing to keep.
+pub(super) fn remember_look(
+    path: &Path,
+    stamp: Option<u64>,
+    taken: bool,
+    manifest_refused: bool,
+    running: bool,
+) {
+    remember(path, stamp, taken || (running && !manifest_refused));
 }
 
 pub(super) fn refused(path: &Path, stamp: Option<u64>) -> bool {
@@ -115,6 +132,7 @@ impl Game<'_> {
             return;
         };
         let manifest_refused = manifest_refused(path);
+        let running = renderer.shader_pack_kind() == Some("native");
         let read = match &manifest_refused {
             Some(why) => Err(vec![why.clone()]),
             None => Pack::read(path).map_err(|e| vec![e]),
@@ -168,7 +186,13 @@ impl Game<'_> {
                 .map_err(|e| vec![e])?;
             Ok((pack.manifest, labels, translucent))
         });
-        remember(path, stamp, result.is_ok());
+        remember_look(
+            path,
+            stamp,
+            result.is_ok(),
+            manifest_refused.is_some(),
+            running,
+        );
         // The resources were loaded without a native pack, so without the resource packs'
         // LabPBR maps its material stage reads: load them once, now that one runs.
         if result.as_ref().is_ok_and(|(m, _, _)| m.material.is_some())
