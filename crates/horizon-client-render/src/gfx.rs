@@ -6651,7 +6651,7 @@ impl Renderer {
         )
     }
     /// Measures which pixels of each block sprite may shine (`hdr_stats`), at the current
-    /// masks. Only with HDR output on: without it the frame's alpha is never read.
+    /// masks. Only with HDR output on: nothing else reads them.
     pub fn measure_emission(&mut self) {
         if let Some(hdr) = &self.hdr {
             let views = sprite_views(&self.sprite_textures, &self.sprite_unused, None);
@@ -8003,7 +8003,7 @@ impl Renderer {
             hdr_light: [
                 0.0,
                 0.0,
-                // Only HDR output takes the solid terrain's mark (terrain.wgsl `solid_finish_at`).
+                // HDR output is on.
                 if self.hdr.is_some() { 1.0 } else { 0.0 },
                 f32::from(u8::from(hdr_gain)),
             ],

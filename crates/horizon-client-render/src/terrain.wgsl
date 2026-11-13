@@ -38,8 +38,8 @@ struct Globals {
     // HDR output's tier windows (hdr.rs `Hdr::windows`): x..w low to very bright,
     // [0] where the lift starts, [1] where it is full.
     hdr_windows: array<vec4<f32>, 2>,
-    // HDR output: z 1 with it on; w: apply the no-pack HDR gain; HDR_WRITE_LIGHT independently
-    // keeps float alpha as coverage. x and y are unused.
+    // HDR output: z 1 with it on, which nothing here reads; w: apply the no-pack HDR gain;
+    // HDR_WRITE_LIGHT independently keeps float alpha as coverage. x and y are unused.
     hdr_light: vec4<f32>,
     hdr_settings: vec4<f32>,
     hdr_gains: vec4<f32>,
@@ -66,9 +66,9 @@ struct Globals {
 override SPRITE_ARRAYS: u32 = 1u;
 override SPRITE_SPLIT: u32 = 2048u;
 // Whether the solid shaders carry HDR output's lighting (a pipeline constant): the
-// renderer builds its solid terrain without it for the frames HDR is off, where
-// `hdr_light.z` is 0, since even a branch never taken costs Apple GPUs ~15% of a
-// solid pixel's time (gfx.rs's `SolidPipeline`).
+// renderer builds its solid terrain without it for the frames HDR is off, since even a
+// branch never taken costs Apple GPUs ~15% of a solid pixel's time (gfx.rs's
+// `SolidPipeline`).
 override HDR_LIGHTING: bool = true;
 // A sprite sampled with the given gradients, from whichever array holds its layer.
 fn sprite_grad(uv: vec2<f32>, layer: u32, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
@@ -784,10 +784,11 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
     // shines, at which tier (mesher::hdr_tier) and how much (hdr_mark), by the texel's own
     // brightness, so its light level and face shading don't change it. Only pixels as bright
     // as their sprite's threshold may: its bright parts, or all of it; everything else stays
-    // unmarked (1). Without HDR output nothing reads it, so no mark is worked out.
+    // unmarked (1). Only the float frame's gain reads it (`solid_light`), so no mark is worked
+    // out without it.
     var emissive = 1.0;
     var lit = color.rgb;
-    if HDR_LIGHTING && globals.hdr_light.z != 0.0 && in.emission > 0u {
+    if HDR_LIGHTING && HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 && in.emission > 0u {
         let whole = in.emission > 4u;
         let tier = select(in.emission, in.emission - 4u, whole);
         let l = in.layer & 0x7fffu;
@@ -799,8 +800,8 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
             let fogged = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
                 linear_fog(in.cylindrical, globals.fog.z, globals.fog.w)) * globals.fog_color.a;
             emissive = hdr_mark(tier, y * (1.0 - fogged));
-            if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 && globals.hdr_settings.z > 0.5 {
-                // The float frame, where the world shows lifted (hdr_written): the pixel's light
+            if globals.hdr_settings.z > 0.5 {
+                // Where the world shows lifted (hdr_written): the pixel's light
                 // leaves its face's shading and its light level behind as it lifts (hdr_unshade),
                 // down to the lightmap at full light, under the section's fade-in as before.
                 let full = sample_lightmap(15.0, 15.0).rgb;
