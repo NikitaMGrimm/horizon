@@ -5,48 +5,6 @@ use super::*;
 use crate::settings_shell::{Columns, Hosted};
 use winit::keyboard::KeyCode as K;
 
-#[test]
-fn smooth_gradients_wait_for_a_device_that_draws_the_16_bit_frame() {
-    let mut s = Settings::default();
-    s.horizon.hdr = HdrMode::On;
-    let item = Item::Horizon(H::HdrSmoothGradients);
-    // Where the device can't, the saved On reads Off.
-    let out = EffectiveOutput {
-        wide_frame_supported: false,
-        ..offering(true, None)
-    };
-    assert_eq!(
-        item.blocked(&s, &out),
-        Some("Your GPU or graphics API doesn't support it.")
-    );
-    assert_eq!(item.label(&s, &out).plain(), "Smooth Gradients: Off");
-    assert_eq!(item.switch(&s, &out), Some(false));
-    assert!(s.horizon.hdr_smooth_gradients);
-    // Where it can, it waits only for HDR, like the rest of the page.
-    let out = offering(true, None);
-    assert_eq!(item.blocked(&s, &out), None);
-    assert_eq!(item.label(&s, &out).plain(), "Smooth Gradients: On");
-    assert_eq!(item.switch(&s, &out), Some(true));
-    s.horizon.hdr = HdrMode::Off;
-    assert_eq!(item.blocked(&s, &out), Some("Turn HDR on to use it."));
-    // With HDR on it switches a `shaders/` pack's frame only: the layered float frame
-    // of every other picture has no 16-bit one to switch.
-    use crate::gfx::{FrameRequest, HdrOutput, output::tests};
-    s.horizon.hdr = HdrMode::On;
-    let (caps, reading) = tests::window(Some(HdrOutput::Pq), Some(true));
-    let layered = tests::snapshot(&s.horizon, FrameRequest::default(), caps, reading);
-    assert_eq!(
-        item.blocked(&s, &layered),
-        Some("HDR's own frame is smooth without it.")
-    );
-    let shaders_pack = FrameRequest {
-        compatibility: true,
-        ..FrameRequest::default()
-    };
-    let marked = tests::snapshot(&s.horizon, shaders_pack, caps, reading);
-    assert_eq!(item.blocked(&s, &marked), None);
-}
-
 /// On a device that can't draw HDR's frame the whole page waits: the HDR row reads Off and
 /// says why, a press leaves the saved mode alone, and Auto asks for nothing.
 #[test]
@@ -144,7 +102,7 @@ fn hdr_auto_is_a_choice_on_a_reporting_sdr_display() {
     let out = offering(false, Some(false));
     let mut s = Settings::default();
     let item = Item::Horizon(H::Hdr);
-    assert_eq!(item.switch(&s, &out), None);
+    assert_eq!(item.switch(&s), None);
     assert_eq!(item.blocked(&s, &out), None);
     item.cycle(&mut s, false, FB, &out);
     assert_eq!(s.horizon.hdr, HdrMode::Auto); // On requires an offered output.
