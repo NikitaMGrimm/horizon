@@ -1,5 +1,6 @@
 // Horizon's HDR emission thresholds (gfx/hdr_stats.rs), drawn when HDR output
-// turns on: for every block sprite, the brightness its pixels must reach to
+// turns on or a shader pack's material stage loads: for every block sprite,
+// the brightness its pixels must reach to
 // shine, measured against the sprite itself rather than a fixed level, so a
 // resource pack's light sources shine where they are bright in their own
 // drawing. One texel per sprite (x the layer, y the array): r for a light

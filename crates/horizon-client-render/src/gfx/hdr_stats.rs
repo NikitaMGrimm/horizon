@@ -1,8 +1,8 @@
 //! HDR emission thresholds (`hdr_stats.wgsl`): for every block sprite, the brightness its
 //! pixels must reach to shine in HDR output, measured on the GPU from the sprite's own
-//! darkest and brightest opaque pixel when HDR output turns on. Until then (and with HDR
-//! off) the texture holds zeros: every pixel of a light source may shine, and the look's
-//! tier windows alone decide, as before.
+//! darkest and brightest opaque pixel when HDR output turns on or a shader pack with a
+//! material stage loads (`Renderer::measure_emission`). Until then the texture holds zeros:
+//! every pixel of a light source may shine, and the look's tier windows alone decide.
 
 use super::hdr::Masks;
 
