@@ -20,8 +20,8 @@ white, the HUD with it.
 
 On the float frame Horizon's own light reaches several times paper white, the sun the most, and a shader pack of
 API 0.2 may write any value half float holds. It's stored in vanilla's gamma (the 2.2 power), as the other frames are.
-A 0.2 pack's `[frame] blend = "linear"` is to store linear light instead (it passes the check, but isn't served yet),
-so a pass doesn't hard-code the gamma.
+A 0.2 pack's `[frame] blend = "linear"` stores linear light instead ([shaders.md](api/shaders.md)), so a pass
+doesn't hard-code the gamma.
 
 ## Where a pass goes
 
