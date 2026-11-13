@@ -46,7 +46,7 @@ schema = 1                 # the manifest's format; a reader refuses schemas new
 id = "soft_light"          # [a-z0-9_]{1,64}: the settings key and the registry id
 name = "Soft Light"
 version = "1.0.0"
-api = "0.1"                # the shader API line the WGSL is written for
+api = "0.2"                # the shader API line the WGSL is written for
 description = "..."        # optional, like authors and license
 shared = ["common.wgsl"]   # optional: WGSL put before every stage's file, in order
 
@@ -162,12 +162,13 @@ names an exact filesystem path; `shaders/` packs still use filenames.
 
 ## Shader API 0.2 (experimental)
 
-0.2 is the line for linear light and HDR ([hdr-linear-light.md](../design/hdr-linear-light.md)). A pack opts in with
-`api = "0.2"`. `horizon-shader check` and `pack` take it and the game draws it; **the registry doesn't list 0.2
-packs yet**. A 0.2 pack draws the world
+0.2 is the line this build serves, the line for linear light and HDR
+([hdr-linear-light.md](../design/hdr-linear-light.md)): `horizon-shader check` and `pack` take it, the game draws it
+and the registry lists it. A pack for another line is refused (`needs shader API 0.1; this Horizon serves 0.2`).
+A pack draws the world
 into a float frame where the device can (else the 8-bit one): the frame follows the picked pack,
 rebuilding the renderer and remeshing the world when needed. A refused or missing pack, or one whose owner mod is off,
-uses the no-pack frame. What it changes from 0.1:
+uses the no-pack frame. What a pack works with:
 
 - **Linear light.** Every colour a stage reads or returns is linear light, 1.0 at paper white and more brighter. Horizon
   decodes vanilla's values with a 2.2 power and encodes the results the frame stores. Depth, normals, light levels,
@@ -198,8 +199,6 @@ uses the no-pack frame. What it changes from 0.1:
   the check, but the game doesn't serve it yet.
 
 ```toml
-api = "0.2"
-
 [tonemap]                  # optional: the pack's own tone curve
 file = "tonemap.wgsl"
 
@@ -211,8 +210,10 @@ blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
 ```
 
-0.1 is unchanged: the same prelude, entries and reference, and a 0.1 pack that names `[tonemap]`, `[entity]` or
-`[frame]` is refused. The example's port is `crates/horizon-shader-api/packs/golden_hour_0_2`, a test pack of the SDK.
+API 0.1, the gamma line before it, is retired. To move a pack over, set `api = "0.2"` and treat every colour as
+linear light: decode a constant written for display values with a 2.2 power, compute luminance with
+`frame.luminance`, and stop returning `input.color.a` from post passes (their alpha is ignored). The example pack,
+`crates/horizon-shader-api/packs/golden_hour`, was moved this way.
 
 ## Testing a pack frame by frame
 
@@ -225,17 +226,16 @@ it: [the guide](../shaders.md#testing-a-pack-frame-by-frame).
 
 ## Guide, reference and examples
 
-- [shaders-reference.md](shaders-reference.md): every stage's signature, input and output structs, resources and
-  helpers, the frame's fields with their units, option types and limits, generated from `crates/horizon-shader-api`.
-  0.2's is [shaders-reference-0.2.md](shaders-reference-0.2.md).
+- [shaders-reference-0.2.md](shaders-reference-0.2.md): every stage's signature, input and output structs, resources
+  and helpers, the frame's fields with their units, option types and limits, generated from
+  `crates/horizon-shader-api`.
 - [The guide](../shaders.md): making a pack with `horizon-shader new`, `check` and `pack`; the templates and the
   example pack (`crates/horizon-shader-api/packs/golden_hour`).
 
 ## Stability
 
-Experimental (API 0.1). The stages ship in the game behind pack selection; see [stability.md](stability.md). API
-0.2 is experimental too; the game draws both lines.
-While the API is experimental, a line is served until the next one is on by default: 0.1 ends when 0.2 is
+Experimental (API 0.2). The stages ship in the game behind pack selection; see [stability.md](stability.md).
+While the API is experimental, a line is served until the next one is on by default: 0.1 ended when 0.2 was
 ([hdr-linear-light.md](../design/hdr-linear-light.md), step 5).
 
 ## Not there yet
@@ -246,6 +246,10 @@ draws them itself (the material stage covers terrain only). The first-person han
 
 ## Changelog
 
+- 2026-11-13: API 0.1 (removed): no build serves it any more. `horizon-shader`, the game and the registry refuse a
+  0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`, and the registry lists 0.2 packs. The 0.1 reference
+  is gone, the templates of `horizon-shader new` are 0.2 packs, and the example pack Golden Hour is its 0.2 port
+  (2.0.0). API 0.2 is unchanged.
 - 2026-11-10: API 0.2 (additions, experimental): the `[entity]` stage, `fn entity(input: EntityInput) -> Surface`,
   for entities, block entities, items and particles, with the material stage's shadow maps and coloured lights. The
   reference gives vanilla's own as the stage's function. `horizon-shader check` takes it; the game refuses a pack
