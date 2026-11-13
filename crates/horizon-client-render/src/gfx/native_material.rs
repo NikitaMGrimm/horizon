@@ -36,8 +36,11 @@ struct HorizonMaterialOut {
     @location(3) light: vec2<f32>,
     @location(4) lightmap: vec3<f32>,
     @location(5) position: vec3<f32>,
-    @location(6) spherical: f32,
-    @location(7) cylindrical: f32,
+    // The distances vanilla's fog reads: spherical, cylindrical.
+    @location(6) fog: vec2<f32>,
+    // The vertex colour under the lightmap, multiplied at the corner as vanilla does
+    // (terrain.wgsl `terrain_vertex`): `MaterialInput.shading`.
+    @location(7) shading: vec3<f32>,
     @location(8) @interpolate(flat) face: u32,
     // Bit 0: a fluid's quad. Bit 1: a light source that shines all over (`mesher::WHOLE`).
     @location(9) @interpolate(flat) quad: u32,
@@ -68,7 +71,7 @@ fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color
 // vanilla's gamma, as the fog: on a frame of linear light, encoded for it.
 fn horizon_material_faded(in: HorizonMaterialOut, color: vec4<f32>) -> vec4<f32> {
     let instance = 1.0 - f32(in.fade) / 65535.0;
-    let visibility = mix(1.0, instance, clamp((in.spherical - 16.0) / 16.0, 0.0, 1.0));
+    let visibility = mix(1.0, instance, clamp((in.fog.x - 16.0) / 16.0, 0.0, 1.0));
     let gamma = horizon_terrain_frame_gamma(color);
     let faded = mix(horizon_terrain_globals.fog_color.rgb, gamma.rgb, visibility);
     return horizon_terrain_frame_stored(vec4(faded, color.a));
@@ -86,9 +89,9 @@ fn horizon_material_out(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f
     // 16 per level, 15 levels.
     out.light = min(vec2(block, sky) / 240.0, vec2(1.0));
     out.lightmap = horizon_terrain_sample_lightmap(sky / 16.0, block / 16.0).rgb;
+    out.shading = color.rgb * out.lightmap;
     out.position = pos;
-    out.spherical = length(pos);
-    out.cylindrical = max(length(pos.xz), abs(pos.y));
+    out.fog = vec2(length(pos), max(length(pos.xz), abs(pos.y)));
     // The colour's alpha byte (mesher.rs's `fluid_face` and `emitting`): a fluid quad's
     // high nibble is 8 + its face (0..5), every other quad keeps 0xF there; the low nibble
     // is 15 minus the face's HDR tier. Every corner of a quad carries the same byte, so the
@@ -188,7 +191,7 @@ fn horizon_material_color(in: HorizonMaterialOut, translucent: bool) -> vec4<f32
         horizon_sprite_material(in.layer & 0x7fffu), in.clip.xy / frame.resolution,
         in.face, fluid, in.emission, normal, tangent,
         horizon_line_in(horizon_terrain_native_colored_light(in.position)), in.displaced,
-        horizon_material_emission_threshold(in))).color;
+        horizon_material_emission_threshold(in), horizon_line_in(in.shading))).color;
     return vec4(horizon_line_out(out.rgb), out.a);
 }
 // `MaterialInput.emission_threshold`, as Horizon's own lift reads it (terrain.wgsl
@@ -225,14 +228,14 @@ fn horizon_material_solid(in: HorizonMaterialOut) -> HorizonMaterialSolid {
         set_surface(horizon_material_face_normal, 0.0, 0.0);
     }
     var out: HorizonMaterialSolid;
-    out.color = horizon_material_fogged(vec4(color.rgb, 1.0), in.spherical, in.cylindrical);
+    out.color = horizon_material_fogged(vec4(color.rgb, 1.0), in.fog.x, in.fog.y);
     out.surface = bitcast<vec4<u32>>(vec4(horizon_surface.xyz, in.clip.z));
     return out;
 }
 @fragment fn horizon_material_fs_translucent(in: HorizonMaterialOut) -> @location(0) vec4<f32> {
     let color = horizon_material_faded(in, horizon_material_color(in, true));
     if color.a < 0.01 { discard; }
-    return horizon_material_fogged(color, in.spherical, in.cylindrical);
+    return horizon_material_fogged(color, in.fog.x, in.fog.y);
 }
 ";
 
@@ -817,7 +820,7 @@ mod tests {
     let out = material(MaterialInput(vec4(horizon_line_in(albedo.rgb), albedo.a),
         vec4(horizon_line_in(tint.rgb), tint.a), vec2(1.0), horizon_line_in(lightmap),
         vec3(0.0), vec2(0.0), false, 0u, 0u, vec2(0.0), 0u, 0u, 0.0, vec3(0.0, 1.0, 0.0),
-        vec4(1.0, 0.0, 0.0, 1.0), horizon_line_in(vec3(0.0)), 0.0, 0.0)).color;
+        vec4(1.0, 0.0, 0.0, 1.0), horizon_line_in(vec3(0.0)), 0.0, 0.0, vec3(1.0))).color;
     return vec4(horizon_line_out(out.rgb), out.a);
 }
 ";

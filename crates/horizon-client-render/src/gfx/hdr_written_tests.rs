@@ -59,6 +59,15 @@ const TERRAIN_EXTRA_VERTICES: &str = r#"
 @fragment fn test_full_light() -> @location(0) vec4<f32> {
     return sample_lightmap(15.0, 15.0);
 }
+// A face whose ambient occlusion and light both change from corner to corner, through the
+// terrain's own vertex work.
+@vertex fn test_own_vertex(@builtin(vertex_index) i: u32) -> TerrainWire {
+    let color = vec4(vec3(select(select(0.7, 0.4, i == 1u), 1.0, i == 0u)), 1.0);
+    var o = terrain_vertex(vec3(0.0), vec2(0.5), 0u, color, vec2(select(240u, 0u, i == 1u)),
+        vec3(0.0), 1.0);
+    o.clip = vec4(vec2(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
+    return to_wire(o);
+}
 @vertex fn test_model(@builtin(vertex_index) i: u32) -> NativeModelOut {
     let p = vec2(f32((i << 1u) & 2u), f32(i & 2u));
     var o: NativeModelOut;
@@ -96,6 +105,9 @@ struct Draw<'a> {
     prefix: &'static str,
     /// The terrain's lightmap, as `Renderer::lightmap_pixels` holds it.
     lightmap: [u8; 16 * 16 * 4],
+    /// Draws through `test_own_vertex`, which hands the shader's own vertex work its corners,
+    /// in place of `test_vertex`'s ready-made output.
+    own_vertex: bool,
 }
 impl<'a> Draw<'a> {
     fn render_oit(
@@ -530,6 +542,7 @@ impl<'a> Draw<'a> {
             material_frame: None,
             prefix: "",
             lightmap: levels,
+            own_vertex: false,
         }
     }
 
@@ -605,6 +618,7 @@ impl<'a> Draw<'a> {
             "fs_sunrise" => "test_sunrise",
             "fs_native_model" => "test_model",
             "fs_native_fluid" => "test_fluid",
+            _ if self.own_vertex => "test_own_vertex",
             _ => "test_vertex",
         };
         let format = F::Rgba16Float;
@@ -1379,6 +1393,14 @@ override TEST_OVERLAY: u32 = 0u;
     o.clip = vec4(vec2(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
     return o;
 }
+// `TERRAIN_EXTRA_VERTICES`' face, through the wrapper's vertex work.
+@vertex fn test_own_vertex(@builtin(vertex_index) i: u32) -> HorizonMaterialOut {
+    let color = vec4(vec3(select(select(0.7, 0.4, i == 1u), 1.0, i == 0u)), 1.0);
+    var o = horizon_material_out(vec3(0.0), vec2(0.5), 0u, color,
+        vec2(select(240.0, 0.0, i == 1u)));
+    o.clip = vec4(vec2(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
+    return o;
+}
 "#;
 
 /// The brightness Horizon's lift gives a texel (hdr_look.wgsl `brightness`).
@@ -1493,6 +1515,56 @@ fn a_material_stage_reads_the_full_light_horizons_lift_reads() {
         assert!(
             (staged[i] - own[i]).abs() < 1e-3,
             "{staged:?} against {own:?}"
+        );
+    }
+}
+
+/// `MaterialInput.shading` is the shading Horizon's own terrain draws with: the vertex colour
+/// under the lightmap, multiplied at each corner and then smoothed over the face
+/// (terrain.wgsl `terrain_vertex`). The product of the smoothed `tint` and `lightmap` is not:
+/// on a face whose ambient occlusion and light both change it comes out darker or brighter.
+#[test]
+fn a_material_stage_reads_the_shading_horizons_terrain_draws() {
+    let Some((device, queue)) = material_gpu() else {
+        return;
+    };
+    let globals = super::super::Globals {
+        filtering: [0.0, 1.0, 0.0, 0.0],
+        ..bytemuck::Zeroable::zeroed()
+    };
+    const FULL: [u8; 3] = [255, 200, 120];
+    let draw = |shade: Option<&str>| {
+        let white = [255; 3];
+        let mut draw = Draw::with_light(&device, &queue, true, &globals, white, 255, FULL, 0);
+        draw.own_vertex = true;
+        let Some(shade) = shade else {
+            return draw.render(false, "fs_opaque", 0, 0, [0.0; 4]);
+        };
+        let material = format!(
+            "fn material(input: MaterialInput) -> Surface {{\n    \
+             return Surface(vec4<f32>({shade}, 1.0));\n}}\n\
+             fn displacement(input: DisplacementInput) -> f32 {{ return 0.0; }}\n"
+        );
+        let source =
+            super::super::native_material::test_shader(&material, false) + MATERIAL_STAGE_VERTEX;
+        draw.stage(source, "horizon_terrain_");
+        draw.render(false, "horizon_material_fs_solid", 0, 0, [0.0; 4])
+    };
+    let own = draw(None);
+    let shading = draw(Some("input.shading"));
+    let apart = draw(Some("input.tint.rgb * input.lightmap"));
+    // The pixel's centre weighs the corners 1/2, 1/4, 1/4: the lit ones at 1 and 0.7 of the
+    // vertex colour, and the dark one.
+    for i in 0..3 {
+        let want = (0.5 + 0.25 * 0.7) * f32::from(FULL[i]) / 255.0;
+        assert!((own[i] - want).abs() < 2e-3, "{own:?}");
+        assert!(
+            (shading[i] - own[i]).abs() < 2e-3,
+            "{shading:?} against {own:?}"
+        );
+        assert!(
+            (apart[i] - own[i]).abs() > 0.03,
+            "{apart:?} against {own:?}"
         );
     }
 }

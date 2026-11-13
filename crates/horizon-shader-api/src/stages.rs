@@ -503,7 +503,7 @@ struct HorizonMaterialIn {
     let input = MaterialInput(horizon_decode_rgba(in.albedo), horizon_decode_rgba(in.tint), in.light,
         horizon_decode(in.lightmap), in.world, in.uv, in.translucent != 0u, in.tags, in.material,
         in.position.xy / frame.resolution, in.face, fluid, in.emission, normal, tangent, vec3<f32>(0.0), 0.0,
-        0.0);
+        0.0, horizon_decode(in.tint.rgb * in.lightmap));
     return horizon_encode_rgba(material(input).color);
 }
 "

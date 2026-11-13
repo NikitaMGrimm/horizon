@@ -46,7 +46,7 @@ outside sRGB, with `[frame] primaries` (below). Horizon decodes vanilla's values
 the piecewise sRGB curve), replacing negatives and NaN with 0 first, and encodes a stage's result the same way where
 the frame stores gamma (`[frame] blend`, below).
 
-- **Linear:** `MaterialInput` `albedo`, `tint`, `lightmap` and `colored_light`; `VertexInput.tint`; `SkyInput.color`;
+- **Linear:** `MaterialInput` `albedo`, `tint`, `lightmap`, `colored_light` and `shading`; `VertexInput.tint`; `SkyInput.color`;
   `WeatherInput.color`; `Frame` `sky_color`, `fog_color` and `full_light`; `block_texture`, `block_texture_level`
   and `block_light_color`; every colour texture a stage samples (`scene_color`, `previous`, `history`, the pack's
   targets, `opaque_color`, `reflection`, `shadow_color`).

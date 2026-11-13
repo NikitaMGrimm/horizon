@@ -285,6 +285,7 @@ peak from the headroom, the tone curve), with no engine name in it.
 | `MaterialInput.emission_threshold: f32` | The brightness a texel must reach to be the part that shines (a torch's flame, not its handle); 0 where the whole sprite shines. |
 | `EntityInput.light_source: f32` | The thing's own kind of light, on `MaterialInput.emission`'s scale and past it: light-giving particles, glowing items and sign text, eyes; 2 for the very bright (experience orbs), a tier no block has. `emission` stays "drawn at full light". |
 | `Frame.full_light: vec3<f32>` | Vanilla's light colour at full light this frame: white unless Darkness or a wither's bar dims all light. What `hdr_unshade` scales to. |
+| `MaterialInput.shading: vec3<f32>` | Vanilla's shading of the surface, the vertex colour under the light colour multiplied at each corner: what the terrain draws with and `hdr_unshade` takes away. `tint` times `lightmap` multiplies the two after smoothing each, a few steps apart in a lit corner. |
 
 A `[glow]` stage, for what adds light and is no lit surface (the sun, moon, stars, lightning, additive particles,
 beams), gets a spec of its own. Until then those stay Horizon's under a pack, at paper white, and the pack's
@@ -426,7 +427,9 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
    - 7d (done): `emission_threshold`, `light_source` and `full_light` in the API and its reference, and wired into
      the material and entity stages. A block's tier needs no field: blocks have the first three, which `emission`
      tells apart. Entities have the fourth too, so `light_source` goes past `emission`'s 1 for it. The sprites'
-     thresholds are measured for a pack's material stage as for the look, HDR on or off.
+     thresholds are measured for a pack's material stage as for the look, HDR on or off. The pack's gate found a
+     fourth field missing: `shading`, since the terrain multiplies the vertex colour and the light at each corner,
+     and a stage that multiplies `tint` and `lightmap` itself was up to 6 steps of 255 off in a room's lit corners.
    - 7e: light sources lift before fog. A change of look, with captures.
    - 7f: `packs/horizon_hdr`, and its session in the frame identity harness, held to the default path. The gate
      widens as inputs arrive: terrain and entities first, items and particles with the entity stage's later

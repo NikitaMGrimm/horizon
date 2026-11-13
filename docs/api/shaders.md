@@ -204,6 +204,9 @@ keeps drawing. What a pack works with:
   texels of its sprite are the part that shines (a torch's flame, not its handle); `EntityInput.light_source`, the
   kind of light of an entity or a block entity (glowing eyes, a blaze, an experience orb); and `Frame.full_light`,
   the light colour at full light, for a light source that shines the same whatever light falls on it.
+  `MaterialInput.shading` is the shading that light source leaves behind, and every other block keeps: vanilla's
+  own, the vertex colour under the light colour multiplied at each corner of the face, which `tint` times `lightmap`
+  only comes close to.
 
 ```toml
 [tonemap]                  # optional: the pack's own tone curve
@@ -261,6 +264,11 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   only: no name was added, and a pack that doesn't read them is drawn as before. The uploaded `Frame` buffer grows
   by 16 bytes. The sprites' thresholds are measured when a pack with a material stage loads, on any output, where
   they were measured only as HDR output turned on.
+- 2026-11-13: API 0.2 (addition, experimental): `MaterialInput.shading`, vanilla's shading of a block's surface:
+  the vertex colour under the light colour, multiplied at each corner of the face and then smoothed over it, as
+  vanilla and Horizon's own terrain do. `albedo.rgb * shading` is vanilla's colour; `tint.rgb * lightmap`, the two
+  smoothed apart and then multiplied, is up to 6 steps of 255 off it where a face's ambient occlusion and its light
+  both change. A field only, and `tint` and `lightmap` are as they were.
 - 2026-11-13: API 0.2 (change, experimental): the game draws entities and block entities through the `[entity]`
   stage (`EntityInput.kind` 0 and 1) instead of refusing a pack that has it, with the stage's shadow maps and coloured
   lights, under either `[frame] blend`. Dropped and framed items, particles and the first-person hand keep Horizon's

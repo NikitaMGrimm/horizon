@@ -457,7 +457,7 @@ fn a_pack_constructs_no_struct_horizon_hands_it() {
                     let again = MaterialInput(input.albedo, input.tint, input.light, input.lightmap, \
                     input.position, input.uv, input.translucent, input.tags, input.material, input.screen, \
                     input.face, input.fluid, input.emission, input.normal, input.tangent, input.colored_light, \
-                    input.displaced, input.emission_threshold);\n    \
+                    input.displaced, input.emission_threshold, input.shading);\n    \
                     return Surface(again.albedo);\n}\n";
     let p = post_pack_with_material(material, POST, TONEMAP).expect_err("should fail");
     assert_eq!(
@@ -499,13 +499,14 @@ fn a_pack_reads_horizon_s_structs_passes_them_along_and_builds_its_surface() {
 }
 
 /// What a pack that lets light sources shine reads: which texels of a block's sprite are the
-/// part that shines, the kind of light of what is no block, and the light colour at full light.
+/// part that shines, vanilla's shading of the rest, the kind of light of what is no block, and
+/// the light colour at full light.
 #[test]
 fn a_pack_reads_what_shines() {
     let material = "fn material(input: MaterialInput) -> Surface {\n    \
                     let top = max(input.albedo.r, max(input.albedo.g, input.albedo.b));\n    \
                     let shines = input.emission > 0.0 && top >= input.emission_threshold;\n    \
-                    let light = select(input.lightmap, frame.full_light, shines);\n    \
+                    let light = select(input.shading, frame.full_light, shines);\n    \
                     return Surface(input.albedo * vec4<f32>(light, 1.0));\n}\n";
     let tonemap =
         "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color * frame.full_light; }\n";

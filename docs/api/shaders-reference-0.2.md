@@ -15,7 +15,7 @@ outside sRGB, with `[frame] primaries` (below). Horizon decodes vanilla's values
 the piecewise sRGB curve), replacing negatives and NaN with 0 first, and encodes a stage's result the same way where
 the frame stores gamma (`[frame] blend`, below).
 
-- **Linear:** `MaterialInput` `albedo`, `tint`, `lightmap` and `colored_light`; `VertexInput.tint`; `SkyInput.color`;
+- **Linear:** `MaterialInput` `albedo`, `tint`, `lightmap`, `colored_light` and `shading`; `VertexInput.tint`; `SkyInput.color`;
   `WeatherInput.color`; `Frame` `sky_color`, `fog_color` and `full_light`; `block_texture`, `block_texture_level`
   and `block_light_color`; every colour texture a stage samples (`scene_color`, `previous`, `history`, the pack's
   targets, `opaque_color`, `reflection`, `shadow_color`).
@@ -160,6 +160,7 @@ One point of a block's surface, for `fn material(input: MaterialInput) -> Surfac
 | `colored_light` | `vec3<f32>` | The frame's coloured lights at this point (`[[particle_lights]]`, held and dropped items in their `[[lights]]` colour while dynamic lights are on, and mods' visual lights), 0..1, to light the surface with as the pack likes; 0 where none reaches. |
 | `displaced` | `f32` | How much of the relief `[displacement]` gave this point as geometry, 0..1: 1 near the camera, where the surface already lies where `displacement` put it (`position` is that point; a parallax effect would count its depth twice), easing to 0 at `[displacement] distance`; always 0 without `[displacement]`. |
 | `emission_threshold` | `f32` | Which texels of a light source's sprite are the part that shines (a torch's flame, not its handle): those whose brightness is at least this, 0..1, where a texel's brightness is the mean of its luminance and its brightest channel, `0.5 * (dot(albedo.rgb, frame.luminance) + max(albedo.r, max(albedo.g, albedo.b)))`. Horizon measures it from the sprite itself, about a third of the way from its darkest to its brightest texel, so a resource pack's light sources shine where they are bright in their own drawing. 0 where the whole sprite shines (lava, fire, a froglight), and where `emission` is 0. |
+| `shading` | `vec3<f32>` | Vanilla's shading of this point: the vertex colour under the light colour, multiplied at each corner of the face as vanilla does and then smoothed over it, so `albedo.rgb * shading` is vanilla's colour. `tint.rgb * lightmap` multiplies the two after each was smoothed, which comes out a few steps of 255 apart where a face's ambient occlusion and its light both change, as in a corner beside a torch. It holds no coloured light (`colored_light`). |
 
 ### `Surface`
 

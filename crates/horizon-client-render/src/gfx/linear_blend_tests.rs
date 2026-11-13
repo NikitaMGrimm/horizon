@@ -292,7 +292,7 @@ fn a_fading_section_mixes_toward_the_fog_in_gamma() {
     var o: HorizonMaterialOut;
     // Half visible (`horizon_material_vertex`), past 32 blocks.
     o.fade = 32768u;
-    o.spherical = 40.0;
+    o.fog.x = 40.0;
     return horizon_material_faded(o, horizon_terrain_globals.sky_color);
 }
 ";
