@@ -199,10 +199,19 @@ keeps drawing. What a pack works with:
   returns. BT.2020 holds colours outside sRGB, which HDR displays show. It needs `blend = "linear"`. `Frame` says
   which in `primaries`, with that space's luminance weights in `luminance`, after `black_level`. `"bt2020"` passes
   the check, but the game doesn't serve it yet.
+- **`[material] coverage`**: `"engine"` (the default) or `"pack"`, whose alpha decides which points of terrain are
+  drawn. Under `"engine"` solid and cutout terrain keep Horizon's alpha test on the texture's alpha and ignore the
+  returned alpha, translucent terrain is cut on the texture's alpha too and takes the returned alpha as its opacity,
+  and the check refuses a `discard` reachable from `material`. Under `"pack"` the returned alpha drives the alpha
+  test and the stage may `discard`.
 
 ```toml
 [tonemap]                  # optional: the pack's own tone curve
 file = "tonemap.wgsl"
+
+[material]
+file = "material.wgsl"
+coverage = "engine"        # optional: engine (default) or pack, when the material cuts its own holes
 
 [entity]                   # optional: the colour of entities and block entities (items and particles later)
 file = "entity.wgsl"
@@ -249,6 +258,12 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-13: API 0.2 (**breaking**, experimental): the material stage keeps the engine's coverage unless the pack
+  declares it, with `[material] coverage`, `"engine"` (the default) or `"pack"`. Under `"engine"` solid and cutout
+  terrain's alpha test reads the texture's alpha, not the returned one, translucent terrain is cut on the texture's
+  alpha and blends by the returned alpha, and `horizon-shader check` refuses a `discard` that `material` can reach,
+  through its helpers too. A 0.2 material that cuts its own holes sets `coverage = "pack"`, which keeps the old
+  behaviour.
 - 2026-11-13: API 0.2 (change, experimental): the game draws entities and block entities through the `[entity]`
   stage (`EntityInput.kind` 0 and 1) instead of refusing a pack that has it, with the stage's shadow maps and coloured
   lights, under either `[frame] blend`. Dropped and framed items, particles and the first-person hand keep Horizon's

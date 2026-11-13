@@ -766,7 +766,7 @@ const SMALLEST: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\na
 
 #[test]
 fn the_frame_tonemap_and_entity_keys_are_read() {
-    use horizon_shader_api::{Blend, Primaries};
+    use horizon_shader_api::{Blend, Coverage, Primaries};
     let m = Manifest::parse(SMALLEST).unwrap();
     assert_eq!((m.blend, m.tonemap.is_none()), (Blend::Gamma, true));
     assert_eq!(m.primaries, Primaries::Bt709);
@@ -782,6 +782,16 @@ fn the_frame_tonemap_and_entity_keys_are_read() {
     for p in [Primaries::Bt709, Primaries::Bt2020] {
         assert!((p.luminance().iter().sum::<f32>() - 1.0).abs() < 1e-6);
     }
+    // The material keeps the engine's coverage unless it says otherwise.
+    let material = format!("{SMALLEST}[material]\nfile = \"m.wgsl\"\n");
+    assert_eq!(
+        Manifest::parse(&material).unwrap().coverage,
+        Coverage::Engine
+    );
+    let own = format!("{material}coverage = \"pack\"\n");
+    assert_eq!(Manifest::parse(&own).unwrap().coverage, Coverage::Pack);
+    let engine = format!("{material}coverage = \"engine\"\n");
+    assert_eq!(Manifest::parse(&engine).unwrap().coverage, Coverage::Engine);
     let tonemap = format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\nname = \"Curve\"\n");
     let m = Manifest::parse(&tonemap).unwrap();
     assert_eq!(m.tonemap.as_ref().unwrap().name.as_deref(), Some("Curve"));
@@ -821,6 +831,14 @@ fn the_frame_tonemap_and_entity_keys_are_checked() {
         (
             format!("{SMALLEST}[frame]\nblend = \"gamma\"\nprimaries = \"bt2020\"\n"),
             "frame.primaries \"bt2020\" needs blend = \"linear\"",
+        ),
+        (
+            format!("{SMALLEST}[material]\nfile = \"m.wgsl\"\ncoverage = \"texture\"\n"),
+            "material.coverage \"texture\": engine or pack",
+        ),
+        (
+            format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\ncoverage = \"pack\"\n"),
+            "`coverage` is a key of [material] only",
         ),
         (
             format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\nfog = false\n"),

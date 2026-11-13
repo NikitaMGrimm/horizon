@@ -30,6 +30,18 @@ pub enum Primaries {
     Bt2020,
 }
 
+/// `[material] coverage` (0.2): which alpha decides whether a point of solid or cutout terrain is
+/// drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Coverage {
+    /// The engine's alpha test on the sampled texture, as Horizon's own terrain: the returned
+    /// alpha is translucent terrain's opacity only, and the stage may not `discard`.
+    #[default]
+    Engine,
+    /// The returned alpha drives the alpha test, and the stage may `discard`.
+    Pack,
+}
+
 impl Primaries {
     /// `Frame.luminance`: the weights that give a colour's luminance in these primaries.
     pub const fn luminance(self) -> [f32; 3] {
@@ -89,6 +101,8 @@ pub struct Manifest {
     pub blend: Blend,
     /// `[frame] primaries`.
     pub primaries: Primaries,
+    /// `[material] coverage`.
+    pub coverage: Coverage,
     pub options: Vec<PackOption>,
     /// How the settings page lays the options out; the first page is the one it opens on.
     /// Empty: one page with every option.
@@ -356,6 +370,9 @@ pub struct Stage {
     /// (true when absent); false for a pack that fogs its surfaces itself.
     #[serde(default)]
     pub fog: Option<bool>,
+    /// The material stage only (0.2): `"engine"` (when absent) or `"pack"`, `Manifest::coverage`.
+    #[serde(default)]
+    pub coverage: Option<String>,
     /// The sky stage only: whether Minecraft's clouds still draw (true when absent); false for
     /// a pack whose sky draws its own.
     #[serde(default)]
@@ -625,6 +642,11 @@ impl Manifest {
             }
             Some(p) => return Err(err(format!("frame.primaries {p:?}: bt709 or bt2020"))),
         };
+        let coverage = match raw.material.as_ref().and_then(|m| m.coverage.as_deref()) {
+            None | Some("engine") => Coverage::Engine,
+            Some("pack") => Coverage::Pack,
+            Some(c) => return Err(err(format!("material.coverage {c:?}: engine or pack"))),
+        };
         let id_ok = (1..=64).contains(&raw.id.len())
             && raw
                 .id
@@ -663,6 +685,18 @@ impl Manifest {
             .any(|s| s.fog.is_some())
         {
             return Err(err("`fog` is a key of [material] only".into()));
+        }
+        if raw
+            .sky
+            .iter()
+            .chain(&raw.vertex)
+            .chain(&raw.weather)
+            .chain(&raw.post)
+            .chain(&raw.tonemap)
+            .chain(&raw.entity)
+            .any(|s| s.coverage.is_some())
+        {
+            return Err(err("`coverage` is a key of [material] only".into()));
         }
         if raw
             .sky
@@ -1018,6 +1052,7 @@ impl Manifest {
             entity: raw.entity,
             blend,
             primaries,
+            coverage,
             options,
             pages,
             tags: raw.tags,

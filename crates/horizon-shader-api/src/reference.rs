@@ -98,6 +98,18 @@ It needs `blend = \"linear\"`, since a change of primaries is only right in line
 space the pack's colours are in, and `frame.luminance` holds that space's luminance weights: compute luminance as
 `dot(color, frame.luminance)` and it is right in either. `\"bt2020\"` passes the check; the game doesn't serve it yet.
 
+## `[material] coverage`
+
+Which points of terrain are drawn is the engine's unless the pack says otherwise. Under `coverage = \"engine\"` (the
+default) solid and cutout terrain keep Horizon's alpha test on the texture's own alpha (cut below 0.5, except the
+leaves Horizon draws opaque), and the alpha `material` returns is ignored there; translucent terrain is cut where the
+texture's alpha is below 0.01, and the returned alpha is its opacity, so water and glass still set how see-through
+they are. `material`, and every function it calls, may not `discard`: the check refuses it. A pack that cuts its own
+holes sets `coverage = \"pack\"`: the returned alpha then drives the alpha test (below 0.5 on solid and cutout
+terrain, below 0.01 on translucent) and the stage may `discard`. Normal and parallax shading that keeps the
+silhouette needs no `\"pack\"`, and neither do `[vertex]` and `[displacement]`, which move geometry, not coverage.
+The stage writes no depth of its own either way.
+
 ";
 
 /// The entity stage's notes, after its input: what it returns, and vanilla's own.

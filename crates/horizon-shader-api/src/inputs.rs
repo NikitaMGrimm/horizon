@@ -274,9 +274,10 @@ pub const MATERIAL_INPUT: Struct = Struct {
 pub const SURFACE: Struct = Struct {
     name: "Surface",
     doc: "What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; \
-          Horizon then applies the alpha test (cutout and translucent) and fog.",
+          Horizon then applies the alpha test (cutout and translucent; on the texture's alpha unless \
+          `[material] coverage = \"pack\"`) and fog.",
     fields: fields! {
-        color: "vec4<f32>" = "The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter than white); alpha its coverage.",
+        color: "vec4<f32>" = "The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter than white); alpha translucent terrain's opacity, and what the alpha test reads under `[material] coverage = \"pack\"`.",
     },
 };
 
