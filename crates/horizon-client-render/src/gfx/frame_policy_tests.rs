@@ -132,6 +132,13 @@ fn one_tone_curve_runs_on_the_layered_world() {
 }
 
 #[test]
+fn the_hands_depth_is_kept_on_the_layered_frame() {
+    use super::hand_depth_store;
+    assert_eq!(hand_depth_store(true), wgpu::StoreOp::Store);
+    assert_eq!(hand_depth_store(false), wgpu::StoreOp::Discard);
+}
+
+#[test]
 fn only_a_no_pack_layered_world_applies_hdr_gain() {
     use super::no_pack_hdr_gain;
     assert!(no_pack_hdr_gain(true, false, true));

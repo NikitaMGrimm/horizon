@@ -52,6 +52,16 @@ pub(super) fn overlay_format(
     }
 }
 
+/// What the hand's pass does with the depth it drew: kept on HDR's layered frame, where a
+/// resource pack's post effect may read it after the hand (`Overlay::world_depth`).
+pub(super) fn hand_depth_store(layered: bool) -> wgpu::StoreOp {
+    if layered {
+        wgpu::StoreOp::Store
+    } else {
+        wgpu::StoreOp::Discard
+    }
+}
+
 /// Whether Horizon's tone curve (`Hdr::tonemap`) runs on this frame: on the layered frame's
 /// world, unless a 0.2 pack's `[tonemap]` already mapped it. One tone mapping, never two.
 pub(super) fn horizon_tone_curve(layered: bool, world: bool, pack_tonemap: bool) -> bool {
