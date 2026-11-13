@@ -149,7 +149,9 @@ fn entry(path: &Path) -> Option<Entry> {
 /// Resolves a saved identity, migrating a legacy native filename when its manifest or the
 /// launcher's `<id>-<version>.hshader` name identifies it. Duplicate IDs use the first filename
 /// in lexical order, matching `scan`; versions are free-form strings, not ordered versions.
-/// An absent arbitrary old filename cannot be attributed to a manifest safely.
+/// An absent arbitrary old filename cannot be attributed to a manifest safely. A saved identity
+/// whose pack this build refuses (another API line) keeps that pack's path, so loading it says
+/// why; a pack that reads comes first.
 pub fn resolve(dir: &Path, picked: &str) -> (String, PathBuf) {
     if picked.is_empty() {
         return (String::new(), dir.join(picked));
@@ -158,23 +160,27 @@ pub fn resolve(dir: &Path, picked: &str) -> (String, PathBuf) {
     if direct.exists() && !horizon_shader_api::package::is_pack(&direct) {
         return (picked.to_owned(), direct);
     }
-    let mut native: Vec<_> = std::fs::read_dir(dir)
+    let mut files: Vec<_> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| {
             let path = e.path();
             let file = path.file_name()?.to_str()?.to_owned();
-            if file.starts_with('.') || !horizon_shader_api::package::is_pack(&path) {
-                return None;
-            }
-            Some((file, horizon_shader_api::Pack::read_manifest(&path).ok()?))
+            (!file.starts_with('.') && horizon_shader_api::package::is_pack(&path)).then_some(file)
         })
         .collect();
-    native.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort();
+    let native: Vec<_> = files
+        .iter()
+        .filter_map(|file| {
+            let manifest = horizon_shader_api::Pack::read_manifest(&dir.join(file)).ok()?;
+            Some((file, manifest))
+        })
+        .collect();
     let id = native
         .iter()
-        .find(|(file, _)| file == picked)
+        .find(|(file, _)| *file == picked)
         .map(|(_, m)| m.id.as_str())
         .or_else(|| picked.strip_prefix("horizon:"))
         .or_else(|| {
@@ -198,6 +204,13 @@ pub fn resolve(dir: &Path, picked: &str) -> (String, PathBuf) {
         }
         migrate_values(&dir.join(file), &key);
         return (key, dir.join(file));
+    }
+    let declares = |file: &&String| {
+        horizon_shader_api::Pack::declared_id(&dir.join(file)).as_deref()
+            == picked.strip_prefix("horizon:")
+    };
+    if let Some(file) = files.iter().find(declares) {
+        return (picked.to_owned(), dir.join(file));
     }
     (picked.to_owned(), dir.join(picked))
 }
@@ -486,6 +499,46 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(packs.join("warm-1.hshader.txt")).unwrap(),
             "strength=1.5\n"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A saved identity whose pack is for a shader API line this build doesn't serve keeps
+    /// the pack's own path, where loading it says why it is refused; a pack with that id that
+    /// reads is the pick, whatever its file's name.
+    #[test]
+    fn a_saved_identity_keeps_the_path_of_a_pack_this_build_refuses() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-identity-retired-{}", std::process::id()));
+        let retired = dir.join("a-retired");
+        std::fs::create_dir_all(&retired).unwrap();
+        std::fs::write(
+            retired.join(horizon_shader_api::MANIFEST),
+            "schema = 1\nid = \"warm\"\nname = \"Warm\"\nversion = \"1\"\napi = \"0.1\"\n\
+             [[post]]\nfile = \"p.wgsl\"\n",
+        )
+        .unwrap();
+        let refusal = horizon_shader_api::Pack::read_manifest(&retired).unwrap_err();
+        assert!(refusal.contains("needs shader API 0.1"), "{refusal}");
+        assert_eq!(
+            resolve(&dir, "horizon:warm"),
+            ("horizon:warm".into(), retired.clone())
+        );
+        // Another id, and a manifest that isn't TOML, are nobody's identity.
+        assert_eq!(
+            resolve(&dir, "horizon:cold"),
+            ("horizon:cold".into(), dir.join("horizon:cold"))
+        );
+        install(&dir, "z.hshader", "2");
+        assert_eq!(
+            resolve(&dir, "horizon:warm"),
+            ("horizon:warm".into(), dir.join("z.hshader"))
+        );
+        std::fs::remove_file(dir.join("z.hshader")).unwrap();
+        std::fs::write(retired.join(horizon_shader_api::MANIFEST), "not = [toml").unwrap();
+        assert_eq!(
+            resolve(&dir, "horizon:warm"),
+            ("horizon:warm".into(), dir.join("horizon:warm"))
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
