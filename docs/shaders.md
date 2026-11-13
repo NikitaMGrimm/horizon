@@ -242,7 +242,7 @@ and the check refuses a pack that names one itself.
 A hit also reads the resource packs' LabPBR maps, as a drawn surface does: `hit_normal_map(hit)` and
 `hit_specular_map(hit)` give its sprite's texel at full size, with the same defaults as `block_normal_map` and
 `block_specular_map` where there are no maps (and on a miss), and `block_pbr_maps()` says whether there are, in a post
-pass too. `hit.tangent` turns the normal map into world axes as `input.tangent` does. A reflection shaded with the
+pass too (there it is false while the game doesn't trace, when no hit reads them). `hit.tangent` turns the normal map into world axes as `input.tangent` does. A reflection shaded with the
 roughness the same block has on screen:
 
 ```wgsl
