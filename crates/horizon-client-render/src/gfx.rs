@@ -10304,7 +10304,12 @@ impl Renderer {
                         .as_ref()
                         .and_then(|n| Some((n.sky.as_ref()?, &n.frame)))
                     {
-                        Some((sky, native)) => sky.draw(&mut pass, native),
+                        Some((sky, native)) => {
+                            sky.draw(&mut pass, native);
+                            // The sky binds the frame's own group; a material stage that
+                            // traces draws with the scene's.
+                            pack_frame(&mut pass);
+                        }
                         None => {
                             match self.core_sky.as_ref().filter(|c| c.draws_disc()) {
                                 Some(core) => {
