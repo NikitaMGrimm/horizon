@@ -53,7 +53,8 @@ it on Options > Video Settings > Shaders > Shader Packs..., which lists Horizon'
 name>` runs a pack whatever the page says, for development. The game checks the pack first, and refuses one that
 fails, with its problems in the chat. While it runs, the game looks at the pack twice a second: save a file
 and the pack is checked and rebuilt in place ("Shader pack ... reloaded"); if the new version fails, the chat says
-where and the last good version keeps drawing. All three stages run.
+where and the last good version keeps drawing. A manifest the game refuses (another API line, a mistake in it,
+something it doesn't draw yet) turns the pack off until it is fixed. All three stages run.
 
 A picked pack's options are pages of the same screen, under the pack's name in its page list: its screens, with the
 names the pack gives them, its profiles, and Reset. The main screen and those it links to are in the list (when

@@ -3,7 +3,9 @@
 //! passes `horizon_shader_api::check`. The pack is looked at twice a second: a saved file (or
 //! saved option values) is checked and the pack rebuilt, and a
 //! pack that fails is refused with its problems in the chat while the last good one keeps
-//! drawing.
+//! drawing. A pack whose manifest is refused (`manifest_refused`) stops drawing instead: the
+//! one that ran was built for another manifest, and the pick asks for its frame as no pack
+//! does (`picked_pack_shape`).
 
 use std::{
     hash::{Hash, Hasher},
@@ -60,7 +62,7 @@ impl NativeShaders {
                 horizon_client::shader_pack_list::resolve(dir, picked).1
             };
             // A manifest being edited may be temporarily invalid. Keep its path so the
-            // reload reports the error and retains the last good shader.
+            // reload reports the error.
             let unresolved =
                 !filesystem && picked.starts_with("horizon:") && resolved == dir.join(picked);
             let keep_path = unresolved
@@ -112,10 +114,12 @@ impl Game<'_> {
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        let result = Pack::read(path).map_err(|e| vec![e]).and_then(|pack| {
-            if let Some(why) = not_drawn(&pack.manifest) {
-                return Err(vec![why.into()]);
-            }
+        let manifest_refused = manifest_refused(path);
+        let read = match &manifest_refused {
+            Some(why) => Err(vec![why.clone()]),
+            None => Pack::read(path).map_err(|e| vec![e]),
+        };
+        let result = read.and_then(|pack| {
             let report = check(&pack)
                 .map_err(|p| p.iter().map(ToString::to_string).collect::<Vec<String>>())?;
             // The player's values (the pack's Shader Options page), else the defaults.
@@ -190,6 +194,12 @@ impl Game<'_> {
                 }
             }
             Err(problems) => {
+                if manifest_refused.is_some() {
+                    if let Some(renderer) = &mut self.renderer {
+                        renderer.drop_shader_packs();
+                    }
+                    self.set_translucent_layers(Vec::new());
+                }
                 log::warn!("shader pack {name} refused: {}", problems.join("; "));
                 self.system_message(Text::colored(format!("Shader pack {name} refused:"), RED));
                 for p in problems {
@@ -197,6 +207,17 @@ impl Game<'_> {
                 }
             }
         }
+    }
+}
+
+/// Why the manifest of the pack at `path` is refused, if it is: it doesn't read (a shader API
+/// line this build doesn't serve, a mistake in it), or it asks for what isn't drawn yet
+/// (`not_drawn`). A pack that ran before stops then; one whose stages fail keeps its last good
+/// version drawing.
+fn manifest_refused(path: &Path) -> Option<String> {
+    match Pack::read_manifest(path) {
+        Ok(manifest) => not_drawn(&manifest).map(Into::into),
+        Err(e) => Some(e),
     }
 }
 
@@ -335,6 +356,49 @@ mod tests {
             "an explicit missing filesystem override must not switch to another installed pack"
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Every way a manifest is refused stops the pack that ran: another API line, what isn't
+    /// drawn yet, a mistake in it. A stage that fails is not one of them: its last good
+    /// version keeps drawing.
+    #[test]
+    fn a_refused_manifest_stops_the_pack_and_a_failing_stage_does_not() {
+        use super::manifest_refused;
+        let pack = std::env::temp_dir().join(format!("horizon-refused-{}", std::process::id()));
+        std::fs::create_dir_all(&pack).unwrap();
+        let write = |api: &str, extra: &str| {
+            let text = format!(
+                "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"{api}\"\n\
+                 [[post]]\nfile = \"post.wgsl\"\n{extra}"
+            );
+            std::fs::write(pack.join(horizon_shader_api::MANIFEST), text).unwrap();
+        };
+        // A stage the check refuses: the manifest itself is taken.
+        std::fs::write(pack.join("post.wgsl"), "not wgsl").unwrap();
+        write("0.2", "");
+        assert_eq!(manifest_refused(&pack), None);
+        assert!(
+            horizon_shader_api::check(&horizon_shader_api::Pack::read(&pack).unwrap()).is_err()
+        );
+        for (api, extra, why) in [
+            ("0.1", "", "needs shader API 0.1; this Horizon serves 0.2"),
+            (
+                "0.2",
+                "[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n",
+                "primaries = \"bt2020\" isn't served yet",
+            ),
+            (
+                "0.2",
+                "[entity]\nfile = \"e.wgsl\"\n",
+                "[entity] stage isn't drawn yet",
+            ),
+            ("0.2", "[frame\n", "horizon-shaders.toml"),
+        ] {
+            write(api, extra);
+            let refused = manifest_refused(&pack).unwrap_or_default();
+            assert!(refused.contains(why), "{api} {extra}: {refused}");
+        }
+        std::fs::remove_dir_all(pack).unwrap();
     }
 
     #[test]
