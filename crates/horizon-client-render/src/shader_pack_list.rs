@@ -205,12 +205,13 @@ pub fn resolve(dir: &Path, picked: &str) -> (String, PathBuf) {
         migrate_values(&dir.join(file), &key);
         return (key, dir.join(file));
     }
-    let declares = |file: &&String| {
-        horizon_shader_api::Pack::declared_id(&dir.join(file)).as_deref()
-            == picked.strip_prefix("horizon:")
-    };
-    if let Some(file) = files.iter().find(declares) {
-        return (picked.to_owned(), dir.join(file));
+    if let Some(id) = picked.strip_prefix("horizon:") {
+        let declares = |file: &&String| {
+            horizon_shader_api::Pack::declared_id(&dir.join(file)).as_deref() == Some(id)
+        };
+        if let Some(file) = files.iter().find(declares) {
+            return (picked.to_owned(), dir.join(file));
+        }
     }
     (picked.to_owned(), dir.join(picked))
 }
@@ -529,6 +530,16 @@ mod tests {
             resolve(&dir, "horizon:cold"),
             ("horizon:cold".into(), dir.join("horizon:cold"))
         );
+        // A pick by file name is that file, whatever else is installed: a pack whose manifest
+        // declares no id is not it.
+        let broken = dir.join("0-broken");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join(horizon_shader_api::MANIFEST), "not = [toml").unwrap();
+        assert_eq!(
+            resolve(&dir, "a-retired"),
+            ("a-retired".into(), retired.clone())
+        );
+        std::fs::remove_dir_all(broken).unwrap();
         install(&dir, "z.hshader", "2");
         assert_eq!(
             resolve(&dir, "horizon:warm"),
