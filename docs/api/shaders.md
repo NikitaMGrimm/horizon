@@ -250,6 +250,12 @@ draws them itself (the material stage covers terrain only). The first-person han
 
 ## Changelog
 
+- 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` `RayHit` gains `emission`, `fluid`,
+  `translucent` (false for every hit: the scene holds no translucent terrain yet) and `tangent`, as `MaterialInput` has
+  them, and `horizon_sprite`, Horizon's own. Where `trace` is, the prelude gets `hit_normal_map(hit)` and
+  `hit_specular_map(hit)`, the resource packs' LabPBR maps at a hit, and a traced post stage gets `block_pbr_maps()`;
+  the check refuses a pack's own function or post `output` by those names there, as `trace`'s. Packs without
+  `[ray_tracing]` are built from the same WGSL as before, a test holds.
 - 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` the material stage gets `RayHit`, `trace` and
   `trace_any` too, the post stage's own, where its files name either function; a material stage that names neither is
   built from the same WGSL as before, a test holds. `[ray_tracing]` needs a `[[post]]` pass or a `[material]` stage.

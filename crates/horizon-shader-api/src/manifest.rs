@@ -570,7 +570,14 @@ struct RawBudget {
 /// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'), each at one scale,
 /// `MAX_POST_TARGETS` at most.
 fn check_post_targets(post: &[Stage], ray_tracing: bool) -> Result<(), String> {
-    let traced = ["trace", "trace_any"];
+    // The post prelude's functions `[ray_tracing]` brings.
+    let traced = [
+        "trace",
+        "trace_any",
+        "hit_normal_map",
+        "hit_specular_map",
+        "block_pbr_maps",
+    ];
     let reserved = [
         "frame",
         "scene_color",
