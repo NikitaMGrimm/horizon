@@ -192,8 +192,9 @@ keeps drawing. What a pack works with:
 - **`[entity]`**, `fn entity(input: EntityInput) -> Surface`: the lit colour of what is no block terrain (entities,
   block entities, dropped and framed items, particles; `input.kind` says which), from its texture, tint, vanilla's
   shade and hurt flash, its light and a normal, with the material stage's shadow maps and coloured lights. It returns
-  the material stage's `Surface`, so a pack lights both with one function. The check takes it, but **the game doesn't
-  draw it yet** and refuses a pack that has it.
+  the material stage's `Surface`, so a pack lights both with one function. The game draws entities and block
+  entities through it so far (`kind` 0 and 1); items and particles keep Horizon's lighting until later releases, and
+  the reference lists what stays Horizon's.
 - **`[frame] primaries`**: `"bt709"` (the default) or `"bt2020"`, the primaries of every colour a stage reads or
   returns. BT.2020 holds colours outside sRGB, which HDR displays show. It needs `blend = "linear"`. `Frame` says
   which in `primaries`, with that space's luminance weights in `luminance`, after `black_level`. `"bt2020"` passes
@@ -203,7 +204,7 @@ keeps drawing. What a pack works with:
 [tonemap]                  # optional: the pack's own tone curve
 file = "tonemap.wgsl"
 
-[entity]                   # optional: the colour of entities, block entities, items and particles (not drawn yet)
+[entity]                   # optional: the colour of entities and block entities (items and particles later)
 file = "entity.wgsl"
 
 [frame]
@@ -241,12 +242,19 @@ While the API is experimental, a line is served until the next one is on by defa
 
 ## Not there yet
 
-An overlay showing what each pass draws (F3 already shows what each costs), and entities, block entities, items and
-particles drawn through a pack: shader API 0.2 has their stage, `[entity]`, and the check takes it, but the game still
-draws them itself (the material stage covers terrain only). The first-person hand has no stage yet.
+An overlay showing what each pass draws (F3 already shows what each costs), and items and particles drawn through a
+pack: shader API 0.2's `[entity]` stage has their kinds, and the game draws entities and block entities through it,
+but still lights dropped and framed items and particles itself. Block entities kept on the GPU (chests, banners) cast
+no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-13: API 0.2 (change, experimental): the game draws entities and block entities through the `[entity]`
+  stage (`EntityInput.kind` 0 and 1) instead of refusing a pack that has it, with the stage's shadow maps and coloured
+  lights, under either `[frame] blend`. Dropped and framed items, particles and the first-person hand keep Horizon's
+  lighting; the reference lists them, and says where `shade` is still 1 with vanilla's shade in `tint`. The stage's
+  list of names is held from now on, like the other stages'. No name or field was added. A pack without `[entity]` is
+  unchanged.
 - 2026-11-13: API 0.1 (removed): no build serves it any more. `horizon-shader`, the game and the registry refuse a
   0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`, and the registry lists 0.2 packs. The 0.1 reference
   is gone, the templates of `horizon-shader new` are 0.2 packs, and the example pack Golden Hour is its 0.2 port
