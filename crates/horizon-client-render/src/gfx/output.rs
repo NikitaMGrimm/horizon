@@ -155,8 +155,8 @@ pub struct EffectiveOutput {
     pub(crate) nits: [f32; 3],
     /// The HUD and menus' brightness, as a share of paper white: their nits over its.
     pub(crate) ui_brightness: f32,
-    /// The running shader pack lights the world itself: Horizon lifts none of it, so HDR
-    /// Lighting has nothing to switch (`with_pack`).
+    /// The running shader pack lights the world itself: Horizon lifts none of it, so Look has
+    /// nothing to pick (`with_pack`).
     pub(crate) pack_lights: bool,
 }
 impl Default for EffectiveOutput {
