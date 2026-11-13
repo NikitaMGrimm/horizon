@@ -204,6 +204,10 @@ keeps drawing. What a pack works with:
   returned alpha, translucent terrain is cut on the texture's alpha too and takes the returned alpha as its opacity,
   and the check refuses a `discard` reachable from `material`. Under `"pack"` the returned alpha drives the alpha
   test and the stage may `discard`.
+- **`[entity] coverage`**: the same for the entity stage. Under `"engine"` (the default) an entity keeps Horizon's
+  coverage: the texture's alpha times the layer's opacity is cut below 0.1 and blends, the returned alpha is ignored,
+  and the check refuses a `discard` reachable from `entity`. Under `"pack"` the returned alpha is cut and blends, and
+  the stage may `discard`. Dissolve masks and culling are Horizon's under either.
 
 ```toml
 [tonemap]                  # optional: the pack's own tone curve
@@ -215,6 +219,7 @@ coverage = "engine"        # optional: engine (default) or pack, when the materi
 
 [entity]                   # optional: the colour of entities and block entities (items and particles later)
 file = "entity.wgsl"
+coverage = "engine"        # optional: engine (default) or pack, when the stage cuts or fades entities itself
 
 [frame]
 blend = "gamma"            # optional: gamma (default) or linear
@@ -264,6 +269,11 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   alpha and blends by the returned alpha, and `horizon-shader check` refuses a `discard` that `material` can reach,
   through its helpers too. A 0.2 material that cuts its own holes sets `coverage = "pack"`, which keeps the old
   behaviour.
+- 2026-11-14: API 0.2 (**breaking**, experimental): the entity stage keeps the engine's coverage unless the pack
+  declares it, with `[entity] coverage`, `"engine"` (the default) or `"pack"`. Under `"engine"` the texture's alpha
+  times the layer's opacity is cut and blends, not the returned alpha, and `horizon-shader check` refuses a `discard`
+  that `entity` can reach. An entity stage that cuts or fades entities itself sets `coverage = "pack"`, which keeps
+  the old behaviour.
 - 2026-11-13: API 0.2 (change, experimental): the game draws entities and block entities through the `[entity]`
   stage (`EntityInput.kind` 0 and 1) instead of refusing a pack that has it, with the stage's shadow maps and coloured
   lights, under either `[frame] blend`. Dropped and framed items, particles and the first-person hand keep Horizon's

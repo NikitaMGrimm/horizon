@@ -194,7 +194,7 @@ impl NativePack {
             .is_some_and(|s| s.reads("reflection"))
             && option_on(constants, option);
         let fog = report.material_fog;
-        let coverage = report.manifest.coverage;
+        let coverage = report.manifest.material_coverage;
         let keeps = |key: fn(&horizon_shader_api::Stage) -> Option<bool>| {
             report.sky.as_ref().and_then(key).unwrap_or(true)
         };
@@ -260,7 +260,8 @@ impl NativePack {
             .find(|s| s.kind == StageKind::Entity)
             .map(|stage| {
                 let groups = [terrain.entities, terrain.retained_entities];
-                NativeEntity::new(device, format, groups, &frame, stage, constants)
+                let coverage = report.manifest.entity_coverage;
+                NativeEntity::new(device, format, groups, &frame, stage, constants, coverage)
             })
             .transpose()?;
         // The decode and the tonemap run without a chain too.
