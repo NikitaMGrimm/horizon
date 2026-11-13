@@ -164,11 +164,8 @@ impl Game<'_> {
         });
         remember(path, stamp, result.as_ref().ok().map(|(m, _, _)| m.api));
         // The resources were loaded without a native pack, so without the resource packs'
-        // LabPBR maps its material stage or its rays' hits read: load them once, now that one
-        // runs.
-        if result
-            .as_ref()
-            .is_ok_and(|(m, _, _)| m.material.is_some() || m.ray_tracing.is_some())
+        // LabPBR maps its material stage reads: load them once, now that one runs.
+        if result.as_ref().is_ok_and(|(m, _, _)| m.material.is_some())
             && !horizon_client::sprites::labpbr_maps()
         {
             horizon_client::sprites::set_labpbr_maps(true);
