@@ -593,18 +593,26 @@ impl NativeMaterial {
 /// The terrain shader of a pack whose material stage is `material` (its `material` and, for
 /// `[displacement]`, its `displacement`), its frame holding linear light where `linear`.
 pub(super) fn test_shader(material: &str, linear: bool) -> String {
-    use horizon_shader_api::{MANIFEST, Pack, StageKind, check};
+    use horizon_shader_api::{MANIFEST, Pack};
     let manifest = "schema = 1\nid = \"coverage\"\nname = \"Coverage\"\nversion = \"1\"\napi = \"0.2\"\n[material]\nfile = \"material.wgsl\"\n[displacement]\n";
     let files = [(MANIFEST, manifest), ("material.wgsl", material)]
         .map(|(n, text)| (n.to_owned(), text.as_bytes().to_vec()))
         .into();
-    let report = check(&Pack::from_files(files).unwrap()).unwrap();
+    pack_test_shader(&Pack::from_files(files).unwrap(), linear)
+}
+
+#[cfg(test)]
+/// The terrain shader of `pack`'s material stage, its frame holding linear light where `linear`.
+pub(super) fn pack_test_shader(pack: &horizon_shader_api::Pack, linear: bool) -> String {
+    use horizon_shader_api::{StageKind, check};
+    let report = check(pack).unwrap();
     let stage = report
         .stages
         .iter()
         .find(|s| s.kind == StageKind::Material)
         .unwrap();
-    shader_source(&stage.source, &[], &[], (false, true), linear)
+    let displaced = pack.manifest.displacement.is_some();
+    shader_source(&stage.source, &[], &[], (false, displaced), linear)
 }
 
 #[cfg(test)]

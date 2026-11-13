@@ -25,6 +25,14 @@ pub fn shader(entity: &str) -> String {
     shader_source(&report.stages[0].source)
 }
 
+/// The entity shader of `pack`'s entity stage.
+pub fn pack_shader(pack: &horizon_shader_api::Pack) -> String {
+    use horizon_shader_api::{StageKind, check};
+    let report = check(pack).unwrap();
+    let stage = report.stages.iter().find(|s| s.kind == StageKind::Entity);
+    shader_source(&stage.unwrap().source)
+}
+
 /// Every name a pack's code could take that Horizon's entity shaders or the entries around
 /// the stage have had, in any case: a pack's own are checked only against lowercase `horizon_`.
 const OWN_NAMES: &str = "const globals: f32 = 1.0;

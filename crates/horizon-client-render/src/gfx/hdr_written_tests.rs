@@ -36,6 +36,14 @@ override TEST_OVERLAY: u32 = 0u;
 const ENTITY_VERTEX: &str = r#"
 override TEST_TIER: u32 = 0u;
 override TEST_OVERLAY: u32 = 0u;
+// `ENTITY_STAGE_VERTEX`'s quad, through the entities' own vertex work.
+@vertex fn test_own_vertex(@builtin(vertex_index) i: u32) -> Out {
+    var o = entity_vertex(vec3(0.0), vec2(0.5), 0u, vec4(0.8, 0.9, 0.7, 1.0),
+        vec4(240u, 240u, 0u, 0u), vec4(0.0));
+    o.clip = vec4(vec2(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
+    o.tier = TEST_TIER;
+    return o;
+}
 @vertex fn test_vertex(@builtin(vertex_index) i: u32) -> Out {
     let p = vec2(f32((i << 1u) & 2u), f32(i & 2u));
     var o: Out;
@@ -1388,7 +1396,9 @@ const MATERIAL_STAGE_VERTEX: &str = r#"
 override TEST_TIER: u32 = 0u;
 override TEST_OVERLAY: u32 = 0u;
 @vertex fn test_vertex(@builtin(vertex_index) i: u32) -> HorizonMaterialOut {
-    let color = vec4(vec3(1.0), f32(0xF0u | (15u - TEST_TIER)) / 255.0);
+    // `misc.w` shades the face, as `TERRAIN_VERTEX`'s.
+    let shade = horizon_terrain_globals.misc.w;
+    let color = vec4(vec3(select(1.0, shade, shade > 0.0)), f32(0xF0u | (15u - TEST_TIER)) / 255.0);
     var o = horizon_material_out(vec3(0.0), vec2(0.5), 0u, color, vec2(240.0));
     o.clip = vec4(vec2(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0, 0.0, 1.0);
     return o;
@@ -1625,4 +1635,137 @@ fn an_entity_stage_reads_the_tier_horizons_lift_reads() {
             "tier {tier}, retained"
         );
     }
+}
+
+/// Horizon's HDR look as a shader pack (`horizon-shader-api`'s packs/horizon_hdr), whose shared
+/// source is the look file these shaders start with.
+fn look_pack() -> horizon_shader_api::Pack {
+    let dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../horizon-shader-api/packs/horizon_hdr"
+    );
+    horizon_shader_api::Pack::read(std::path::Path::new(dir)).unwrap()
+}
+
+/// A display at the scene's peak, where the look's world shows as written.
+const LOOK_DISPLAY: crate::gfx::output::DisplayValues = crate::gfx::output::DisplayValues {
+    hdr: true,
+    headroom: 1000.0 / 203.0,
+    paper_white: 203.0,
+    peak: 1000.0,
+    black_level: 0.0,
+};
+
+/// Whether a pack's stage drew the pixel Horizon's own shader did: within the rounding of the
+/// stage's route, and of the lift's mark, which has 8 bits. One step of the mark is 1/42 of a
+/// tier's lift, 4% of the light at most (the bright tier's gain of 2.8) and half that in the
+/// frame's gamma; the next tier's gain is 7% away there.
+fn same_light(own: [f32; 4], staged: [f32; 4]) -> bool {
+    (0..3).all(|i| (own[i] - staged[i]).abs() <= 0.022 * own[i].max(staged[i]) + 2e-3)
+}
+
+/// The pack's material stage draws a block as Horizon's own terrain shader does with the look
+/// on: each tier, by its bright parts and all over, a texel above its sprite's threshold and
+/// one below, on a face in full light and on a shaded one, whose shading a lifted texel leaves.
+#[test]
+fn the_look_packs_material_stage_draws_horizons_blocks() {
+    let Some((device, queue)) = material_gpu() else {
+        return;
+    };
+    let hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
+    let source = super::super::native_material::pack_test_shader(&look_pack(), false)
+        + MATERIAL_STAGE_VERTEX;
+    let (mut lifted, mut unshaded) = (0, 0);
+    // A bright texel, one inside the tiers' windows, and one below them.
+    for texel in [[250, 240, 200], [150, 120, 60], [70, 50, 40]] {
+        for shade in [0.0, 0.6] {
+            let mut globals = super::super::Globals {
+                fog: [0.0, 100.0, 0.0, 100.0],
+                fog_ends: [100.0, 100.0, 0.0, 0.0],
+                misc: [0.0, 1.0, 0.0, shade],
+                filtering: [0.0, 1.0, 0.0, 0.0],
+                hdr_light: [0.0, 0.0, 1.0, 1.0],
+                hdr_settings: hdr.draw_params(true),
+                ..bytemuck::Zeroable::zeroed()
+            };
+            // `TERRAIN_VERTEX`'s colour: the stage's face's, white under the lightmap.
+            globals.colored_lights[0][0] = [1.0, 230.0 / 255.0, 200.0 / 255.0, 1.0];
+            for threshold in [0u8, 60, 200] {
+                let light = ([255, 230, 200], threshold);
+                let own = Draw::with_light(
+                    &device, &queue, true, &globals, texel, 255, light.0, light.1,
+                );
+                let mut staged = Draw::with_light(
+                    &device, &queue, true, &globals, texel, 255, light.0, light.1,
+                );
+                staged.stage(source.clone(), "horizon_terrain_");
+                let hud = crate::hud::HudBatch::new([4, 4]);
+                let frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+                let lightmap = staged.lightmap;
+                let inputs = staged.material_frame.as_mut().unwrap();
+                inputs.write(&queue, &frame, [1, 1], LOOK_DISPLAY, &lightmap);
+                let plain = own.render(true, "fs_solid", 0, 0, [0.0; 4]);
+                // The mesher's codes for blocks: none, then the three tiers blocks have by their
+                // bright parts and all over. No block is very bright, and `emission` ends at 1.
+                for code in [0, 1, 2, 3, 5, 6, 7] {
+                    let a = own.render(true, "fs_solid", code, 0, [0.0; 4]);
+                    let b = staged.render(true, "horizon_material_fs_solid", code, 0, [0.0; 4]);
+                    assert!(
+                        same_light(a, b),
+                        "texel {texel:?} shade {shade} threshold {threshold} code {code}: \
+                         {b:?} against {a:?}"
+                    );
+                    lifted += u32::from(a[1] > 1.05 * plain[1]);
+                    unshaded += u32::from(shade > 0.0 && a[1] > 1.05 * plain[1]);
+                }
+            }
+        }
+    }
+    // The cases aren't all a lit surface's: light sources lifted, on shaded faces too.
+    assert!(
+        lifted > 40 && unshaded > 20,
+        "{lifted} lifted, {unshaded} shaded"
+    );
+}
+
+/// The pack's entity stage draws an entity as Horizon's own entity shader does with the look
+/// on, at every tier.
+#[test]
+fn the_look_packs_entity_stage_draws_horizons_entities() {
+    let Some((device, queue)) = gpu() else {
+        return;
+    };
+    let hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
+    let globals = super::super::Globals {
+        fog: [0.0, 100.0, 0.0, 100.0],
+        fog_ends: [100.0, 100.0, 0.0, 0.0],
+        hdr_light: [0.0, 0.0, 1.0, 1.0],
+        hdr_settings: hdr.draw_params(true),
+        ..bytemuck::Zeroable::zeroed()
+    };
+    let source =
+        super::super::native_entity::tests::pack_shader(&look_pack()) + ENTITY_STAGE_VERTEX;
+    let mut lifted = 0;
+    for texel in [[250, 240, 200], [150, 120, 60], [70, 50, 40]] {
+        let mut own = Draw::with_lightmap(&device, &queue, false, &globals, texel, 255, 255);
+        own.own_vertex = true;
+        let mut staged = Draw::with_lightmap(&device, &queue, false, &globals, texel, 255, 255);
+        staged.stage(source.clone(), "horizon_vanilla_");
+        let hud = crate::hud::HudBatch::new([4, 4]);
+        let frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+        let lightmap = staged.lightmap;
+        let inputs = staged.material_frame.as_mut().unwrap();
+        inputs.write(&queue, &frame, [1, 1], LOOK_DISPLAY, &lightmap);
+        let plain = own.render(true, "fs_entity", 0, 0, [0.0; 4]);
+        for tier in 0..=4u32 {
+            let a = own.render(true, "fs_entity", tier, 0, [0.0; 4]);
+            let b = staged.render(true, "horizon_entity_fs", tier, 0, [0.0; 4]);
+            assert!(
+                same_light(a, b),
+                "texel {texel:?} tier {tier}: {b:?} against {a:?}"
+            );
+            lifted += u32::from(a[1] > 1.05 * plain[1]);
+        }
+    }
+    assert!(lifted >= 4, "{lifted} lifted");
 }
