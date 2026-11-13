@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use horizon_client::gfx::native_entity::EntityKind;
+use horizon_client::gfx::native_entity::{EntityKind, EntityRuns};
 use horizon_client::text::Text;
 use horizon_shader_api::{Manifest, Pack, Primaries, check};
 
@@ -69,9 +69,9 @@ pub(super) struct NativeShaders {
     selection: String,
     resolved: PathBuf,
     resolved_at: Option<Instant>,
-    /// What this frame's entities are to the pack's `[entity]` stage (`Game::mark_kind`), up
-    /// to the renderer taking them (`Renderer::take_entity_kinds`).
-    pub entity_kinds: std::cell::RefCell<Vec<(u32, Option<EntityKind>)>>,
+    /// The runs of this frame's entity geometry that the pack's `[entity]` stage lights
+    /// (`Game::lit_entity`), up to the renderer taking them (`Renderer::take_entity_runs`).
+    pub entity_runs: std::cell::RefCell<EntityRuns>,
 }
 
 impl NativeShaders {
@@ -113,49 +113,38 @@ impl NativeShaders {
     }
 }
 
-/// What a pack's `[entity]` stage lights of entity type `name`'s geometry (`Game::mark_entity`).
-/// Items (dropped, thrown, shown by a block or a display), text and the fire on an entity get
-/// Horizon's lighting: items and particles are the stage's later steps (#14583).
-pub(super) fn entity_kind(name: &str) -> Option<EntityKind> {
-    let own = matches!(
-        name,
-        "" | "minecraft:item"
-            | "minecraft:item_display"
-            | "minecraft:ominous_item_spawner"
-            | "minecraft:splash_potion"
-            | "minecraft:firework_rocket"
-            | "minecraft:entity_flame"
-            | "minecraft:name_tag"
-            | "minecraft:text_display"
-            | "minecraft:test_instance_block"
-    );
-    (!own).then_some(EntityKind::Entity)
-}
-
 impl Game<'_> {
-    /// From vertex `start` of the entity geometry on, what the pack's `[entity]` stage lights
-    /// it as, up to the next mark; `None`: Horizon lights it. Kept only while the pack in use
-    /// has the stage.
-    pub(super) fn mark_kind(&self, start: usize, kind: Option<EntityKind>) {
-        if !self
-            .renderer
-            .as_ref()
-            .is_some_and(|r| r.draws_entity_stage())
-        {
-            return;
-        }
-        let mut kinds = self.native_shaders.entity_kinds.borrow_mut();
-        // A mark that drew nothing gives way to the next.
-        match kinds.last_mut() {
-            Some(last) if last.0 == start as u32 => last.1 = kind,
-            _ => kinds.push((start as u32, kind)),
+    /// The pack's `[entity]` stage lights vertices `run` of the entity geometry as `kind`. A
+    /// run is named once it is drawn, and with its end: what no caller names stays Horizon's
+    /// own draw (items, particles, fire, text, and whatever is added without a word here).
+    /// Kept only while the pack in use has the stage.
+    fn lit_run(&self, run: std::ops::Range<usize>, kind: EntityKind) {
+        let stage = self.renderer.as_ref();
+        if stage.is_some_and(|r| r.draws_entity_stage()) {
+            self.native_shaders.entity_runs.borrow_mut().push(run, kind);
         }
     }
 
-    /// Block entities start at vertex `start`: without a `shaders/` pack they aren't marked
-    /// one by one (`mark_block_entity`).
-    pub(super) fn mark_block_entities(&self, start: usize) {
-        self.mark_kind(start, Some(EntityKind::BlockEntity));
+    /// Vertices `run` are an entity's model: a mob's or a player's with what it holds and
+    /// wears, a vehicle's, a projectile's.
+    pub(super) fn lit_entity(&self, run: std::ops::Range<usize>) {
+        self.lit_run(run, EntityKind::Entity);
+    }
+
+    /// Vertices `run` are block entities' models.
+    pub(super) fn lit_block_entity(&self, run: std::ops::Range<usize>) {
+        self.lit_run(run, EntityKind::BlockEntity);
+    }
+
+    /// What `draw` adds to `out` is entities' models (`lit_entity`).
+    pub(super) fn lit(
+        &mut self,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+        draw: impl FnOnce(&mut Self, &mut Vec<horizon_client::mesher::Vertex>),
+    ) {
+        let start = out.len();
+        draw(self, out);
+        self.lit_entity(start..out.len());
     }
 
     /// Builds the pack at `path` when its files changed since it was last read.
@@ -480,32 +469,5 @@ mod tests {
             why.contains("primaries = \"bt2020\" isn't served yet"),
             "{why}"
         );
-    }
-
-    /// The entity stage lights entities, whatever they are drawn as; items, text and the fire
-    /// on an entity stay Horizon's, and so does what has no name.
-    #[test]
-    fn the_entity_stage_takes_entities_and_leaves_items_and_text() {
-        use super::{EntityKind, entity_kind};
-        for name in [
-            "minecraft:cow",
-            "minecraft:player",
-            "minecraft:armor_stand",
-            "minecraft:item_frame",
-            "minecraft:falling_block",
-            "minecraft:block_display",
-        ] {
-            assert_eq!(entity_kind(name), Some(EntityKind::Entity), "{name}");
-        }
-        for name in [
-            "",
-            "minecraft:item",
-            "minecraft:item_display",
-            "minecraft:splash_potion",
-            "minecraft:name_tag",
-            "minecraft:entity_flame",
-        ] {
-            assert_eq!(entity_kind(name), None, "{name}");
-        }
     }
 }

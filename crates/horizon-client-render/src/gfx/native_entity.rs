@@ -8,9 +8,10 @@
 //! lightmap's colour.
 //!
 //! The entity stream holds more than the stage draws (items, particles, beacon beams), in one
-//! draw: the game says what each run of it is (`Renderer::take_entity_kinds`), the batch
-//! writes that into each quad's layer (`EntityBatch::kinds`), and a quad without a kind goes
-//! through `entity_color` as without the stage.
+//! draw. The game names the runs of it the stage lights (`EntityRuns`,
+//! `Renderer::take_entity_runs`) and the batch writes each one's kind into its quads' layer.
+//! What no run names is Horizon's own draw: it goes through `entity_color` with what
+//! `entity_vertex` computed for it, as without the stage.
 
 use horizon_shader_api::{check::CheckedStage, stages::GROUP};
 
@@ -33,54 +34,122 @@ pub enum EntityKind {
 pub(super) const KIND_SHIFT: u32 = 25;
 
 /// A kind as a quad's layer carries it.
-pub(super) fn kind_bits(kind: Option<EntityKind>) -> u32 {
-    kind.map_or(0, |k| (k as u32 + 1) << KIND_SHIFT)
+pub(super) fn kind_bits(kind: EntityKind) -> u32 {
+    (kind as u32 + 1) << KIND_SHIFT
+}
+
+/// The runs of a frame's entity vertices that the stage lights, in the order they are drawn.
+/// Each has its end, so nothing drawn after a run takes its kind: what is in no run is
+/// Horizon's own draw.
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct EntityRuns(Vec<(std::ops::Range<u32>, EntityKind)>);
+
+impl EntityRuns {
+    /// The stage lights vertices `run` as `kind`. A run is named once its vertices are all
+    /// there, so runs come in order; one that starts before an earlier one's end says the
+    /// geometry was cut back to there (a model dropped after it was built), and what earlier
+    /// runs named past that point is forgotten.
+    pub fn push(&mut self, run: std::ops::Range<usize>, kind: EntityKind) {
+        let (start, end) = (run.start as u32, run.end as u32);
+        while let Some((last, _)) = self.0.last_mut() {
+            if last.end <= start {
+                break;
+            }
+            last.end = start;
+            if last.start >= start {
+                self.0.pop();
+            }
+        }
+        match self.0.last_mut() {
+            _ if start >= end => {}
+            Some((last, of)) if last.end == start && *of == kind => last.end = end,
+            _ => self.0.push((start..end, kind)),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The layer bits of each of `quads` (the index of each one's first vertex, rising): its
+    /// run's kind, or 0 outside every run.
+    pub(super) fn bits(&self, quads: impl Iterator<Item = u32>) -> impl Iterator<Item = u32> {
+        let mut runs = self.0.iter().peekable();
+        quads.map(move |vertex| {
+            while runs.next_if(|(run, _)| run.end <= vertex).is_some() {}
+            match runs.peek() {
+                Some((run, kind)) if run.start <= vertex => kind_bits(*kind),
+                _ => 0,
+            }
+        })
+    }
 }
 
 const PREFIX: &str = "horizon_vanilla_";
 
-/// The entries around the pack's `entity`: entity.wgsl's vertex with the colour and the shade
-/// kept apart and the light levels in the lightmap colour's place, then the stage between the
-/// steps of `entity_color`.
+/// The entries around the pack's `entity`. A quad Horizon draws itself passes on what
+/// entity.wgsl's vertex computed and is coloured by its fragment. A quad the stage lights
+/// passes the colour and the shade apart and the light levels in the lightmap colour's place,
+/// and the stage comes between the steps of `entity_color`. Every name here starts with
+/// `horizon_`, which a pack's files may not declare.
 const ENTRIES: &str = "
-struct HorizonEntityOut {
+struct horizon_entity_out {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    // The vertex colour without vanilla's shade, which is x on the front and y on the back.
-    @location(1) tint: vec4<f32>,
-    @location(2) shade: vec2<f32>,
-    // Block and sky light, 16 per level, the dynamic lights' in it.
-    @location(3) light: vec2<f32>,
-    @location(4) position: vec3<f32>,
+    // The next four are entity.wgsl's own for a quad Horizon draws itself. For a quad the
+    // stage lights they hold, in order: the vertex colour without vanilla's shade; that shade
+    // on the front (x) and on the back (y); block (x) and sky (y) light, 16 per level, the
+    // dynamic lights' in it; the position (xyz).
+    @location(1) color: vec4<f32>,
+    @location(2) back_color: vec4<f32>,
+    @location(3) light_color: vec4<f32>,
+    @location(4) proj: vec4<f32>,
     @location(5) fog_distance: vec2<f32>,
     @location(6) overlay_color: vec4<f32>,
     @location(7) @interpolate(flat) overlay: u32,
     @location(8) @interpolate(flat) wrap: vec2<f32>,
     @location(9) glint_uv: vec2<f32>,
     // Bit 0: back faces are dropped (entity.wgsl's `cull`). Bit 1: the vertex has full light.
-    // Bit 2: a translucent render type (`OIT_ENTITY`). From bit 3: the quad's kind, 0 for one
-    // Horizon draws itself, else `EntityInput.kind` + 1.
+    // Bit 2: a translucent render type (`OIT_ENTITY`). Bits 3 to 5: what the stage lights the
+    // quad as, `EntityInput.kind` + 1, or 0 for one Horizon draws itself. Bit 6: a retained
+    // block entity's, which Horizon draws without HDR's mark. From bit 8: entity.wgsl's `tier`.
     @location(10) @interpolate(flat) flags: u32,
 }
 fn horizon_entity_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
-    light: vec4<u32>, normal: vec4<f32>, glint_uv: vec2<f32>, kind: u32) -> HorizonEntityOut {
+    light: vec4<u32>, normal: vec4<f32>, glint_uv: vec2<f32>, kind: u32) -> horizon_entity_out {
     let v = horizon_vanilla_entity_vertex(position, uv, layer & 0xffffu, color, light, normal);
-    var out: HorizonEntityOut;
+    // entity.wgsl's `unlit`: beacon beams, End portals and gateways aren't a texture times a
+    // tint under a light, so they stay Horizon's, whatever they are part of.
+    let o = v.overlay;
+    let unlit = o == 2u || o == 4u || o == 6u || o == 9u || o == 10u || o == 11u || o == 12u;
+    let staged = select(kind, 0u, unlit);
+    var out: horizon_entity_out;
     out.clip = v.clip;
-    out.uv = uv;
-    out.tint = color;
-    // `entity_vertex` multiplies this into the colour.
-    var shade = vec2(1.0);
-    if abs(normal.w) >= 0.5 {
-        let nether = horizon_vanilla_globals.time.y != 0.0;
-        shade = vec2(horizon_vanilla_entity_light(normal.xyz, nether));
-        if normal.w < 0.0 {
-            shade.y = horizon_vanilla_entity_light(-normal.xyz, nether);
+    out.uv = v.uv;
+    out.color = v.color;
+    out.back_color = v.back_color;
+    out.light_color = v.light_color;
+    out.proj = v.proj;
+    if staged != 0u {
+        // `entity_vertex` multiplies this into the colour.
+        var shade = vec2(1.0);
+        if abs(normal.w) >= 0.5 {
+            let nether = horizon_vanilla_globals.time.y != 0.0;
+            shade = vec2(horizon_vanilla_entity_light(normal.xyz, nether));
+            if normal.w < 0.0 {
+                shade.y = horizon_vanilla_entity_light(-normal.xyz, nether);
+            }
         }
+        out.color = color;
+        out.back_color = vec4(shade, 0.0, 0.0);
+        out.light_color = vec4(max(f32(light.y), horizon_vanilla_dynamic_block_light(position)),
+            f32(light.x), 0.0, 0.0);
+        out.proj = vec4(position, 0.0);
     }
-    out.shade = shade;
-    out.light = vec2(max(f32(light.y), horizon_vanilla_dynamic_block_light(position)), f32(light.x));
-    out.position = position;
     out.fog_distance = v.fog_distance;
     out.overlay_color = v.overlay_color;
     out.overlay = v.overlay;
@@ -89,70 +158,60 @@ fn horizon_entity_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: 
     // Full light in the vertex itself (`mobs::render::FULL_BRIGHT`), whatever a dynamic light
     // adds: how every full-bright layer is drawn.
     let full = u32(light.x == 240u && light.y == 240u);
-    out.flags = v.cull | (full << 1u) | (((layer >> 24u) & 1u) << 2u) | (kind << 3u);
+    out.flags = v.cull | (full << 1u) | (((layer >> 24u) & 1u) << 2u) | (staged << 3u)
+        | (((layer >> 16u) & 0xffu) << 8u);
     return out;
 }
 @vertex fn horizon_entity_vs(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>,
-    @location(5) normal: vec4<f32>, @location(6) glint_uv: vec2<f32>) -> HorizonEntityOut {
+    @location(5) normal: vec4<f32>, @location(6) glint_uv: vec2<f32>) -> horizon_entity_out {
     return horizon_entity_vertex(position, uv, layer, color, light, normal, glint_uv,
-        (layer >> HORIZON_ENTITY_KIND_SHIFT) & 7u);
+        (layer >> horizon_entity_kind_shift) & 7u);
 }
 // Retained block entities, placed as static_entity.wgsl's `vs_static_entity` places them.
 @vertex fn horizon_entity_vs_static(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>,
     @location(5) normal: vec4<f32>, @location(6) glint_uv: vec2<f32>,
-    @location(7) section_origin: vec3<i32>) -> HorizonEntityOut {
+    @location(7) section_origin: vec3<i32>) -> horizon_entity_out {
     let block_delta = section_origin - horizon_vanilla_static_entity.camera_block.xyz;
     let camera_relative = vec3<f32>(block_delta) + position
         - horizon_vanilla_static_entity.camera_fraction.xyz;
-    return horizon_entity_vertex(camera_relative, uv, layer, color, light, normal, glint_uv,
-        HORIZON_ENTITY_BLOCK_ENTITY);
+    var out = horizon_entity_vertex(camera_relative, uv, layer, color, light, normal, glint_uv,
+        horizon_entity_block_entity);
+    out.flags |= 64u;
+    return out;
 }
-// The lightmap's colour at `light`, as `entity_vertex` reads it.
-fn horizon_entity_lightmap(light: vec2<f32>) -> vec4<f32> {
-    return textureSampleLevel(horizon_vanilla_lightmap, horizon_vanilla_lightmap_sampler,
-        clamp(light / 256.0 + 0.5 / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0)), 0.0);
-}
-// A quad Horizon draws itself, as `entity_vertex` hands it to `entity_color`.
-fn horizon_entity_own(in: HorizonEntityOut, unlit: bool) -> horizon_vanilla_Out {
+// A quad Horizon draws itself, as `entity_vertex` hands it to entity.wgsl's fragment.
+fn horizon_entity_own(in: horizon_entity_out) -> horizon_vanilla_Out {
     var out: horizon_vanilla_Out;
+    out.clip = in.clip;
     out.uv = in.uv;
-    out.color = vec4(in.tint.rgb * in.shade.x, in.tint.a);
-    out.back_color = vec4(in.tint.rgb * in.shade.y, in.tint.a);
+    out.color = in.color;
     out.fog_distance = in.fog_distance;
     out.overlay_color = in.overlay_color;
     out.overlay = in.overlay;
     out.wrap = in.wrap;
-    let clip = horizon_vanilla_globals.view_proj * vec4(in.position, 1.0);
-    out.proj = vec4(clip.xy * 0.5 + clip.w * 0.5, clip.zw);
-    var light = vec4(1.0);
-    if !unlit {
-        light = horizon_entity_lightmap(in.light);
-        if horizon_vanilla_globals.colored_count.x > 0u {
-            let colored = horizon_vanilla_native_colored_light(in.position);
-            light = vec4(min(light.rgb + colored, vec3(1.0)), light.a);
-        }
-    }
-    out.light_color = light;
+    out.proj = in.proj;
+    out.back_color = in.back_color;
+    out.light_color = in.light_color;
     out.glint_uv = in.glint_uv;
     out.cull = in.flags & 1u;
+    out.tier = (in.flags >> 8u) & 0xffu;
     return out;
 }
-@fragment fn horizon_entity_fs(in: HorizonEntityOut, @builtin(front_facing) front: bool)
+@fragment fn horizon_entity_fs(in: horizon_entity_out, @builtin(front_facing) front: bool)
     -> @location(0) vec4<f32> {
-    // entity.wgsl's `unlit`: beacon beams, End portals and gateways aren't a texture times a
-    // tint under a light, so they stay Horizon's.
-    let o = in.overlay;
-    let unlit = o == 2u || o == 4u || o == 6u || o == 9u || o == 10u || o == 11u || o == 12u;
-    let kind = in.flags >> 3u;
-    if kind == 0u || unlit {
-        // As `fs_entity`.
-        let own = horizon_entity_own(in, unlit);
-        return horizon_vanilla_entity_written_color(own, horizon_vanilla_entity_color(own, front));
+    let kind = (in.flags >> 3u) & 7u;
+    if kind == 0u {
+        let own = horizon_entity_own(in);
+        let color = horizon_vanilla_entity_color(own, front);
+        // As `fs_entity_unmarked`, the retained block entities' own, or as `fs_entity`.
+        if (in.flags & 64u) != 0u { return horizon_vanilla_frame_stored(color); }
+        return horizon_vanilla_entity_written_color(own, color);
     }
+    let o = in.overlay;
     let albedo = textureSample(horizon_vanilla_atlas, horizon_vanilla_atlas_sampler, in.uv);
-    var tint = in.tint;
+    var tint = in.color;
     if o == 38u {
         // The dissolve mask's discard is Horizon's (`entity_color`).
         let mask = textureSampleLevel(horizon_vanilla_atlas, horizon_vanilla_atlas_sampler,
@@ -161,19 +220,23 @@ fn horizon_entity_own(in: HorizonEntityOut, unlit: bool) -> horizon_vanilla_Out 
         tint.a = 1.0;
     }
     if (in.flags & 1u) != 0u && !front { discard; }
-    let shade = select(in.shade.y, in.shade.x, front);
-    let lightmap = horizon_entity_lightmap(in.light).rgb;
-    let colored = horizon_vanilla_native_colored_light(in.position);
-    let out = entity(EntityInput(horizon_decode_rgba(albedo), horizon_decode_rgba(tint),
+    let shade = select(in.back_color.y, in.back_color.x, front);
+    let light = in.light_color.xy;
+    let position = in.proj.xyz;
+    // The lightmap's colour at `light`, as `entity_vertex` reads it.
+    let lightmap = textureSampleLevel(horizon_vanilla_lightmap, horizon_vanilla_lightmap_sampler,
+        clamp(light / 256.0 + 0.5 / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0)), 0.0).rgb;
+    let colored = horizon_vanilla_native_colored_light(position);
+    let lit = entity(EntityInput(horizon_decode_rgba(albedo), horizon_decode_rgba(tint),
         // Vanilla's texel says how much of the surface is kept, the stage's how much goes.
         vec4(horizon_decode(in.overlay_color.rgb), 1.0 - in.overlay_color.a),
-        horizon_decode(lightmap), horizon_decode(vec3(shade)).x, in.position,
-        f32((in.flags >> 1u) & 1u), horizon_entity_normal(in.position), kind - 1u,
-        horizon_decode(colored), (in.flags & 4u) != 0u, min(in.light / 240.0, vec2(1.0)),
+        horizon_decode(lightmap), horizon_decode(vec3(shade)).x, position,
+        f32((in.flags >> 1u) & 1u), horizon_entity_normal(position), kind - 1u,
+        horizon_decode(colored), (in.flags & 4u) != 0u, min(light / 240.0, vec2(1.0)),
         in.uv, in.clip.xy / frame.resolution)).color;
-    if out.a < 0.1 { discard; }
+    if lit.a < 0.1 { discard; }
     // Vanilla's order from here: the glint, then fog, both in vanilla's gamma.
-    var color = vec4(horizon_encode(out.rgb), out.a);
+    var color = vec4(horizon_encode(lit.rgb), lit.a);
     if o == 7u || o == 8u || o == 33u {
         color = horizon_vanilla_glint_over(color, textureSample(horizon_vanilla_glint_tex,
             horizon_vanilla_glint_sampler, in.glint_uv));
@@ -194,8 +257,8 @@ fn horizon_entity_own(in: HorizonEntityOut, unlit: bool) -> horizon_vanilla_Out 
 pub(super) fn shader_source(source: &str) -> String {
     format!(
         "{source}\n// Horizon's entities (entity.wgsl, static_entity.wgsl)\n{}\
-         const HORIZON_ENTITY_KIND_SHIFT: u32 = {KIND_SHIFT}u;\n\
-         const HORIZON_ENTITY_BLOCK_ENTITY: u32 = {}u;\n{ENTRIES}",
+         const horizon_entity_kind_shift: u32 = {KIND_SHIFT}u;\n\
+         const horizon_entity_block_entity: u32 = {}u;\n{ENTRIES}",
         super::wgsl_prefix::prefixed(&super::static_entity_shader(), PREFIX),
         EntityKind::BlockEntity as u32 + 1,
     )
@@ -333,18 +396,17 @@ pub(super) fn set_pipeline(
 }
 
 impl super::Renderer {
-    /// Whether a pack's `[entity]` stage draws this renderer's entities: the game then says
-    /// what each run of them is (`take_entity_kinds`).
+    /// Whether a pack's `[entity]` stage draws this renderer's entities: the game then names
+    /// the runs of them it lights (`take_entity_runs`).
     pub fn draws_entity_stage(&self) -> bool {
         self.native.as_ref().is_some_and(|n| n.entity.is_some())
     }
 
-    /// Takes what the next frame's entities (`Frame::entities`) are to the stage: marks at the
-    /// first vertex of each run, in order, `None` for what Horizon lights itself, as it does
-    /// what comes before the first mark. `kinds` is left empty, for the frame after.
-    pub fn take_entity_kinds(&mut self, kinds: &mut Vec<(u32, Option<EntityKind>)>) {
-        std::mem::swap(&mut self.entity_batch.kinds, kinds);
-        kinds.clear();
+    /// Takes the runs of the next frame's entities (`Frame::entities`) that the stage lights.
+    /// `runs` is left empty, for the frame after.
+    pub fn take_entity_runs(&mut self, runs: &mut EntityRuns) {
+        std::mem::swap(&mut self.entity_batch.kinds, runs);
+        runs.clear();
     }
 }
 

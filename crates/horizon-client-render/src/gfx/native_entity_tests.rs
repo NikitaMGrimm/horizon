@@ -1,4 +1,4 @@
-use super::{EntityKind, kind_bits, shader_source};
+use super::{EntityKind, EntityRuns, kind_bits, shader_source};
 use crate::mesher::Vertex;
 
 /// Vanilla's own as a pack writes it (docs/api/shaders-reference-0.2.md): the flash over the
@@ -25,12 +25,59 @@ pub fn shader(entity: &str) -> String {
     shader_source(&report.stages[0].source)
 }
 
+/// Every name a pack's code could take that Horizon's entity shaders or the entries around
+/// the stage have had, in any case: a pack's own are checked only against lowercase `horizon_`.
+const OWN_NAMES: &str = "const globals: f32 = 1.0;
+fn entity_color(c: f32) -> f32 { return c; }
+struct Out { a: f32 }
+struct HorizonEntityOut { a: f32 }
+const HORIZON_ENTITY_KIND_SHIFT: u32 = 1u;
+const HORIZON_ENTITY_BLOCK_ENTITY: u32 = 2u;
+";
+
+/// The module-level names of `module`: its types, constants, overrides, variables, functions
+/// and entry points.
+fn names(module: &naga::Module) -> std::collections::BTreeSet<String> {
+    let types = module.types.iter().filter_map(|(_, t)| t.name.clone());
+    let constants = module.constants.iter().filter_map(|(_, c)| c.name.clone());
+    let overrides = module.overrides.iter().filter_map(|(_, o)| o.name.clone());
+    let variables = module
+        .global_variables
+        .iter()
+        .filter_map(|(_, v)| v.name.clone());
+    let functions = module.functions.iter().filter_map(|(_, f)| f.name.clone());
+    let entries = module.entry_points.iter().map(|e| e.name.clone());
+    types
+        .chain(constants)
+        .chain(overrides)
+        .chain(variables)
+        .chain(functions)
+        .chain(entries)
+        .collect()
+}
+
+/// What the renderer adds to a pack's stage is all in the names a pack's files may not
+/// declare (`horizon_`, lowercase: horizon-shader-api's check), so no pack that passes the
+/// check can meet a duplicate declaration here.
+#[test]
+fn the_renderers_names_are_reserved() {
+    let parse = |source: &str| naga::front::wgsl::parse_str(source).unwrap();
+    let source = shader(VANILLA);
+    let stage = names(&parse(
+        &source[..source.find("// Horizon's entities").unwrap()],
+    ));
+    let added: Vec<_> = names(&parse(&source))
+        .into_iter()
+        .filter(|name| !stage.contains(name) && !name.starts_with("horizon_"))
+        .collect();
+    assert_eq!(added, [] as [&str; 0]);
+}
+
 /// The shader the renderer builds around a pack's stage is valid WGSL with both of its
 /// pipelines' entries, whatever names the pack's own code takes: Horizon's are prefixed.
 #[test]
 fn the_packs_entity_shader_validates() {
-    let own_names = "const globals: f32 = 1.0;\nfn entity_color(c: f32) -> f32 { return c; }\n";
-    for entity in [VANILLA.to_owned(), own_names.to_owned() + VANILLA] {
+    for entity in [VANILLA.to_owned(), OWN_NAMES.to_owned() + VANILLA] {
         let source = shader(&entity);
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
@@ -55,10 +102,9 @@ fn the_packs_entity_shader_validates() {
 /// HDR tier, `OIT_ENTITY`), so a quad drawn by Horizon's own pipelines reads as before.
 #[test]
 fn a_kind_keeps_clear_of_the_layers_other_bits() {
-    assert_eq!(kind_bits(None), 0);
     let kinds = [EntityKind::Entity, EntityKind::BlockEntity];
     for kind in kinds {
-        let bits = kind_bits(Some(kind));
+        let bits = kind_bits(kind);
         assert_ne!(bits, 0);
         assert_eq!(bits & (super::super::entity_batch::OIT_ENTITY * 2 - 1), 0);
         assert_eq!((bits >> super::KIND_SHIFT) & 7, kind as u32 + 1);
@@ -72,27 +118,52 @@ fn quad(layer: u32) -> [Vertex; 4] {
     }; 4]
 }
 
-/// The kinds follow the game's runs through the sorted batch: each ordinary quad takes the
-/// kind of the last mark at or before its first vertex, and the other materials' quads none.
-/// The frame after has none unless the game marks it again.
+/// The kinds follow the game's runs through the sorted batch: an ordinary quad inside a run
+/// takes its kind; one before, between or after the runs takes none, whatever was drawn
+/// before it (an arrow after the last mob, a dragon after everything), and neither do the
+/// other materials' quads. The frame after has none unless the game names its runs again.
 #[test]
 fn quads_take_the_kind_of_their_run() {
-    // Quads 0, 1, 3 and 4 are ordinary; quad 2 is another material's (overlay 11), sorted
+    // Quads 0, 1, 3, 4 and 5 are ordinary; quad 2 is another material's (overlay 11), sorted
     // out of them.
-    let vertices: Vec<Vertex> = [0, 5, 11, 0, 7].into_iter().flat_map(quad).collect();
+    let vertices: Vec<Vertex> = [0, 5, 11, 0, 7, 0].into_iter().flat_map(quad).collect();
     let mut batch = super::super::entity_batch::EntityBatch::default();
-    batch.kinds = vec![
-        (4, Some(EntityKind::Entity)),
-        (12, Some(EntityKind::BlockEntity)),
-        (16, None),
-    ];
+    batch.kinds.push(4..12, EntityKind::Entity);
+    batch.kinds.push(12..16, EntityKind::BlockEntity);
+    batch.kinds.push(20..24, EntityKind::Entity);
     let kinds = |batch: &mut super::super::entity_batch::EntityBatch| -> Vec<u32> {
         batch.update(&vertices, &[], &[], &[], false);
         let quads = batch.combined.chunks(4);
         quads.map(|q| q[3].layer >> super::KIND_SHIFT).collect()
     };
-    // The ordinary quads lead the batch: 0, 1, 3 and 4, then quad 2.
-    assert_eq!(kinds(&mut batch), [0, 1, 2, 0, 0]);
+    // The ordinary quads lead the batch: 0, 1, 3, 4 and 5, then quad 2. Quad 4 follows the
+    // block entity's run and is in none.
+    assert_eq!(kinds(&mut batch), [0, 1, 2, 0, 1, 0]);
     assert_eq!(batch.combined[4].layer & 0xffff, 5);
-    assert_eq!(kinds(&mut batch), [0; 5]);
+    assert_eq!(kinds(&mut batch), [0; 6]);
+}
+
+/// A run has its end, and one named where geometry was cut back replaces what was named
+/// there: no vertex is ever in a run its caller didn't name it in.
+#[test]
+fn runs_end_and_give_way_where_the_geometry_was_cut_back() {
+    let bits = |runs: &EntityRuns| -> Vec<u32> {
+        let quads = runs.bits((0..6).map(|quad| quad * 4));
+        quads.map(|bits| bits >> super::KIND_SHIFT).collect()
+    };
+    let mut runs = EntityRuns::default();
+    // Nothing drawn names nothing.
+    runs.push(0..0, EntityKind::Entity);
+    assert_eq!(runs, EntityRuns::default());
+    runs.push(4..8, EntityKind::Entity);
+    runs.push(8..12, EntityKind::Entity);
+    runs.push(12..20, EntityKind::BlockEntity);
+    assert_eq!(bits(&runs), [0, 1, 1, 2, 2, 0]);
+    // The geometry was cut back to vertex 8 and a block entity drawn there: the entity's
+    // run ends at it, and the old run from 12 is gone with its vertices.
+    runs.push(8..12, EntityKind::BlockEntity);
+    assert_eq!(bits(&runs), [0, 1, 2, 0, 0, 0]);
+    // Cut back to before every run, with nothing named after.
+    runs.push(2..2, EntityKind::Entity);
+    assert_eq!(bits(&runs), [0; 6]);
 }

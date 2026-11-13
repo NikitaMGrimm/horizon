@@ -179,6 +179,7 @@ impl Game<'_> {
                 if outline.is_none() {
                     self.cull_entity_vertices(out, entity_start);
                 }
+                self.lit_entity(entity_start..out.len());
                 continue;
             }
             if mob.species() == Species::SulfurCube
@@ -344,6 +345,8 @@ impl Game<'_> {
                     out,
                 );
             }
+            // The mob with what it holds and wears, once nothing more can drop it.
+            self.lit_entity(entity_start..out.len());
         }
         // What follows isn't a tracked mob: close the last one's span.
         self.mark_motion(out.len(), 0);
@@ -379,6 +382,9 @@ impl Game<'_> {
             }
             let p = glam::DVec3::from_array(at) - camera;
             let c = p.as_vec3();
+            // A projectile with a model is the `[entity]` stage's (`lit_entity`); one drawn as
+            // an item, and the fire on any, is Horizon's.
+            let start = out.len();
             // EntityRenderer.getPackedLightCoords: the block its light probe
             // (the eye) is in, at the position this frame draws rather than
             // this tick's, and not the one under its feet.
@@ -445,6 +451,7 @@ impl Game<'_> {
                     0,
                     out,
                 );
+                self.lit_entity(start..out.len());
                 if a.arrow.as_ref().is_some_and(|s| s.on_fire()) {
                     flame_geometry(atlas, c, 0.5, 0.5, self.yaw, light, out);
                 }
@@ -472,6 +479,7 @@ impl Game<'_> {
                     0,
                     out,
                 );
+                self.lit_entity(start..out.len());
                 continue;
             }
             // WindChargeRenderer.
@@ -480,6 +488,7 @@ impl Game<'_> {
                 ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
             ) {
                 self.wind_charge_geometry(a, c, packed, alpha as f32, out);
+                self.lit_entity(start..out.len());
                 continue;
             }
             // ShulkerBulletRenderer: the tumbling bullet model, then a larger
@@ -533,6 +542,7 @@ impl Game<'_> {
                     );
                     horizon_client::gfx::mark_oit(&mut out[shell..]);
                 }
+                self.lit_entity(start..out.len());
                 continue;
             }
             // WitherSkullRenderer: the skull model facing its flight.
@@ -560,6 +570,7 @@ impl Game<'_> {
                         out,
                     );
                 }
+                self.lit_entity(start..out.len());
                 continue;
             }
             if let Some(stack) = a.drawn_item() {

@@ -109,10 +109,11 @@ added on top, then fog. A pack without `[entity]` is drawn as before, and sees n
 for new names holds for the stage as for the others.
 
 **What the game draws through the stage so far: entities and block entities** (`kind` 0 and 1). Until a later
-release brings them in, Horizon lights the rest itself, as without the stage: dropped and framed items and what a
-block or a display entity shows of one (`kind` 2), thrown potions and firework rockets, particles (`kind` 4), the
-fire on a burning entity, name tags and text, and the first-person hand. Some draws stay Horizon's for good: beacon
-beams, End portals and gateways, breaking cracks, energy swirls, lightning and other additive glows.
+release brings them in, Horizon lights the rest itself, exactly as without the stage: dropped and framed items and
+what a block or a display entity shows of one (`kind` 2), what flies as its item (a snowball, a potion, a fireball,
+an eye of ender), firework rockets, particles (`kind` 4), the fire on a burning entity, name tags and text, and the
+first-person hand. Some draws stay Horizon's for good: beacon beams, End portals and gateways, breaking cracks, energy
+swirls, lightning and other additive glows.
 
 An item an entity holds or wears as its model (a sword in a hand, a block on a head) reaches the stage with the
 entity, and so does a block drawn as an entity (a falling block, primed TNT, a block display) or as a block entity

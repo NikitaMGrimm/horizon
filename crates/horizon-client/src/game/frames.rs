@@ -706,6 +706,8 @@ impl Game<'_> {
                 }
             }
             self.finish_entity_occlusion(culling, f, out, entity_start);
+            // The frame; what it shows is an item or a map, Horizon's to light.
+            self.lit_entity(entity_start..out.len());
             let cull_contents = culling.checks_vertices();
             if let Some(stack) = &f.item {
                 let mut canceled = false;
@@ -756,8 +758,6 @@ impl Game<'_> {
         for (stack, id, m, light, cull, kind) in items {
             let entity_start = out.len();
             self.mark_entity(entity_start, kind);
-            // An item, not the frame: Horizon lights it until the `[entity]` stage takes items.
-            self.mark_kind(entity_start, None);
             self.mark_motion(entity_start, Self::MOTION_FRAME_ITEM | u64::from(id));
             let owner = super::item_draw::owner_at([0.0; 3], 0.0, "minecraft:item_frame");
             let state = self.resolve_item(
@@ -791,7 +791,6 @@ impl Game<'_> {
         for (id, m, light, cull, kind) in maps {
             let entity_start = out.len();
             self.mark_entity(entity_start, kind);
-            self.mark_kind(entity_start, None);
             // Its outline first: a map out of sight takes no slot in the atlas, or with
             // more maps around than slots, the ones in view lost theirs to it.
             if cull {

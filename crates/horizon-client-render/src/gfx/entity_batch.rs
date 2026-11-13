@@ -1,6 +1,6 @@
 //! Stable entity material grouping with renderer-owned, reusable CPU scratch.
 use super::Vertex;
-use super::native_entity::{EntityKind, kind_bits};
+use super::native_entity::EntityRuns;
 
 /// Entity materials by a quad's overlay (`Vertex::layer`), in draw order:
 /// ordinary entities, world text drawn with a depth bias (35,
@@ -121,10 +121,9 @@ pub(super) struct EntityBatch {
     /// last material (improved transparency on): the dragon's eyes, which share
     /// the additive buffer with its rays.
     pub(super) moved_additive: u32,
-    /// For a native pack's `[entity]` stage (`native_entity.rs`), what the next `update`'s
-    /// entities are: runs of their vertices, each from its first vertex up to the next mark's.
-    /// Before the first, and under `None`, a quad is Horizon's own draw.
-    pub(super) kinds: Vec<(u32, Option<EntityKind>)>,
+    /// For a native pack's `[entity]` stage (`native_entity.rs`): the runs of the next
+    /// `update`'s entities that it lights.
+    pub(super) kinds: EntityRuns,
 }
 
 impl EntityBatch {
@@ -227,25 +226,20 @@ impl EntityBatch {
         counts.map(|count| count as u32)
     }
 
-    /// Writes into each ordinary quad's layer what `kinds` says it is, and forgets them: they
-    /// are one frame's.
+    /// Writes into each ordinary quad's layer the kind of the run of `kinds` it is in, and
+    /// forgets the runs: they are one frame's.
     fn tag_kinds(&mut self) {
         if self.kinds.is_empty() {
             return;
         }
-        let mut marks = self.kinds.iter().peekable();
-        let mut bits = 0;
-        // The ordinary quads lead `combined`, run after run.
-        let mut at = 0;
-        for &(first, count) in &self.runs[0] {
-            for quad in first..first + count {
-                while let Some(&(_, kind)) = marks.next_if(|m| m.0 as usize <= quad * 4) {
-                    bits = kind_bits(kind);
-                }
-                for vertex in &mut self.combined[at..at + 4] {
-                    vertex.layer |= bits;
-                }
-                at += 4;
+        // The ordinary quads lead `combined`, in the order the game drew them.
+        let quads = self.runs[0]
+            .iter()
+            .flat_map(|&(first, count)| first..first + count);
+        let bits = self.kinds.bits(quads.map(|quad| quad as u32 * 4));
+        for (quad, bits) in self.combined.as_chunks_mut::<4>().0.iter_mut().zip(bits) {
+            for vertex in quad {
+                vertex.layer |= bits;
             }
         }
         self.kinds.clear();
