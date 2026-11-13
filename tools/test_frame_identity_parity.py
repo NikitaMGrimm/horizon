@@ -48,6 +48,8 @@ rounding of the pack's route, where the pack reaches (look_gates).
 kept between runs so that a later base rebuilds only what changed.
 
 On a difference it writes diff-<scene>.png beside the two shots: the base dimmed to grey, differing pixels in red.
+--sessions draws some of the sessions only. One that a gate holds to another's shots (the look's pack to the look,
+the Vanilla look to HDR off) isn't drawn without that one.
 
   test_frame_identity_parity.py [--base REV] [--build-base] [--bin-dir DIR] [--base-bin-dir DIR] [--sessions a,b]
 """
@@ -867,6 +869,18 @@ def hdr_gates(shots, sessions):
     return problems
 
 
+# 🤖 Agent: The sessions a gate holds to another session's shots, each with that session: the look's pack to the look
+# (look_gates), the Vanilla look to HDR off and its sun shot (hdr_gates). Without it look_gates skips the pair, the
+# guard that the pack ran with it, and hdr_gates skips the screenshots and fails only once both builds have drawn.
+HELD_TO = {**LOOK_PAIRS, 'float_unlit': 'vanilla'}
+
+
+def alone(sessions):
+    """The chosen sessions held to a session that isn't chosen, as "name needs other": drawn like that one would
+    pass unheld, the look's pack even where the game refused it and drew the look itself."""
+    return [f'{name} needs {HELD_TO[name]}' for name in sessions if name in HELD_TO and HELD_TO[name] not in sessions]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--base', help='the revision to compare with (default: BASE_SHA, else the merge-base with origin/main)')
@@ -881,6 +895,8 @@ def main():
     unknown = [s for s in sessions if s not in SESSIONS]
     if unknown:
         sys.exit(f'unknown sessions: {unknown}')
+    if alone(sessions):
+        sys.exit(f'--sessions leaves out a session another is held to: {", ".join(alone(sessions))}')
     base = base_revision(args.base)
     head = git('rev-parse', 'HEAD')
     print(f'base {base[:10]}, change {head[:10]}', flush=True)

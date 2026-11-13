@@ -359,6 +359,35 @@ class LookGateTests(unittest.TestCase):
         self.assertEqual([p for p in problems if p.startswith('horizon_hdr')], [])
 
 
+class HeldToTests(unittest.TestCase):
+    """A session a gate holds to another session's shots isn't drawn without that session: its gate would skip it,
+    and the look's pack would pass where the game refused it."""
+
+    def test_the_sessions_drawn_by_default_are_all_held(self):
+        self.assertEqual(identity.alone(list(identity.SESSIONS)), [])
+        self.assertEqual(identity.alone(['float_hdr', 'vanilla', 'float_dim']), [])
+        self.assertEqual(identity.alone(['horizon_hdr', 'float_hdr', 'float_unlit', 'vanilla']), [])
+
+    def test_a_session_without_the_one_it_is_held_to_is_named(self):
+        self.assertEqual(identity.alone(['vanilla', 'horizon_hdr', 'float_dim', 'horizon_hdr_dim']),
+                         ['horizon_hdr needs float_hdr'])
+        self.assertEqual(identity.alone(['float_unlit', 'float_hdr', 'horizon_hdr_dim']),
+                         ['float_unlit needs vanilla', 'horizon_hdr_dim needs float_dim'])
+
+    def test_the_tool_refuses_such_a_choice_before_it_builds_or_draws(self):
+        def reached(*args):
+            self.fail('the tool went on to its base')
+        original = identity.sys.argv, identity.base_revision
+        identity.sys.argv, identity.base_revision = ['tool', '--sessions', 'vanilla,horizon_hdr'], reached
+        try:
+            with self.assertRaises(SystemExit) as stopped:
+                identity.main()
+        finally:
+            identity.sys.argv, identity.base_revision = original
+        self.assertEqual(stopped.exception.code,
+                         '--sessions leaves out a session another is held to: horizon_hdr needs float_hdr')
+
+
 class BaseTests(unittest.TestCase):
     def test_a_base_from_before_a_sessions_pack_is_not_drawn_with_it(self):
         asked = []
