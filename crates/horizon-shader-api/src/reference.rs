@@ -47,11 +47,11 @@ the piecewise sRGB curve), replacing negatives and NaN with 0 first, and encodes
 the frame stores gamma (`[frame] blend`, below).
 
 - **Linear:** `MaterialInput` `albedo`, `tint`, `lightmap` and `colored_light`; `VertexInput.tint`; `SkyInput.color`;
-  `WeatherInput.color`; `Frame` `sky_color` and `fog_color`; `block_texture`, `block_texture_level` and
-  `block_light_color`; every colour texture a stage samples (`scene_color`, `previous`, `history`, the pack's targets,
-  `opaque_color`, `reflection`, `shadow_color`).
-- **Data:** depth, normals, `light` levels, `emission`, every channel of the LabPBR maps, and the pack's
-  `[[textures]]`.
+  `WeatherInput.color`; `Frame` `sky_color`, `fog_color` and `full_light`; `block_texture`, `block_texture_level`
+  and `block_light_color`; every colour texture a stage samples (`scene_color`, `previous`, `history`, the pack's
+  targets, `opaque_color`, `reflection`, `shadow_color`).
+- **Data:** depth, normals, `light` levels, `emission`, `emission_threshold`, `light_source`, every channel of the
+  LabPBR maps, and the pack's `[[textures]]`.
 - **`[[lights]]` and `[[particle_lights]]` colours** are written in vanilla's gamma, and Horizon decodes
   them: `block_light_color` and `colored_light` are linear. `block_light_colors` holds them as written; read it through
   `block_light_color`.

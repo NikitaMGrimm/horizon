@@ -233,7 +233,7 @@ fn horizon_entity_own(in: horizon_entity_out) -> horizon_vanilla_Out {
         horizon_decode(lightmap), horizon_decode(vec3(shade)).x, position,
         f32((in.flags >> 1u) & 1u), horizon_entity_normal(position), kind - 1u,
         horizon_decode(colored), (in.flags & 4u) != 0u, min(light / 240.0, vec2(1.0)),
-        in.uv, in.clip.xy / frame.resolution)).color;
+        in.uv, in.clip.xy / frame.resolution, 0.0)).color;
     if lit.a < 0.1 { discard; }
     // Vanilla's order from here: the glint, then fog, both in vanilla's gamma.
     var color = vec4(horizon_encode(lit.rgb), lit.a);

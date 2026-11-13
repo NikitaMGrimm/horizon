@@ -186,7 +186,8 @@ fn horizon_material_color(in: HorizonMaterialOut, translucent: bool) -> vec4<f32
         in.position, in.uv, translucent, horizon_sprite_tags(in.layer & 0x7fffu),
         horizon_sprite_material(in.layer & 0x7fffu), in.clip.xy / frame.resolution,
         in.face, fluid, in.emission, normal, tangent,
-        horizon_line_in(horizon_terrain_native_colored_light(in.position)), in.displaced)).color;
+        horizon_line_in(horizon_terrain_native_colored_light(in.position)), in.displaced,
+        0.0)).color;
     return vec4(horizon_line_out(out.rgb), out.a);
 }
 var<private> horizon_material_face_normal: vec3<f32>;
@@ -797,7 +798,7 @@ mod tests {
     let out = material(MaterialInput(vec4(horizon_line_in(albedo.rgb), albedo.a),
         vec4(horizon_line_in(tint.rgb), tint.a), vec2(1.0), horizon_line_in(lightmap),
         vec3(0.0), vec2(0.0), false, 0u, 0u, vec2(0.0), 0u, 0u, 0.0, vec3(0.0, 1.0, 0.0),
-        vec4(1.0, 0.0, 0.0, 1.0), horizon_line_in(vec3(0.0)), 0.0)).color;
+        vec4(1.0, 0.0, 0.0, 1.0), horizon_line_in(vec3(0.0)), 0.0, 0.0)).color;
     return vec4(horizon_line_out(out.rgb), out.a);
 }
 ";

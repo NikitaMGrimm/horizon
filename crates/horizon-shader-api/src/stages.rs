@@ -502,7 +502,8 @@ struct HorizonMaterialIn {
     let tangent = horizon_material_tangent(in.world, in.uv, normal);
     let input = MaterialInput(horizon_decode_rgba(in.albedo), horizon_decode_rgba(in.tint), in.light,
         horizon_decode(in.lightmap), in.world, in.uv, in.translucent != 0u, in.tags, in.material,
-        in.position.xy / frame.resolution, in.face, fluid, in.emission, normal, tangent, vec3<f32>(0.0), 0.0);
+        in.position.xy / frame.resolution, in.face, fluid, in.emission, normal, tangent, vec3<f32>(0.0), 0.0,
+        0.0);
     return horizon_encode_rgba(material(input).color);
 }
 "
@@ -628,7 +629,7 @@ struct HorizonEntityIn {
     let input = EntityInput(horizon_decode_rgba(in.albedo), horizon_decode_rgba(in.tint),
         horizon_decode_rgba(in.overlay), horizon_decode(in.lightmap), horizon_decode(vec3<f32>(in.shade)).x,
         in.world, in.emission, horizon_entity_normal(in.world), in.kind, vec3<f32>(0.0),
-        in.translucent != 0u, in.light, in.uv, in.position.xy / frame.resolution);
+        in.translucent != 0u, in.light, in.uv, in.position.xy / frame.resolution, 0.0);
     return horizon_encode_rgba(entity(input).color);
 }
 ";

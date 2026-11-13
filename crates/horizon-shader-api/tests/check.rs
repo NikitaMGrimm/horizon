@@ -457,7 +457,7 @@ fn a_pack_constructs_no_struct_horizon_hands_it() {
                     let again = MaterialInput(input.albedo, input.tint, input.light, input.lightmap, \
                     input.position, input.uv, input.translucent, input.tags, input.material, input.screen, \
                     input.face, input.fluid, input.emission, input.normal, input.tangent, input.colored_light, \
-                    input.displaced);\n    \
+                    input.displaced, input.emission_threshold);\n    \
                     return Surface(again.albedo);\n}\n";
     let p = post_pack_with_material(material, POST, TONEMAP).expect_err("should fail");
     assert_eq!(
@@ -496,6 +496,24 @@ fn a_pack_reads_horizon_s_structs_passes_them_along_and_builds_its_surface() {
     let tonemap = "alias SurfaceData = vec3<f32>;\n\
                    fn tonemap(input: TonemapInput) -> vec3<f32> { return SurfaceData(input.color.r, 0.0, 0.0); }\n";
     post_pack_with_material(MATERIAL, POST, tonemap).unwrap();
+}
+
+/// What a pack that lets light sources shine reads: which texels of a block's sprite are the
+/// part that shines, the kind of light of what is no block, and the light colour at full light.
+#[test]
+fn a_pack_reads_what_shines() {
+    let material = "fn material(input: MaterialInput) -> Surface {\n    \
+                    let top = max(input.albedo.r, max(input.albedo.g, input.albedo.b));\n    \
+                    let shines = input.emission > 0.0 && top >= input.emission_threshold;\n    \
+                    let light = select(input.lightmap, frame.full_light, shines);\n    \
+                    return Surface(input.albedo * vec4<f32>(light, 1.0));\n}\n";
+    let tonemap =
+        "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color * frame.full_light; }\n";
+    post_pack_with_material(material, POST, tonemap).unwrap();
+    let entity = "fn entity(input: EntityInput) -> Surface {\n    \
+                  let light = mix(input.lightmap, frame.full_light, min(input.light_source, 1.0));\n    \
+                  return Surface(input.albedo * vec4<f32>(light, 1.0));\n}\n";
+    entity_pack(entity).unwrap();
 }
 
 /// The entity stage's fixture, which the frame identity test draws with
@@ -591,7 +609,7 @@ fn the_entity_stage_is_checked_like_the_material_s() {
     let built = "fn entity(input: EntityInput) -> Surface {\n    \
                  let again = EntityInput(input.albedo, input.tint, input.overlay, input.lightmap, input.shade, \
                  input.position, input.emission, input.normal, input.kind, input.colored_light, \
-                 input.translucent, input.light, input.uv, input.screen);\n    \
+                 input.translucent, input.light, input.uv, input.screen, input.light_source);\n    \
                  return Surface(again.albedo);\n}\n";
     let p = entity_pack(built).expect_err("should fail");
     assert_eq!(

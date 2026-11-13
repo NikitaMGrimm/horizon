@@ -1562,6 +1562,8 @@ pub fn frame_inputs(
         primaries: Primaries::Bt709 as u32,
         luminance_gap: [0; 2],
         luminance: Primaries::Bt709.luminance(),
+        full_light_gap: 0,
+        full_light: [1.0; 3],
         padding: 0,
     }
 }
