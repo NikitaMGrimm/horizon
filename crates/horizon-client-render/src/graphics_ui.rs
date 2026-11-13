@@ -1172,13 +1172,15 @@ impl Item {
                 "Turn HDR on to use it."
             }),
             // HDR output without the HUD's layer: a `shaders/` pack's frame (`FrameRequest`).
-            Item::Horizon(H::HdrUiBrightness | H::HdrLook)
-                if out.hdr_on() && !out.frame.hud_layer =>
-            {
+            Item::Horizon(H::HdrUiBrightness) if out.hdr_on() && !out.frame.hud_layer => {
                 Some("The shader pack's picture is shown at Paper White.")
             }
             Item::Horizon(H::HdrLook) if out.pack_lights => {
-                Some("The shader pack lights the world. Pick it under Shaders.")
+                Some(if out.hdr_on() && !out.frame.hud_layer {
+                    "The shader pack's picture is shown at Paper White."
+                } else {
+                    "The shader pack lights the world. Pick it under Shaders."
+                })
             }
             Item::Horizon(H::TranslucentBatching)
                 if !crate::graphics::translucent_batching_offered() =>
