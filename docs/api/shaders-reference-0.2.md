@@ -291,9 +291,10 @@ pass reads a blank one in place of the target it writes).
 
 ### Ray tracing
 
-With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass) the post stage's prelude also
-has `RayHit`, `trace` and `trace_any`, and the `Frame` of every stage of the pack has `has_ray_tracing` and
-`ray_distance`. A pack without the key has none of them.
+With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass or a `[material]` stage) the post
+stage's prelude also has `RayHit`, `trace` and `trace_any`, so does the material stage's where the stage's files
+name either function, and the `Frame` of every stage of the pack has `has_ray_tracing` and `ray_distance`. A pack
+without the key has none of them, and a material stage that names neither function is built as without it.
 
 - `fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit`: the nearest surface from
   `origin` (camera-relative, in blocks, as `view_position` gives it) along the unit vector `direction`, within
@@ -308,6 +309,11 @@ the game doesn't trace (`frame.has_ray_tracing` is 0) the pack is built and runs
 misses. Your files name no ray query of their own (`ray_query`, `acceleration_structure`, `RayDesc`,
 `RayIntersection`, a `rayQuery` function, `enable wgpu_ray_query`): the check refuses them, and an `output`
 called `trace` or `trace_any`.
+
+In the material stage only `material` traces: `displacement` and the vertex stage's `vertex`, whose files share
+its module, run in vertex shaders, and the check refuses a pack where either reaches `trace` or `trace_any`.
+`material` runs for every terrain fragment drawn, so a ray costs more there than in a post pass: keep its rays for
+translucent surfaces (`input.translucent`), which leave no surface for a post pass to light.
 
 ### `RayHit`
 

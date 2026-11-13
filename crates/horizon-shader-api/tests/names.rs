@@ -195,21 +195,26 @@ fn a_0_2_prelude_declares_only_the_names_on_its_list() {
 }
 
 /// The rule at work: `[ray_tracing]` brings three names, to the post stage of the pack that set
-/// it, the same whether the renderer has the scene or not.
+/// it and to its material stage where that calls `trace` or `trace_any`, the same whether the
+/// renderer has the scene or not.
 #[test]
-fn ray_tracing_brings_its_names_to_the_post_stage_of_the_pack_that_asks() {
-    let pack = pack_with("[ray_tracing]\n", None);
-    for &kind in Api::V0_2.stages() {
-        let file = format!("{}.wgsl", kind.name());
-        let (mut want, _) = listed_names(kind);
-        if kind == StageKind::Post {
-            want.extend(["RayHit", "trace", "trace_any"].map(str::to_owned));
-        }
-        for composed in [
-            compose(&pack, kind, &file),
-            compose_scene(&pack, kind, &file),
-        ] {
-            assert_eq!(prelude_names(&composed, kind), want, "{kind:?}");
+fn ray_tracing_brings_its_names_to_the_stages_of_the_pack_that_trace() {
+    let material = "fn material(input: MaterialInput) -> Surface {\n    \
+                    return Surface(input.albedo * f32(trace_any(input.position, input.normal, 8.0)));\n}\n";
+    for (replaced, traces) in [(None, false), (Some(("material.wgsl", material)), true)] {
+        let pack = pack_with("[ray_tracing]\n", replaced);
+        for &kind in Api::V0_2.stages() {
+            let file = format!("{}.wgsl", kind.name());
+            let (mut want, _) = listed_names(kind);
+            if kind == StageKind::Post || kind == StageKind::Material && traces {
+                want.extend(["RayHit", "trace", "trace_any"].map(str::to_owned));
+            }
+            for composed in [
+                compose(&pack, kind, &file),
+                compose_scene(&pack, kind, &file),
+            ] {
+                assert_eq!(prelude_names(&composed, kind), want, "{kind:?}");
+            }
         }
     }
 }
