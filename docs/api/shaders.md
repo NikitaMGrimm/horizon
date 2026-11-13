@@ -199,6 +199,11 @@ keeps drawing. What a pack works with:
   returns. BT.2020 holds colours outside sRGB, which HDR displays show. It needs `blend = "linear"`. `Frame` says
   which in `primaries`, with that space's luminance weights in `luminance`, after `black_level`. `"bt2020"` passes
   the check, but the game doesn't serve it yet.
+- **What shines.** Horizon lifts nothing under a pack, so a pack writes the light of what shines itself, from what
+  Horizon's own HDR look reads: `MaterialInput.emission`, a block's kind of light, and `emission_threshold`, which
+  texels of its sprite are the part that shines (a torch's flame, not its handle); `EntityInput.light_source`, the
+  kind of light of an entity or a block entity (glowing eyes, a blaze, an experience orb); and `Frame.full_light`,
+  the light colour at full light, for a light source that shines the same whatever light falls on it.
 
 ```toml
 [tonemap]                  # optional: the pack's own tone curve
@@ -249,6 +254,13 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-13: API 0.2 (additions, experimental): `MaterialInput.emission_threshold`, which texels of a light
+  source's sprite are the part that shines; `EntityInput.light_source`, the kind of light of an entity or a block
+  entity that shines itself, on `emission`'s scale and past it; and `Frame.full_light`, the light colour at full
+  light, after `luminance`. They are what Horizon's own HDR look reads, so a pack can write the same light. Fields
+  only: no name was added, and a pack that doesn't read them is drawn as before. The uploaded `Frame` buffer grows
+  by 16 bytes. The sprites' thresholds are measured when a pack with a material stage loads, on any output, where
+  they were measured only as HDR output turned on.
 - 2026-11-13: API 0.2 (change, experimental): the game draws entities and block entities through the `[entity]`
   stage (`EntityInput.kind` 0 and 1) instead of refusing a pack that has it, with the stage's shadow maps and coloured
   lights, under either `[frame] blend`. Dropped and framed items, particles and the first-person hand keep Horizon's

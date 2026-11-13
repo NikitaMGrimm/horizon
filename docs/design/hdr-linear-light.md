@@ -283,7 +283,7 @@ peak from the headroom, the tone curve), with no engine name in it.
 | Name | Meaning |
 | --- | --- |
 | `MaterialInput.emission_threshold: f32` | The brightness a texel must reach to be the part that shines (a torch's flame, not its handle); 0 where the whole sprite shines. |
-| `EntityInput.light_source: f32` | The thing's own kind of light, on `MaterialInput.emission`'s scale: light-giving particles, glowing items and sign text, eyes. `emission` stays "drawn at full light". |
+| `EntityInput.light_source: f32` | The thing's own kind of light, on `MaterialInput.emission`'s scale and past it: light-giving particles, glowing items and sign text, eyes; 2 for the very bright (experience orbs), a tier no block has. `emission` stays "drawn at full light". |
 | `Frame.full_light: vec3<f32>` | Vanilla's light colour at full light this frame: white unless Darkness or a wither's bar dims all light. What `hdr_unshade` scales to. |
 
 A `[glow]` stage, for what adds light and is no lit surface (the sun, moon, stars, lightning, additive particles,
@@ -423,8 +423,10 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
      where a stage takes linear light and returns it, through a decode and an encode. The curve for light of
      unknown range stays in the same function, and the scene's peak reaches it as a run-time value: DX12's compiler
      rounds a split curve, and a constant peak, a step apart in a few pixels.
-   - 7d: `emission_threshold`, `light_source` and `full_light` in the API and its reference, then wired into the
-     material and entity stages.
+   - 7d (done): `emission_threshold`, `light_source` and `full_light` in the API and its reference, and wired into
+     the material and entity stages. A block's tier needs no field: blocks have the first three, which `emission`
+     tells apart. Entities have the fourth too, so `light_source` goes past `emission`'s 1 for it. The sprites'
+     thresholds are measured for a pack's material stage as for the look, HDR on or off.
    - 7e: light sources lift before fog. A change of look, with captures.
    - 7f: `packs/horizon_hdr`, and its session in the frame identity harness, held to the default path. The gate
      widens as inputs arrive: terrain and entities first, items and particles with the entity stage's later
