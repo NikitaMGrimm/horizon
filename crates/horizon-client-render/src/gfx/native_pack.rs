@@ -11,6 +11,8 @@ use super::native_sky::NativeSky;
 use super::pack_timing::PassTiming;
 
 pub struct NativePack {
+    /// The manifest's `name`.
+    pub name: String,
     pub frame: NativeFrame,
     pub sky: Option<NativeSky>,
     pub material: Option<NativeMaterial>,
@@ -265,6 +267,7 @@ impl NativePack {
         labels.extend(weather_label);
         labels.extend(post.labels().into_iter().map(str::to_owned));
         let pack = Self {
+            name: report.manifest.name.clone(),
             particle_lights: report.manifest.particle_lights.clone(),
             light_colors: report.manifest.lights.clone(),
             frame,

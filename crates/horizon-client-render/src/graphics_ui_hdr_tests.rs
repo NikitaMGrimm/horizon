@@ -60,6 +60,15 @@ fn look_is_the_packs_and_greyed_while_a_pack_runs() {
     );
     assert_eq!(item.blocked(&s, &out.with_pack(true)), lights);
     assert_eq!(item.label(&s, &out.with_pack(true)).plain(), "Look: Sunny");
+    // A Horizon pack is saved by its id, and after a start no page has listed the packs: the
+    // name is the running pack's own.
+    let mut started = Settings::default();
+    started.horizon.shader_pack = "horizon:sunny".into();
+    started.running_pack = Some("Sunny Day".into());
+    assert_eq!(
+        item.label(&started, &out.with_pack(true)).plain(),
+        "Look: Sunny Day"
+    );
     ui.screen.output = out.with_pack(true);
     let [x, y, ..] = row(&mut ui, &s, item);
     assert!(press(&mut ui, &mut s, (x + 8.0, y + 4.0)).is_empty());

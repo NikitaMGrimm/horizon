@@ -958,7 +958,9 @@ impl H {
             H::HdrLook => Text::option_name_value(
                 Text::literal(lang::get_or("horizon.hdr.look", "Look")),
                 Text::literal(match g.hdr_look {
-                    _ if out.pack_lights => crate::shader_ui::pack_name(s).to_owned(),
+                    _ if out.pack_lights => (s.running_pack.as_deref())
+                        .unwrap_or_else(|| crate::shader_ui::pack_name(s))
+                        .to_owned(),
                     HdrLook::Horizon => lang::get_or("horizon.hdr.look.horizon", "Horizon"),
                     HdrLook::Vanilla => lang::get_or("horizon.hdr.look.vanilla", "Vanilla"),
                 }),
@@ -1465,7 +1467,7 @@ impl Screen for GraphicsScreen {
             g::gpu_culling_offer(),
             g::reduced_far_detail_suggested(),
         );
-        shell::stamp_of(&(read(s), s.fullbright_held, offers))
+        shell::stamp_of(&(read(s), s.fullbright_held, &s.running_pack, offers))
     }
     fn sheets(&self, s: &Settings) -> Vec<Sheet<Page, Item>> {
         let sheet = |(page, groups): (Page, Vec<(&'static str, Vec<Setting>)>)| Sheet {

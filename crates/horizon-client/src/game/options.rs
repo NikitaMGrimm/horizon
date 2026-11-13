@@ -184,6 +184,10 @@ impl Game<'_> {
         if ui.controller_open() {
             ui.set_controller_context(context);
         }
+        let pack = (self.renderer.as_ref()).and_then(|r| r.native_pack_name());
+        if self.settings.running_pack.as_deref() != pack {
+            self.settings.running_pack = pack.map(str::to_owned);
+        }
         let output = self
             .renderer
             .as_ref()

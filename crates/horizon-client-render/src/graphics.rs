@@ -1127,7 +1127,7 @@ impl Graphics {
                 "frameGeneration" => g.frame_generation = FrameGeneration::parse(value),
                 "hdr" => g.hdr = HdrMode::parse(value, g.hdr),
                 "hdrLook" => look = HdrLook::parse(value),
-                "hdrLighting" => lighting = Some(flag(true)),
+                "hdrLighting" => lighting = Some(flag(lighting.unwrap_or(true))),
                 "hdrPaperWhite" => g.hdr_paper_white = nits_setting(number(g.hdr_paper_white)),
                 "hdrUiNits" => ui_nits = value.parse().ok().map(nits_setting),
                 "hdrUiBrightness" => ui_share = value.parse::<u32>().ok(),
@@ -1381,6 +1381,8 @@ mod tests {
             ("hdrLighting:true\nhdrLook:vanilla\n", Vanilla),
             ("hdrLighting:false\nhdrLook:filmic\n", Vanilla),
             ("hdrLook:filmic\n", Horizon),
+            // A value that is neither keeps the one before it, as every switch does.
+            ("hdrLighting:false\nhdrLighting:unknown\n", Vanilla),
         ] {
             let g = Graphics::parse(file);
             assert_eq!(g.hdr_look, look, "{file}");

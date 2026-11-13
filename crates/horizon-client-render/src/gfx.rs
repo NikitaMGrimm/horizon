@@ -6858,6 +6858,10 @@ impl Renderer {
             _ => None,
         }
     }
+    /// The running Horizon pack's name, from its manifest.
+    pub fn native_pack_name(&self) -> Option<&str> {
+        self.native.as_ref().map(|pack| pack.name.as_str())
+    }
     /// `screenshot-sequence`: waits (30 seconds at most) for the frame just drawn to finish on
     /// the GPU, and takes the centre depth a `shaders/` pack copied in it, which its next frame
     /// reads: that frame's, or an error, never an older one. The last frame's PNG has already
