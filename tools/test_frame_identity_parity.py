@@ -10,22 +10,24 @@ must leave the picture alone carries the frame-identity label (docs/release-flow
 
 Sessions, each a fresh game and world (seed 7) per build:
 
-- vanilla: HDR off and no shader pack: day over water, night with light sources, stained glass, the Nether, and the
-  HUD over light: chat over the sun, chat and the crosshair over lava, the pause menu over it.
-- golden_hour: the Golden Hour example pack (shader API 0.1) in SDR, the same scenes.
+- vanilla: HDR off and no shader pack: day over water, night with light sources, stained glass, the Nether, the
+  HUD over light: chat over the sun, chat and the crosshair over lava, the pause menu over it, and entities: a pig,
+  a zombie with a helmet and a sword, a glowing sheep and an armour stand, under a low sun.
+- golden_hour: the Golden Hour example pack (shader API 0.1) in SDR, the same world scenes and entities.
 - golden_hour_hdr: Golden Hour with offscreen HDR output on (HORIZON_HDR_OUTPUT=pq): each screenshot and its -hdr.png.
 - hdr_toggle: vanilla started with HDR on (the 16-bit frame), shot, HDR turned off from its settings page, shot.
 - golden_hour_0_2, golden_hour_0_2_hdr: the Golden Hour 0.2 pack (shader API 0.2) on HORIZON_HDR_FRAME=float, in SDR
-  and with HDR on.
+  and with HDR on; entities in SDR.
 - oit, hdr_oit: Improved Transparency with HDR off, and with HDR on the 16-bit frame.
 - visbuffer, hdr_visbuffer: the visibility buffer (HORIZON_VISBUFFER=1) with HDR off, and with HDR on the 16-bit frame.
 - float_hdr, float_oit, float_visbuffer: the float frame (HORIZON_HDR_FRAME=float) with HDR on, drawn forward, with
-  Improved Transparency and with the visibility buffer, the last on a 300-nit display with the HUD at half brightness.
+  Improved Transparency and with the visibility buffer, the last on a 300-nit display with the HUD at half brightness;
+  float_hdr shoots entities too.
 - float_unlit: the float frame with HDR on and HDR Lighting off, on that display.
 - terrain_pack, terrain_pack_hdr: a shader API 0.2 test pack with a material stage, a shadow map and displacement
   (tools/fixtures/shaderpacks/frame_identity_terrain) over a resource pack of LabPBR heights the harness writes
   (relief_pack), on the float frame in SDR and with HDR on: day over water, night with light sources, and relief, a
-  stone floor near the camera with pillars casting long morning shadows over it.
+  stone floor near the camera with pillars casting long morning shadows over it; and entities in SDR.
 
 Shader packs are read from the change's tree for both builds (tools/fixtures/shaderpacks, else the SDK's
 crates/horizon-shader-api/packs), so a base from before a fixture was added draws it too.
@@ -353,7 +355,24 @@ SCENES = {
     # 🤖 Agent: The relief floor from its south edge, looking north and down, the sun low in the east: displaced
     # stone and sand within [displacement]'s distance, the pillars' shadows over them.
     'relief': ('overworld', 2500, (X - 23.5, Y, Z - 17.5), 180, 35),
+    # 🤖 Agent: Entities on the platform, the sun low in the east: a pig, a zombie with a helmet and a sword, a
+    # glowing sheep (its outline) and an armour stand with a chestplate (SUMMON).
+    'entities': ('overworld', 2500, (X + 0.5, Y + 3, Z - 9.5), 0, 40),
 }
+# 🤖 Agent: What a scene summons before it is shot, still and silent. It stays for the scenes after it, so a
+# session shoots it last. Given NBT, /summon skips finalizeSpawn's random equipment and colours.
+STILL_MOB = 'NoAI:1b,Silent:1b,Rotation:[180f,0f]'
+SUMMON = {'entities': (
+    f'summon minecraft:pig {X - 4} {Y} {Z - 6} {{{STILL_MOB}}}',
+    f'summon minecraft:zombie {X - 1} {Y} {Z - 6} {{{STILL_MOB},equipment:{{head:{{id:"minecraft:iron_helmet",'
+    'count:1},mainhand:{id:"minecraft:iron_sword",count:1}}}',
+    f'summon minecraft:sheep {X + 2} {Y} {Z - 6} {{{STILL_MOB},Glowing:1b}}',
+    f'summon minecraft:armor_stand {X + 5} {Y} {Z - 5} {{ShowArms:1b,Rotation:[180f,0f],'
+    'equipment:{chest:{id:"minecraft:diamond_chestplate",count:1}}}',
+    # 🤖 Agent: No dropped item: the client seeds its bob and spin from its entity id, and the mobs generated with
+    # the terrain take ids from the same counter as their chunks finish, so the item's id, and its pose, moves
+    # between runs (ids 5 apart, 698 pixels of the sword, in 2 of 5 runs).
+)}
 WORLD = ['day_water', 'night_lights', 'glass', 'nether']
 # 🤖 Agent: What each HUD scene shows over the world: chat, and the pause menu (its blur and darkening) over it.
 HUD = {'hud_sun': ('chat',), 'hud_lava': ('chat',), 'menu': ('chat', 'pause')}
@@ -369,6 +388,8 @@ def shoot(game, out, scene):
     game.command(f'execute in minecraft:{where} run time set {day_time}')
     game.command(f'execute in minecraft:{where} run tp @s {x} {y} {z} {yaw} {pitch}')
     game.ctl('look', yaw, pitch)
+    for c in SUMMON.get(scene, ()):
+        game.command(c)
     for option in off:
         game.ctl('options-set', option, 'false')
     if 'chat' in shows:
@@ -413,15 +434,15 @@ def set_hdr(game, on):
 
 SESSIONS = {
     # 🤖 Agent: name: (horizon-graphics.txt, extra environment, scenes, HDR turned off after the first shots)
-    'vanilla': ('', {}, WORLD + list(HUD) + ['sun'], False),
+    'vanilla': ('', {}, WORLD + list(HUD) + ['sun', 'entities'], False),
     # 🤖 Agent: An offered HDR output without a system report must leave Auto in SDR.
     'auto_unknown': ('hdr:auto\n', {'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights'], False),
-    'golden_hour': ('', {'HORIZON_SHADER_PACK': 'golden_hour'}, WORLD, False),
+    'golden_hour': ('', {'HORIZON_SHADER_PACK': 'golden_hour'}, WORLD + ['entities'], False),
     'golden_hour_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'golden_hour', 'HORIZON_HDR_OUTPUT': 'pq'},
                         ['day_water', 'night_lights'], False),
     'hdr_toggle': ('hdr:true\n', {'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights'], True),
     'golden_hour_0_2': ('', {'HORIZON_SHADER_PACK': 'golden_hour_0_2', 'HORIZON_HDR_FRAME': 'float'},
-                        ['day_water', 'night_lights'], False),
+                        ['day_water', 'night_lights', 'entities'], False),
     'golden_hour_0_2_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'golden_hour_0_2',
                         'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights'], False),
     'oit': ('', {}, ['day_water', 'night_lights'], False),
@@ -432,7 +453,10 @@ SESSIONS = {
     'visbuffer': ('', {'HORIZON_VISBUFFER': '1', 'HORIZON_FLAT_DRAWS': '1'}, ['day_water', 'night_lights'], False),
     'hdr_visbuffer': ('hdr:true\n', {'HORIZON_HDR_OUTPUT': 'pq', 'HORIZON_VISBUFFER': '1', 'HORIZON_FLAT_DRAWS': '1'},
                       ['day_water', 'night_lights'], False),
-    'float_hdr': ('hdr:true\n', {'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'}, WORLD + list(HUD), False),
+    # 🤖 Agent: Entities in each pack and in vanilla, and once in HDR, where the float frame takes them and the glowing
+    # outline under hdr_gates; the packs' HDR sessions draw them as their SDR ones do.
+    'float_hdr': ('hdr:true\n', {'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'},
+                  WORLD + list(HUD) + ['entities'], False),
     'float_oit': ('hdr:true\n', {'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'}, WORLD, False),
     # 🤖 Agent: On a display with little headroom (300 nits), the HUD at half brightness: the tone curve and the HUD's
     # composite have the least room there (hdr_gates). An older file's 50% of a 200-nit paper white: it reads as 100
@@ -445,7 +469,7 @@ SESSIONS = {
     'float_unlit': ('hdr:true\nhdrLighting:false\nhdrPeak:300\n', {'HORIZON_HDR_FRAME': 'float',
                     'HORIZON_HDR_OUTPUT': 'pq'}, WORLD + list(HUD) + ['sun'], False),
     'terrain_pack': ('', {'HORIZON_SHADER_PACK': 'frame_identity_terrain', 'HORIZON_HDR_FRAME': 'float'},
-                     ['day_water', 'night_lights', 'relief'], False),
+                     ['day_water', 'night_lights', 'relief', 'entities'], False),
     'terrain_pack_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'frame_identity_terrain', 'HORIZON_HDR_FRAME': 'float',
                          'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights', 'relief'], False),
 }
