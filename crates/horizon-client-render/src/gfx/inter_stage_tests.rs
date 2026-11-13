@@ -105,6 +105,11 @@ fn composed() -> Vec<(&'static str, Vec<&'static str>, String)> {
             vec!["hdr.wgsl", "hdr_light.wgsl"],
             super::hdr::shader(),
         ),
+        (
+            "HDR emission thresholds",
+            vec!["hdr_stats.wgsl"],
+            super::hdr_stats::shader(),
+        ),
         ("terrain", vec!["terrain.wgsl"], super::terrain_shader()),
         (
             "stars",

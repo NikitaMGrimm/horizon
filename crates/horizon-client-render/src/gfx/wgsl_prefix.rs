@@ -6,9 +6,12 @@
 /// terrain.wgsl, which the copies are taken from.
 pub const TERRAIN: &str = include_str!("../terrain.wgsl");
 
-/// What every shader that draws into the world's frame starts with: how the frame stores light
-/// (hdr_light.wgsl).
-pub const HDR_LIGHT: &str = include_str!("../hdr_light.wgsl");
+/// What every shader that draws into the world's frame starts with: Horizon's HDR look
+/// (hdr_look.wgsl), then how the frame stores it (hdr_light.wgsl).
+pub const HDR_LIGHT: &str = concat!(
+    include_str!("../hdr_look.wgsl"),
+    include_str!("../hdr_light.wgsl")
+);
 
 /// The text of `source` from the line starting with `start` up to (not including) the one
 /// starting with `end`.
