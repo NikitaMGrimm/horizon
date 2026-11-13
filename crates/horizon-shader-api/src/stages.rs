@@ -317,7 +317,8 @@ fn horizon_entity_normal(position: vec3<f32>) -> vec3<f32> {
 
 /// What the material entries (the checker's below and the renderer's) share: the
 /// surface's normal and tangent from the derivatives of its position and uv. The block texture
-/// is decoded; the LabPBR maps are data.
+/// is decoded; the LabPBR maps are data. The tangent's two sums carry the sign of the screen's
+/// handedness against `normal`, negative for a normal facing the camera (#16082).
 const MATERIAL_HELPERS: &str = concat!(
     block_light_color!("reflection_sampler"),
     "\
@@ -410,8 +411,9 @@ fn horizon_material_tangent(position: vec3<f32>, uv: vec2<f32>, normal: vec3<f32
     let duv2 = dpdy(uv);
     let dp2perp = cross(dp2, normal);
     let dp1perp = cross(normal, dp1);
-    let t = dp2perp * duv1.x + dp1perp * duv2.x;
-    let b = dp2perp * duv1.y + dp1perp * duv2.y;
+    let side = select(-1.0, 1.0, dot(dp1, dp2perp) >= 0.0);
+    let t = (dp2perp * duv1.x + dp1perp * duv2.x) * side;
+    let b = (dp2perp * duv1.y + dp1perp * duv2.y) * side;
     if length(t) < 1e-12 {
         return vec4<f32>(1.0, 0.0, 0.0, 1.0);
     }

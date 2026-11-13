@@ -253,6 +253,10 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-13: API 0.2 (fix, experimental): `MaterialInput.tangent.xyz` now points where `uv.x` grows, as the
+  reference says; it pointed the other way, so a normal map turned into world axes by the reference's rule had both
+  in-plane components negated. `w` is unchanged. A 0.2 pack that negated the tangent to make up for it must stop.
+  API 0.1 keeps the old direction: its WGSL is frozen.
 - 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` the scene holds translucent terrain (water,
   stained glass, ice) in a second layer. Where `trace` is, the prelude gets
   `fn trace_layers(origin, direction, max_distance, layers) -> RayHit`, `fn trace_any_layers(...) -> bool` and the

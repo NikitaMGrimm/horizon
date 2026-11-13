@@ -142,6 +142,9 @@ pub(in crate::gfx) struct RayScene {
     full_logged: bool,
     /// How many TLAS and stores were made: a bind group made at another count holds an old one.
     generation: u64,
+    /// `Resident::removals` when the scene last dropped the sections no longer resident:
+    /// gfx.rs releases sections (unloaded columns, far terrain's fade-out) without `ray_mark`.
+    removals: u64,
 }
 
 /// What a trace reads this frame (spec #15624).
@@ -186,6 +189,7 @@ impl RayScene {
             slots,
             full_logged: false,
             generation: 0,
+            removals: 0,
         })
     }
 
@@ -264,6 +268,10 @@ impl RayScene {
         // doesn't build the same ones over and over.
         let keep = self.reach + 2;
         let mut changed = self.compact(queue);
+        if self.removals != sections.removals() {
+            self.removals = sections.removals();
+            changed |= drop_released(&mut self.blas, &mut self.slots, |k| sections.contains(k));
+        }
         if self.anchor != Some(column) {
             changed |= leave(&mut self.blas, &mut self.slots, column, keep);
             for (key, s, _) in sections.iter() {
@@ -396,6 +404,23 @@ fn leave<T>(
         let kept = within(&part.0, column, keep);
         if !kept {
             slots.free(*part);
+        }
+        kept
+    });
+    blas.len() != before
+}
+
+/// Drops both layers' BLAS and slots of every section not `resident`; whether any went.
+fn drop_released<B>(
+    blas: &mut FxHashMap<Part, B>,
+    slots: &mut Slots,
+    resident: impl Fn(SectionKey) -> bool,
+) -> bool {
+    let before = blas.len();
+    blas.retain(|&part, _| {
+        let kept = resident(part.0);
+        if !kept {
+            slots.free(part);
         }
         kept
     });
@@ -809,6 +834,24 @@ mod tests {
         assert_eq!(slots.alloc(A, 32), Some(0));
         assert_eq!(slots.alloc(B, 8), Some(48));
         assert_eq!(slots.capacity, 64);
+    }
+
+    #[test]
+    fn sections_no_longer_resident_leave_the_scene_and_the_store() {
+        let mut slots = Slots::new(64, 64);
+        let mut blas = FxHashMap::default();
+        let water = (B.0, Layer::Translucent);
+        for part in [A, B, C, water] {
+            slots.alloc(part, 8);
+            blas.insert(part, ());
+        }
+        // B's column was unloaded without a new mesh: both its layers go.
+        assert!(drop_released(&mut blas, &mut slots, |k| k != B.0));
+        assert_eq!(blas.len(), 2);
+        assert!(!blas.contains_key(&B) && !blas.contains_key(&water));
+        assert_eq!((slots.first(B), slots.first(water)), (None, None));
+        assert_eq!(slots.alloc(B, 8), Some(8), "its slot is free again");
+        assert!(!drop_released(&mut blas, &mut slots, |_| true));
     }
 
     #[test]

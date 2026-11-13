@@ -867,7 +867,7 @@ fn a_material_stage_that_doesn_t_trace_is_built_as_before() {
     let composed = horizon_shader_api::compose(&pack, StageKind::Material, "material.wgsl");
     assert_eq!(
         horizon_shader_api::package::sha256_hex(composed.text.as_bytes()),
-        "074077b43e296353e4caeabcbb7680da839b4a7f4d83bfe0384462c7596eab1b"
+        "a8df6b5822f7cb911604859061d438ea45924677ff146376e249e7f2e38768d3"
     );
     // Without the key `trace` is the pack's own name, in the material stage too.
     let own = "fn trace(c: vec4<f32>) -> vec4<f32> { return c; }\n\
