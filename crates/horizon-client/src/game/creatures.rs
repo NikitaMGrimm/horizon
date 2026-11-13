@@ -270,7 +270,7 @@ fn flame_geometry(
                 normal: [0; 4],
                 pos: p.to_array(),
                 uv,
-                // HDR output: the flames shine like fire (entity.wgsl fs_hdr_mark).
+                // HDR output: the flames shine like fire (entity.wgsl hdr_entity_mark).
                 layer: u32::from(horizon_client::mesher::INCANDESCENT) << 16,
                 color: 0xFFFF_FFFF,
                 light: packed,
@@ -1176,7 +1176,7 @@ impl Game<'_> {
         self.combat.exploded.clear();
         self.combat.exploded_kinds.clear();
         // EntityTickEvent.Pre for the mobs about to tick, before the loop holds them.
-        let mut round = self.native_mob_round();
+        let mut round = self.native_tick_round();
         if round.listening() {
             let ticking = self.entity_ticking_area();
             let mut i = 0;
@@ -1280,7 +1280,6 @@ impl Game<'_> {
                     .is_some()
                     .then_some(self.level.player_uuid)
                     .flatten(),
-                mods: !round.mobs_quiet(),
                 ticking: &|| Box::new(self.entity_ticking_area()),
             };
             let mut group = match islands.plan(&mobs, &snapshot, &turns, &start) {

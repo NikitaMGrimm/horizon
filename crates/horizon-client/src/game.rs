@@ -477,6 +477,7 @@ mod trial_visuals;
 mod trident;
 mod tutorial;
 mod ui_control;
+mod upload_pace;
 mod use_hand;
 mod using_item;
 mod vault;
@@ -561,7 +562,7 @@ use horizon_world::{
     level::{
         Behaviours, BucketContent, Dimension as LevelDimension, EntityQuery, Landing, LevelAccess,
         LevelEvent, PlaceContext, PlaceOutcome, PlacementContext, PlayerContext, PlayerEffect,
-        Ticks, flags as level_flags,
+        RandomTickMaskUpdate, Ticks, flags as level_flags,
     },
     registry::BlockStateId,
 };
@@ -596,7 +597,7 @@ pub use native_reload_listeners::NativeReloadListener;
 pub use native_server::NativeExperienceOrb;
 pub use native_slot_roles::NativeSlotRole;
 pub use native_structures::{NativeStructureBlock, NativeStructureTemplate};
-pub use native_world_columns::NativeColumnBlocks;
+pub use native_world_columns::{NativeColumnBlocks, NativeTerrainColumn};
 pub use native_world_draw::NativeWorldDraw;
 pub use native_world_edit::{NativeBlockEdit, NativeBlockNbt, NativeBlockRun, NativeHeightmap};
 pub use native_world_read::NativeBlockReadError;
@@ -626,13 +627,6 @@ use winit::{
     window::{CursorGrabMode, Window, WindowId},
 };
 
-/// The time a frame spends uploading chunk meshes when the player set no
-/// Chunk Updates or Upload Budget: a burst past it waits for the next frames.
-const AUTO_UPLOAD_TIME: Duration = Duration::from_millis(2);
-/// `AUTO_UPLOAD_TIME` while the view's terrain is still arriving (a world's
-/// open, a teleport): the meshes waiting then are the view itself, not edits
-/// to it, so a frame gives them more of its time to fill the view sooner.
-const AUTO_UPLOAD_TIME_ARRIVING: Duration = Duration::from_millis(6);
 /// A frame's finished meshes up to this many upload at once, unqueued.
 const AUTO_UPLOADS_AT_ONCE: usize = 8;
 /// The most changed columns far terrain waits on behind a mod's hold (`Game::lod_held`): past
@@ -2137,8 +2131,8 @@ struct Game<'a> {
     /// again only when the feet block (or the dimension) changes.
     debug_density: RefCell<debug_keys::DensityCache>,
     pending_pack_reload: bool,
-    /// HDR, Smooth Gradients, picked path and outcome at the last frame attempt, including a failed
-    /// replacement (`follow_frame`).
+    /// HDR, picked path and outcome at the last frame attempt, including a failed replacement
+    /// (`follow_frame`).
     frame_attempted: render_settings::FrameAttempt,
     /// When `resourcepacks/` was last looked at for the open pack screen, and what it held
     /// (`watch_pack_folder`).
@@ -2499,8 +2493,8 @@ struct Game<'a> {
     /// `getUseDuration` when that use started, as a mod left it
     /// (`game/item_use.rs`): consumables and mod items count to it.
     use_duration: i32,
-    /// A mod's `Start` or `Tick` set that use's ticks left (`game/item_use.rs`).
-    use_ticks_set: bool,
+    /// What that use began with (`useItem`) and whether a mod set its ticks left (`item_use.rs`).
+    use_start: using_item::UseStart,
     /// The crossbow charge's start and middle loading sounds played so far
     /// (`game/crossbow.rs`): each charge plays each of them once, however
     /// far a mod's tick moved the charge at a time.
@@ -2852,6 +2846,7 @@ struct Game<'a> {
     native_mod_screen: Option<String>,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
+    upload_pace: upload_pace::UploadPace,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::Frustum>,
     /// Whether the renderer's section-occlusion graph is active for this view.
@@ -5677,7 +5672,7 @@ impl Game<'_> {
             self.lan_synced_since(from);
             horizon_client::spans::time("tick_lecterns", || self.tick_lecterns());
             horizon_client::spans::time("tick_maps", || self.tick_maps());
-            self.tick_lodestone_compasses();
+            self.tick_equipment_compasses();
             horizon_client::spans::time("tick_bolts", || self.tick_bolts());
             horizon_client::spans::time("tick_fishing", || self.tick_fishing());
             self.ordered_before(ordered_tick::Batch::Tridents)?;
@@ -6559,9 +6554,7 @@ impl Game<'_> {
         let mut static_block_entities = std::sync::Arc::from([]);
         let mut visible_static_block_entity_sections = Vec::new();
         let mut static_block_entity_stats = StaticCacheFrameStats::default();
-        self.entity_spans.borrow_mut().clear();
-        self.entity_motion.borrow_mut().clear();
-        self.entity_motion_posed.borrow_mut().clear();
+        self.clear_entity_marks();
         self.maps.slots.next_frame();
         // LevelExtractor.extract: the transient blocks queued since the last frame.
         self.drain_transient_block_queue();
@@ -6718,19 +6711,19 @@ impl Game<'_> {
         self.mark_player(out.len(), !self.own_body_in_view());
         let player_start = out.len();
         self.mark_motion(player_start, Self::MOTION_OWN_PLAYER);
-        let player_alpha = self.own_player_alpha();
-        self.player_model_geometry(camera, player_alpha, &mut out);
+        self.player_model_geometry(camera, self.own_player_alpha(), &mut out);
         // A native pack's shadow pass alone gets the first-person model (no per-entity draws).
         if self.pack_ids.is_none() && !self.own_body_in_view() {
             self.shadow_only_vertices
                 .borrow_mut()
                 .extend(out.drain(player_start..));
         }
+        self.lit_entity(player_start..out.len());
         self.mark_motion(out.len(), 0);
         // What crates draw around players: first person, see-through (game/player_hooks.rs).
         self.players_after_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:evoker_fangs");
-        self.fangs_geometry(camera, alpha, &mut out);
+        self.lit(&mut out, |g, o| g.fangs_geometry(camera, alpha, o));
         self.block_item_display_geometry(camera, alpha, &mut out);
         laps.lap("eg_players");
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
@@ -6942,6 +6935,7 @@ impl Game<'_> {
             // through the per-vertex occlusion callback both repeats that work
             // and disables their per-section GPU cache. Shader packs still need
             // per-entity span marks, so they keep the callback path.
+            let block_entities = out.len();
             if self.pack_ids.is_some() {
                 let section_revision = |pos| r.block_entity_section_revision(pos);
                 static_block_entity_stats = self
@@ -7012,6 +7006,7 @@ impl Game<'_> {
                 alpha as f32,
                 &mut out,
             );
+            self.lit_block_entity(block_entities..out.len());
             self.mark_stage(out.len(), "DESTROY");
             for &(pos, stage) in &cracks {
                 let state = self.world.block(pos[0], pos[1], pos[2]);
@@ -7098,7 +7093,7 @@ impl Game<'_> {
                         pos: v.to_array(),
                         uv,
                         // ExperienceOrbRenderer: `RenderTypes.entityTranslucent`; in HDR
-                        // output the orbs shine (entity.wgsl fs_hdr_mark).
+                        // output the orbs shine (entity.wgsl hdr_entity_mark).
                         layer: horizon_client::gfx::OIT_ENTITY
                             | u32::from(horizon_client::mesher::VERY_BRIGHT) << 16,
                         color,
@@ -7107,6 +7102,7 @@ impl Game<'_> {
                         glint_uv: [0.0, 0.0],
                     });
                 }
+                self.lit_entity(out.len() - 4..out.len());
             }
         }
         laps.lap("eg_orbs");
@@ -7176,29 +7172,29 @@ impl Game<'_> {
         // LevelRenderer.submitTransientBlocks.
         self.transient_block_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:tnt");
-        self.tnt_geometry(camera, alpha, &mut out);
+        self.lit(&mut out, |g, o| g.tnt_geometry(camera, alpha, o));
         self.mark_motion(out.len(), 0);
         self.mark_entity(out.len(), "minecraft:painting");
-        self.painting_geometry(camera, &mut out);
+        self.lit(&mut out, |g, o| g.painting_geometry(camera, o));
         self.mark_motion(out.len(), 0);
         self.mark_entity(out.len(), "minecraft:item_frame");
         self.frame_geometry(camera, &mut out);
         self.mark_motion(out.len(), 0);
         self.mark_entity(out.len(), "minecraft:armor_stand");
-        self.armor_stand_geometry(camera, alpha, &mut out);
+        self.lit(&mut out, |g, o| g.armor_stand_geometry(camera, alpha, o));
         self.mark_motion(out.len(), 0);
-        self.cushion_geometry(camera, &mut out);
+        self.lit(&mut out, |g, o| g.cushion_geometry(camera, o));
         self.mark_entity(out.len(), "minecraft:oak_boat");
-        self.boat_geometry(camera, alpha, &mut out);
+        self.lit(&mut out, |g, o| g.boat_geometry(camera, alpha, o));
         self.mark_motion(out.len(), 0);
         self.mark_entity(out.len(), "minecraft:minecart");
-        self.cart_geometry(camera, alpha, &mut out);
+        self.lit(&mut out, |g, o| g.cart_geometry(camera, alpha, o));
         self.mark_motion(out.len(), 0);
         // Beams: `gbuffers_beaconbeam`, not a block entity's program (5.4 has no stage for them).
         self.mark_stage(out.len(), "NONE");
         self.beacon_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:fishing_bobber");
-        self.fishing_geometry(camera, alpha, &mut out);
+        self.lit(&mut out, |g, o| g.fishing_geometry(camera, alpha, o));
         self.mark_entity(out.len(), "minecraft:leash_knot");
         self.leash_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:trident");
@@ -7689,9 +7685,7 @@ impl Game<'_> {
         self.see_through_vertices.clear();
         self.glowing_vertices.get_mut().clear();
         self.shadow_only_vertices.get_mut().clear();
-        self.entity_spans.borrow_mut().clear();
-        self.entity_motion.borrow_mut().clear();
-        self.entity_motion_posed.borrow_mut().clear();
+        self.clear_entity_marks();
         self.skin_models
             .borrow_mut()
             .restart(&mut self.skin_frame.borrow_mut());
@@ -9520,10 +9514,10 @@ impl Game<'_> {
         // The dragon is drawn in every dimension, as any entity: a dragon
         // summoned outside the End (the server's AddEntity) is shown too.
         if !title {
-            let mut dragon = Vec::new();
-            self.dragon_geometry(camera, alpha, &mut dragon, &mut additive);
-            self.dragon_fireball_geometry(camera, alpha, &mut dragon);
-            entities.extend(dragon);
+            let dragon = entities.len();
+            self.dragon_geometry(camera, alpha, &mut entities, &mut additive);
+            self.dragon_fireball_geometry(camera, alpha, &mut entities);
+            self.lit_entity(dragon..entities.len());
         }
         pr.lap("pr_dragon_bolts");
         let (celestial, stars) = if title {
@@ -9781,6 +9775,7 @@ impl Game<'_> {
                 } else {
                     horizon_client::debug_overlay::GPU_TIMING_GAP
                 });
+                renderer.take_entity_runs(self.native_shaders.entity_runs.get_mut());
                 horizon_client::spans::time("renderer", || renderer.render(&frame))
             }
             None => Err("renderer".into()),
@@ -11063,6 +11058,7 @@ impl Game<'_> {
                     let elapsed = now.duration_since(self.previous);
                     self.frame_ticks = elapsed.as_secs_f32() * 20.0;
                     self.previous = now;
+                    self.upload_pace.frame(elapsed);
                     self.studio_fly(elapsed);
                     // Arrow-key camera controls belong to gameplay; chat and
                     // other screens use the same keys for their own navigation.
@@ -11593,7 +11589,7 @@ impl<'a> Game<'a> {
             },
             using: None,
             use_duration: 0,
-            use_ticks_set: false,
+            use_start: Default::default(),
             crossbow_sounds: [false; 2],
             view: Default::default(),
             limiter: horizon_client::window::FramerateLimiter::new(0),
@@ -11792,6 +11788,7 @@ impl<'a> Game<'a> {
             async_particle_culler: RefCell::new(Default::default()),
             pack_shadow_casters: (false, false),
             pending_uploads: Vec::new(),
+            upload_pace: Default::default(),
             frame_graph: Default::default(),
             extras: Default::default(),
             pvp: Default::default(),
