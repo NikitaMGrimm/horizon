@@ -227,7 +227,9 @@ impl EntityBatch {
     }
 
     /// Writes into each ordinary quad's layer the kind of the run of `kinds` it is in, and
-    /// forgets the runs: they are one frame's.
+    /// forgets the runs: they are one frame's. The other materials' quads take none, in a run
+    /// or not: each has a pipeline of its own, the same with the stage as without (so a
+    /// translucent item an entity holds is Horizon's until items draw through the stage).
     fn tag_kinds(&mut self) {
         if self.kinds.is_empty() {
             return;

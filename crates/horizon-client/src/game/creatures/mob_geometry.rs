@@ -325,6 +325,9 @@ impl Game<'_> {
                 // What the GPU draws of the mob counts by its bounds' corners.
                 self.cull_skinned(out, entity_start, skinned);
             }
+            // The mob with what it holds and wears, once nothing more can drop it. Its beam,
+            // next, is no surface of it: Horizon's to draw.
+            self.lit_entity(entity_start..out.len());
             // GuardianRenderer: the laser to the locked target.
             if let Some((time, scale)) = beam
                 && let Some(target) = self.beam_target(mob.ai.target, alpha)
@@ -345,8 +348,6 @@ impl Game<'_> {
                     out,
                 );
             }
-            // The mob with what it holds and wears, once nothing more can drop it.
-            self.lit_entity(entity_start..out.len());
         }
         // What follows isn't a tracked mob: close the last one's span.
         self.mark_motion(out.len(), 0);

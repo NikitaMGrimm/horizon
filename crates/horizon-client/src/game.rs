@@ -7196,7 +7196,7 @@ impl Game<'_> {
         self.mark_entity(out.len(), "minecraft:fishing_bobber");
         self.lit(&mut out, |g, o| g.fishing_geometry(camera, alpha, o));
         self.mark_entity(out.len(), "minecraft:leash_knot");
-        self.lit(&mut out, |g, o| g.leash_geometry(camera, alpha, o));
+        self.leash_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:trident");
         self.trident_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:firework_rocket");

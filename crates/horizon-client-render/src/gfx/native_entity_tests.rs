@@ -121,12 +121,13 @@ fn quad(layer: u32) -> [Vertex; 4] {
 /// The kinds follow the game's runs through the sorted batch: an ordinary quad inside a run
 /// takes its kind; one before, between or after the runs takes none, whatever was drawn
 /// before it (an arrow after the last mob, a dragon after everything), and neither do the
-/// other materials' quads. The frame after has none unless the game names its runs again.
+/// other materials' quads, in a run or not (a translucent item in a mob's hand). The frame
+/// after has none unless the game names its runs again.
 #[test]
 fn quads_take_the_kind_of_their_run() {
-    // Quads 0, 1, 3, 4 and 5 are ordinary; quad 2 is another material's (overlay 11), sorted
-    // out of them.
-    let vertices: Vec<Vertex> = [0, 5, 11, 0, 7, 0].into_iter().flat_map(quad).collect();
+    // Quads 0, 1, 3, 4 and 5 are ordinary; quad 2 is another material's (overlay 32, a
+    // translucent item's), sorted out of them though it lies in the entity's run.
+    let vertices: Vec<Vertex> = [0, 5, 32, 0, 7, 0].into_iter().flat_map(quad).collect();
     let mut batch = super::super::entity_batch::EntityBatch::default();
     batch.kinds.push(4..12, EntityKind::Entity);
     batch.kinds.push(12..16, EntityKind::BlockEntity);
@@ -140,6 +141,7 @@ fn quads_take_the_kind_of_their_run() {
     // block entity's run and is in none.
     assert_eq!(kinds(&mut batch), [0, 1, 2, 0, 1, 0]);
     assert_eq!(batch.combined[4].layer & 0xffff, 5);
+    assert_eq!(batch.combined[20].layer, 32);
     assert_eq!(kinds(&mut batch), [0; 6]);
 }
 

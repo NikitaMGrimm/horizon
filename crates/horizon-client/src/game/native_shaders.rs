@@ -116,7 +116,11 @@ impl NativeShaders {
 impl Game<'_> {
     /// The pack's `[entity]` stage lights vertices `run` of the entity geometry as `kind`. A
     /// run is named once it is drawn, and with its end: what no caller names stays Horizon's
-    /// own draw (items, particles, fire, text, and whatever is added without a word here).
+    /// own draw (items, particles, fire, beams, ropes, text, and whatever is added without a
+    /// word here), so a run ends before any of those. Within a run, quads of another batch
+    /// material (a translucent item in a hand, an energy swirl) and unlit overlays (the beam
+    /// that heals the dragon, an End portal) stay Horizon's all the same: `EntityBatch` names
+    /// only its ordinary quads, and the stage's shader passes the unlit ones on.
     /// Kept only while the pack in use has the stage.
     fn lit_run(&self, run: std::ops::Range<usize>, kind: EntityKind) {
         let stage = self.renderer.as_ref();
