@@ -418,7 +418,7 @@ mod tests {
 
     fn install(dir: &Path, file: &str, version: &str) {
         let manifest = format!(
-            "schema = 1\nid = \"warm\"\nname = \"Warm\"\nversion = \"{version}\"\napi = \"0.1\"\n\
+            "schema = 1\nid = \"warm\"\nname = \"Warm\"\nversion = \"{version}\"\napi = \"0.2\"\n\
             [[post]]\nfile = \"p.wgsl\"\n[[options]]\nid = \"strength\"\nname = \"Strength\"\ntype = \"float\"\ndefault = 1.0\nmin = 0.0\nmax = 2.0\nstep = 0.5\n"
         );
         let files = [
@@ -519,7 +519,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let d = dir.as_path();
         let manifest = "schema = 1\nid = \"warm\"\nname = \"Warm Light\"\nversion = \"1\"\n\
-            api = \"0.1\"\n[[post]]\nfile = \"p.wgsl\"\n";
+            api = \"0.2\"\n[[post]]\nfile = \"p.wgsl\"\n";
         std::fs::create_dir(d.join("warm")).unwrap();
         std::fs::write(d.join("warm").join(horizon_shader_api::MANIFEST), manifest).unwrap();
         std::fs::create_dir_all(d.join("Classic Folder/shaders")).unwrap();

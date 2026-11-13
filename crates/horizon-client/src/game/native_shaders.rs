@@ -12,7 +12,7 @@ use std::{
 };
 
 use horizon_client::text::Text;
-use horizon_shader_api::{Api, Manifest, Pack, Primaries, check};
+use horizon_shader_api::{Manifest, Pack, Primaries, check};
 
 use super::Game;
 
@@ -21,20 +21,22 @@ const RED: u32 = 0xFF5555;
 
 thread_local! {
     // Loader outcomes survive renderer replacement; rejected files must not cause a rebuild loop.
-    static OUTCOMES: std::cell::RefCell<std::collections::HashMap<PathBuf, (Option<u64>, Option<Api>)>> =
+    // Each is the pack's files (`fingerprint`) and whether they were taken.
+    static OUTCOMES: std::cell::RefCell<std::collections::HashMap<PathBuf, (Option<u64>, bool)>> =
         std::cell::RefCell::default();
 }
 
-pub(super) fn outcome(path: &Path) -> Option<Option<Api>> {
-    OUTCOMES.with_borrow(|packs| packs.get(path).map(|(_, api)| *api))
+/// Whether the pack at `path` was taken when it was last looked at: `None` before that.
+pub(super) fn outcome(path: &Path) -> Option<bool> {
+    OUTCOMES.with_borrow(|packs| packs.get(path).map(|(_, taken)| *taken))
 }
 
-pub(super) fn remember(path: &Path, stamp: Option<u64>, api: Option<Api>) {
-    OUTCOMES.with_borrow_mut(|packs| packs.insert(path.to_owned(), (stamp, api)));
+pub(super) fn remember(path: &Path, stamp: Option<u64>, taken: bool) {
+    OUTCOMES.with_borrow_mut(|packs| packs.insert(path.to_owned(), (stamp, taken)));
 }
 
 pub(super) fn refused(path: &Path, stamp: Option<u64>) -> bool {
-    OUTCOMES.with_borrow(|packs| packs.get(path) == Some(&(stamp, None)))
+    OUTCOMES.with_borrow(|packs| packs.get(path) == Some(&(stamp, false)))
 }
 
 #[derive(Default)]
@@ -162,7 +164,7 @@ impl Game<'_> {
                 .map_err(|e| vec![e])?;
             Ok((pack.manifest, labels, translucent))
         });
-        remember(path, stamp, result.as_ref().ok().map(|(m, _, _)| m.api));
+        remember(path, stamp, result.is_ok());
         // The resources were loaded without a native pack, so without the resource packs'
         // LabPBR maps its material stage reads: load them once, now that one runs.
         if result.as_ref().is_ok_and(|(m, _, _)| m.material.is_some())
@@ -251,35 +253,33 @@ mod tests {
 
     #[test]
     fn outcomes_and_refusals_survive_renderer_resets() {
-        use super::{Api, NativeShaders, fingerprint, outcome, refused, remember};
+        use super::{NativeShaders, fingerprint, outcome, refused, remember};
         let root = std::env::temp_dir().join(format!("horizon-acceptance-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join("post.wgsl");
         std::fs::write(&file, "first files").unwrap();
         let stamp = fingerprint(&root);
         assert_eq!(outcome(&root), None);
-        remember(&root, stamp, Some(Api::V0_1));
-        assert_eq!(outcome(&root), Some(Some(Api::V0_1)));
-        remember(&root, stamp, Some(Api::V0_2));
-        assert_eq!(outcome(&root), Some(Some(Api::V0_2)));
+        remember(&root, stamp, true);
+        assert_eq!(outcome(&root), Some(true));
         // Policy, SDK and GPU refusals all reach this same outcome before any resource reload.
-        remember(&root, stamp, None);
+        remember(&root, stamp, false);
         for _ in 0..3 {
             let mut reset = NativeShaders::picking(&root.to_string_lossy());
             reset.select(&root.to_string_lossy());
-            assert_eq!(outcome(&root), Some(None));
+            assert_eq!(outcome(&root), Some(false));
             assert!(refused(&root, fingerprint(&root)));
         }
         std::fs::write(&file, "repaired files with a different size").unwrap();
         assert!(!refused(&root, fingerprint(&root)));
-        remember(&root, fingerprint(&root), Some(Api::V0_2));
-        assert_eq!(outcome(&root), Some(Some(Api::V0_2)));
+        remember(&root, fingerprint(&root), true);
+        assert_eq!(outcome(&root), Some(true));
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    fn manifest(api: &str, extra: &str) -> Manifest {
+    fn manifest(extra: &str) -> Manifest {
         Manifest::parse(&format!(
-            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"{api}\"\n\
+            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
              [[post]]\nfile = \"post.wgsl\"\n{extra}"
         ))
         .unwrap()
@@ -293,7 +293,7 @@ mod tests {
         let pack = dir.join("native-test_mod");
         std::fs::create_dir_all(&pack).unwrap();
         std::fs::write(pack.join(horizon_shader_api::MANIFEST),
-            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.1\"\n[[post]]\nfile = \"post.wgsl\"\n").unwrap();
+            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n[[post]]\nfile = \"post.wgsl\"\n").unwrap();
         std::fs::write(pack.join("post.wgsl"), "fixture").unwrap();
         let mut state = NativeShaders::default();
         assert_eq!(state.resolve_path(&dir, "horizon:p", false), pack);
@@ -338,23 +338,22 @@ mod tests {
     }
 
     #[test]
-    fn both_api_lines_are_drawn_but_for_what_isnt_served_yet() {
-        assert_eq!(not_drawn(&manifest("0.1", "")), None);
+    fn a_pack_is_drawn_but_for_what_isnt_served_yet() {
         // Either blend: `"linear"` is drawn as `"gamma"` is.
         for frame in [
             "",
             "[frame]\nblend = \"linear\"\n",
             "[frame]\nprimaries = \"bt709\"\n",
         ] {
-            assert_eq!(not_drawn(&manifest("0.2", frame)), None, "{frame}");
+            assert_eq!(not_drawn(&manifest(frame)), None, "{frame}");
         }
         let wide = "[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n";
-        let why = not_drawn(&manifest("0.2", wide)).unwrap();
+        let why = not_drawn(&manifest(wide)).unwrap();
         assert!(
             why.contains("primaries = \"bt2020\" isn't served yet"),
             "{why}"
         );
-        let why = not_drawn(&manifest("0.2", "[entity]\nfile = \"e.wgsl\"\n"));
+        let why = not_drawn(&manifest("[entity]\nfile = \"e.wgsl\"\n"));
         assert!(why.unwrap().contains("[entity] stage isn't drawn yet"));
     }
 }
