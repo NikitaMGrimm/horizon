@@ -149,6 +149,8 @@ pub struct Manifest {
     /// 0.2: the scene the post and material stages' `trace` reads, if the pack asks for it;
     /// needs `[[post]]` or `[material]`.
     pub ray_tracing: Option<RayTracing>,
+    /// 0.2: kept resources. Checked, not yet run.
+    pub kept: crate::kept::Kept,
 }
 
 /// `[ray_tracing]` (0.2): the pack's post passes, and its material stage where it calls them,
@@ -535,6 +537,9 @@ struct Raw {
     shadow: Option<Shadow>,
     displacement: Option<RawDisplacement>,
     ray_tracing: Option<RayTracing>,
+    kept: Option<crate::kept::RawKept>,
+    #[serde(default)]
+    resource: Vec<crate::kept::RawResource>,
 }
 
 #[derive(Deserialize)]
@@ -551,6 +556,7 @@ struct RawOption {
     max: Option<toml::Value>,
     step: Option<f64>,
     values: Option<Vec<String>>,
+    resets: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -566,11 +572,9 @@ struct RawBudget {
     gpu_ms: Option<f64>,
 }
 
-/// `[[post]] scale` and `output`: scales from `POST_SCALES`, below 1 only with an output,
-/// the last pass drawing the picture itself, outputs named as WGSL names no other resource
-/// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'), each at one scale,
-/// `MAX_POST_TARGETS` at most.
-fn check_post_targets(post: &[Stage], ray_tracing: bool) -> Result<(), String> {
+/// Whether `name` is taken from a pack's own WGSL names: by the post prelude's resources or, under
+/// `[ray_tracing]`, by its functions, or as a word WGSL reserves.
+pub(crate) fn taken(name: &str, ray_tracing: bool) -> bool {
     // The post prelude's functions `[ray_tracing]` brings.
     let traced = [
         "trace",
@@ -597,6 +601,33 @@ fn check_post_targets(post: &[Stage], ray_tracing: bool) -> Result<(), String> {
         "shadow_color",
         "scene_surface",
     ];
+    reserved.contains(&name)
+        || (ray_tracing && traced.contains(&name))
+        || naga::keywords::wgsl::RESERVED.contains(&name)
+}
+
+/// Whether `name` is a WGSL name a pack may give a target: `[a-z][a-z0-9_]*`, at most 32, not
+/// `horizon_`.
+pub(crate) fn target_name(name: &str) -> bool {
+    name.len() <= 32
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !name.starts_with("horizon_")
+}
+
+/// `[[post]] scale` and `output`: scales from `POST_SCALES`, below 1 only with an output,
+/// the last pass drawing the picture itself, outputs named as WGSL names no other resource
+/// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'), each at one scale,
+/// `MAX_POST_TARGETS` at most with the R-relative kept textures, two each. An output naming a
+/// kept texture writes it (`kept::kept_targets`).
+fn check_post_targets(
+    post: &[Stage],
+    ray_tracing: bool,
+    kept: &[crate::kept::Resource],
+) -> Result<(), String> {
+    let kept_targets = crate::kept::kept_targets(post, kept)?;
     let mut targets: Vec<(&str, f32)> = Vec::new();
     for (i, p) in post.iter().enumerate() {
         let scale = p.scale.unwrap_or(1.0);
@@ -618,15 +649,10 @@ fn check_post_targets(post: &[Stage], ray_tracing: bool) -> Result<(), String> {
             }
             continue;
         };
-        let valid = name.len() <= 32
-            && name.starts_with(|c: char| c.is_ascii_lowercase())
-            && name
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-            && !name.starts_with("horizon_");
-        let taken =
-            reserved.contains(&name.as_str()) || (ray_tracing && traced.contains(&name.as_str()));
-        if !valid || taken {
+        if kept.iter().any(|r| r.name == *name) {
+            continue;
+        }
+        if !target_name(name) || taken(name, ray_tracing) {
             return Err(format!(
                 "{}: output {name:?} is not a free WGSL name ([a-z][a-z0-9_]*, at most 32)",
                 p.file
@@ -643,9 +669,13 @@ fn check_post_targets(post: &[Stage], ray_tracing: bool) -> Result<(), String> {
             None => targets.push((name, scale)),
         }
     }
-    if targets.len() > MAX_POST_TARGETS {
+    if targets.len() + kept_targets > MAX_POST_TARGETS {
+        let kept = match kept_targets {
+            0 => String::new(),
+            n => format!(" and {n} for R-relative [[resource]] textures, two each"),
+        };
         return Err(format!(
-            "{} [[post]] outputs; a pack may write {MAX_POST_TARGETS}",
+            "{} [[post]] outputs{kept}; a pack may write {MAX_POST_TARGETS}",
             targets.len()
         ));
     }
@@ -674,6 +704,12 @@ impl Manifest {
                 (raw.entity.is_some(), "[entity]"),
                 (raw.frame.is_some(), "[frame]"),
                 (raw.ray_tracing.is_some(), "[ray_tracing]"),
+                (raw.kept.is_some(), "[kept]"),
+                (!raw.resource.is_empty(), "[[resource]]"),
+                (
+                    raw.options.iter().any(|o| o.resets.is_some()),
+                    "an option's `resets`",
+                ),
             ] {
                 if present {
                     return Err(err(format!(
@@ -754,7 +790,12 @@ impl Manifest {
         {
             return Err(err("`scale` and `output` are keys of [[post]] only".into()));
         }
-        check_post_targets(&raw.post, raw.ray_tracing.is_some()).map_err(err)?;
+        let resets = (raw.options.iter())
+            .filter_map(|o| Some((o.id.clone(), o.resets.clone()?)))
+            .collect();
+        let traced = raw.ray_tracing.is_some();
+        let kept = crate::kept::check(raw.kept, raw.resource, traced, resets).map_err(err)?;
+        check_post_targets(&raw.post, traced, &kept.resources).map_err(err)?;
         if raw.ray_tracing.is_some() && raw.post.is_empty() && raw.material.is_none() {
             return Err(err(
                 "[ray_tracing] needs a [[post]] pass or a [material] stage: `trace` is theirs"
@@ -814,7 +855,6 @@ impl Manifest {
             options.push(option);
         }
         // `RayHit` has a surface's tags and material id, as `MaterialInput` does.
-        let traced = raw.ray_tracing.is_some();
         if !raw.tags.is_empty() && raw.material.is_none() && !traced {
             return Err(err("tags are read by the material stage and by `trace`: \
                  give it a [material] or a [ray_tracing]"
@@ -1126,6 +1166,7 @@ impl Manifest {
             shadow: raw.shadow,
             displacement,
             ray_tracing: raw.ray_tracing,
+            kept,
         })
     }
 
@@ -1204,17 +1245,24 @@ impl Manifest {
     }
 
     /// The pack targets its post passes write (`[[post]] output`), in the order first
-    /// written, with their scale.
+    /// written, with their scale; not the kept textures an `output` names.
     pub fn post_targets(&self) -> Vec<(&str, f32)> {
         let mut out: Vec<(&str, f32)> = Vec::new();
         for p in &self.post {
             if let Some(name) = &p.output
                 && !out.iter().any(|t| t.0 == name)
+                && !self.kept.resources.iter().any(|r| r.name == *name)
             {
                 out.push((name, p.scale.unwrap_or(1.0)));
             }
         }
         out
+    }
+
+    /// Whether the pack declares kept resources or compute passes, which the game doesn't run
+    /// yet.
+    pub fn computes(&self) -> bool {
+        !self.kept.resources.is_empty()
     }
 
     /// Every WGSL file the manifest names, shared files first, each once.
