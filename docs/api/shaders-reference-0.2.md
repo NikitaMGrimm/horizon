@@ -67,6 +67,10 @@ It needs `blend = "linear"`, since a change of primaries is only right in linear
 space the pack's colours are in, and `frame.luminance` holds that space's luminance weights: compute luminance as
 `dot(color, frame.luminance)` and it is right in either. `"bt2020"` passes the check; the game doesn't serve it yet.
 
+A stage is a function your WGSL defines, with the signature below; Horizon puts the prelude (these structs, the
+resources and helpers) before your files and calls the function from its own pass. Your files declare no
+bindings and no entry points, and no names starting with `horizon_`.
+
 ## `[material] coverage`
 
 Which points of terrain are drawn is the engine's unless the pack says otherwise. Under `coverage = "engine"` (the
@@ -78,10 +82,6 @@ holes sets `coverage = "pack"`: the returned alpha then drives the alpha test (b
 terrain, below 0.01 on translucent) and the stage may `discard`. Normal and parallax shading that keeps the
 silhouette needs no `"pack"`, and neither do `[vertex]` and `[displacement]`, which move geometry, not coverage.
 The stage writes no depth of its own either way.
-
-A stage is a function your WGSL defines, with the signature below; Horizon puts the prelude (these structs, the
-resources and helpers) before your files and calls the function from its own pass. Your files declare no
-bindings and no entry points, and no names starting with `horizon_`.
 
 ## Stages
 

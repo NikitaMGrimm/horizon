@@ -103,6 +103,10 @@ It needs `blend = \"linear\"`, since a change of primaries is only right in line
 space the pack's colours are in, and `frame.luminance` holds that space's luminance weights: compute luminance as
 `dot(color, frame.luminance)` and it is right in either. `\"bt2020\"` passes the check; the game doesn't serve it yet.
 
+";
+
+/// 0.2's `[material] coverage`, after the paragraph on what a stage is.
+const COVERAGE_0_2: &str = "\
 ## `[material] coverage`
 
 Which points of terrain are drawn is the engine's unless the pack says otherwise. Under `coverage = \"engine\"` (the
@@ -157,8 +161,11 @@ pub fn markdown(api: Api) -> String {
     }
     out += "A stage is a function your WGSL defines, with the signature below; Horizon puts the prelude (these structs, the\n\
             resources and helpers) before your files and calls the function from its own pass. Your files declare no\n\
-            bindings and no entry points, and no names starting with `horizon_`.\n\n\
-            ## Stages\n\n\
+            bindings and no entry points, and no names starting with `horizon_`.\n\n";
+    if api == Api::V0_2 {
+        out += COVERAGE_0_2;
+    }
+    out += "## Stages\n\n\
             | Stage | In `horizon-shaders.toml` | Your function |\n| --- | --- | --- |\n";
     for &kind in api.stages() {
         let key = match kind {
