@@ -1384,7 +1384,7 @@ impl Game<'_> {
                 .map(|e| e.0.trim_start_matches("minecraft:"))
                 .collect();
             let bounds = m.bounds();
-            self.effects_on_death(&names, bounds, false, Some(m.id), Some(&mut m.random));
+            self.effects_on_death(&names, bounds, m.silent, Some(m.id), Some(&mut m.random));
         }
         self.creatures.deferred_hits = true;
         let event_result = self.handle_mob_events_reusable(&mut events);
@@ -4249,7 +4249,7 @@ impl Game<'_> {
         }
     }
 
-    fn tick_projectiles(&mut self) -> Result<()> {
+    pub(super) fn tick_projectiles(&mut self) -> Result<()> {
         if self.creatures.projectiles.is_empty() {
             self.flush_lan_explosions();
             return self.flush_wind_bursts();
@@ -4498,8 +4498,8 @@ impl Game<'_> {
                     deflections.push(id);
                     continue;
                 }
-                // AbstractWindCharge.tick: out of the world's top it bursts.
-                if wind && keep && p.position.y > 350.0 {
+                // AbstractWindCharge.tick: above the world's top it bursts.
+                if wind && keep && super::wind::above_the_top(self.world.shape, p.position.y) {
                     hits.push((
                         p.clone(),
                         Hit::Block {
@@ -6023,6 +6023,8 @@ impl Game<'_> {
         let Some(index) = self.mob_interaction_target(target) else {
             return Ok(false);
         };
+        // CamelHusk.interact: any click on it keeps it (`setPersistenceRequired`).
+        horizon_client::mobs::camel::keep_on_interact(&mut self.mobs[index]);
         // PlayerInteractTrigger: the name tag as it was before it named the mob.
         let used = self.held().cloned();
         if self.name_mob(index) {
@@ -6032,10 +6034,8 @@ impl Game<'_> {
             }
             return Ok(true);
         }
-        if self
-            .held()
-            .is_some_and(|stack| &*stack.item == "minecraft:shears")
-        {
+        let shears = self.held().is_some_and(|s| &*s.item == "minecraft:shears");
+        if shears {
             let mob = &self.mobs[index];
             let shearable = match mob.species() {
                 Species::Sheep => !mob.extra.sheared && !mob.is_baby(),

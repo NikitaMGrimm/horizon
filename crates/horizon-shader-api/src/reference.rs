@@ -145,7 +145,7 @@ adds it to the light colour, and the expression above leaves it out.
 pub fn markdown() -> String {
     let mut out = format!(
         "# Shader API reference ({API})\n\n\
-         Generated from `crates/horizon-shader-api` (`HORIZON_WRITE_DOCS=1 cargo test -p horizon-shader-api --test reference`\n\
+         Generated from `crates/horizon-shader-api` (`HORIZON_WRITE_DOCS=1 cargo test -p horizon-shader-api --test it reference::`\n\
          rewrites it; the test fails when it drifts). The API's design and pack format: [shaders.md](shaders.md).\n\n"
     );
     out += RULES;
