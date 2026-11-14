@@ -10,10 +10,12 @@ must leave the picture alone carries the frame-identity label (docs/release-flow
 
 Sessions, each a fresh game and world (seed 7) per build:
 
-- vanilla: HDR off and no shader pack: day over water, night with light sources, stained glass, the Nether, the
-  HUD over light: chat over the sun, chat and the crosshair over lava, the pause menu over it, and entities: a pig,
-  a zombie with a helmet and a sword, a glowing sheep and an armour stand, under a low sun.
-- golden_hour: the Golden Hour example pack (shader API 0.1) in SDR, the same world scenes and entities.
+- vanilla: HDR off and no shader pack: day over water, night with light sources, stained glass, the Nether,
+  entities (a hurt cow, a spider, an armour stand in enchanted armour, an arrow, an End crystal, a chest, a bell,
+  a banner, a framed item),
+  and the HUD over light: chat over the sun, chat and the crosshair over lava, the pause
+  menu over it.
+- golden_hour: the Golden Hour example pack (shader API 0.1) in SDR, the same scenes.
 - golden_hour_hdr: Golden Hour with offscreen HDR output on (HORIZON_HDR_OUTPUT=pq): each screenshot and its -hdr.png.
 - hdr_toggle: vanilla started with HDR on (the 16-bit frame), shot, HDR turned off from its settings page, shot.
 - golden_hour_0_2, golden_hour_0_2_hdr: the Golden Hour 0.2 pack (shader API 0.2) on HORIZON_HDR_FRAME=float, in SDR
@@ -21,8 +23,7 @@ Sessions, each a fresh game and world (seed 7) per build:
 - oit, hdr_oit: Improved Transparency with HDR off, and with HDR on the 16-bit frame.
 - visbuffer, hdr_visbuffer: the visibility buffer (HORIZON_VISBUFFER=1) with HDR off, and with HDR on the 16-bit frame.
 - float_hdr, float_oit, float_visbuffer: the float frame (HORIZON_HDR_FRAME=float) with HDR on, drawn forward, with
-  Improved Transparency and with the visibility buffer, the last on a 300-nit display with the HUD at half brightness;
-  float_hdr shoots entities too.
+  Improved Transparency and with the visibility buffer, the last on a 300-nit display with the HUD at half brightness.
 - float_unlit: the float frame with HDR on and HDR Lighting off, on that display.
 - terrain_pack, terrain_pack_hdr: a shader API 0.2 test pack with a material stage, a shadow map and displacement
   (tools/fixtures/shaderpacks/frame_identity_terrain) over a resource pack of LabPBR heights the harness writes
@@ -82,6 +83,8 @@ BUILT_FROM_TOOLS = ('tools/native-hook-fragments/',)
 BUILD = ['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '-p', 'horizon-client-lib', '--bins']
 # 🤖 Agent: Where the overworld scenes are built, high above seed 7's spawn, so terrain below hardly shows.
 X, Y, Z = 8, 160, 8
+# 🤖 Agent: The entities' corner, out of every other viewpoint's sight.
+EX, EZ = X - 28, Z - 30
 
 
 def git(*args, cwd=ROOT):
@@ -337,6 +340,28 @@ def prepare(game):
     for where, _, (x, y, z), _, _ in SCENES.values():
         game.command(f'execute in minecraft:{where} run setblock {int(x // 1)} {y - 1} {int(z // 1)} minecraft:stone')
     game.command('kill @e[type=!player]')
+    # 🤖 Agent: Entities, after the sweep: the world is frozen (HORIZON_STILL), so they stay as summoned. A cow
+    # (shoot hurts it), a cutout texture with full-bright eyes (the spider), enchanted armour and a held enchanted
+    # item, an arrow and an End crystal (drawn apart from the mobs), block entities (a chest, a bell, a banner) and a
+    # framed item. No dropped item: it spins from an angle that differs from run to run.
+    game.command(f'fill {EX - 5} {Y - 1} {EZ - 5} {EX + 5} {Y - 1} {EZ + 4} minecraft:stone')
+    game.command(f'fill {EX - 5} {Y} {EZ + 4} {EX + 5} {Y + 3} {EZ + 4} minecraft:white_concrete')
+    still = 'NoAI:1b,Silent:1b,NoGravity:1b,Rotation:[180f,0f]'
+    game.command(f'summon minecraft:cow {EX - 3.5} {Y} {EZ + 0.5} {{{still}}}')
+    game.command(f'summon minecraft:spider {EX + 3.5} {Y} {EZ + 0.5} {{{still}}}')
+    game.command(f'summon minecraft:armor_stand {EX + 0.5} {Y} {EZ + 0.5} {{ShowArms:1b,NoGravity:1b,Rotation:[180f,0f]}}')
+    stand = '@e[type=minecraft:armor_stand,limit=1]'
+    game.command(f'item replace entity {stand} armor.chest with '
+                 'minecraft:diamond_chestplate[minecraft:enchantments={"minecraft:protection":1}]')
+    game.command(f'item replace entity {stand} weapon.mainhand with '
+                 'minecraft:diamond_sword[minecraft:enchantments={"minecraft:sharpness":1}]')
+    game.command(f'setblock {EX - 2} {Y} {EZ + 3} minecraft:chest[facing=north]')
+    game.command(f'setblock {EX + 2} {Y} {EZ + 3} minecraft:bell[attachment=floor]')
+    game.command(f'setblock {EX + 5} {Y} {EZ + 3} minecraft:red_banner[rotation=8]')
+    game.command(f'summon minecraft:item_frame {EX} {Y + 2} {EZ + 3} '
+                 '{Facing:2b,Item:{id:"minecraft:diamond",count:1}}')
+    game.command(f'summon minecraft:arrow {EX + 2.0} {Y + 1.5} {EZ - 1.0} {{NoGravity:1b}}')
+    game.command(f'summon minecraft:end_crystal {EX - 4.5} {Y} {EZ + 2.5} {{ShowBottom:0b}}')
 
 
 SCENES = {
@@ -345,6 +370,7 @@ SCENES = {
     'night_lights': ('overworld', 18000, (X + 24.5, Y, Z - 4.5), 0, 20),
     'glass': ('overworld', 6000, (X - 23.5, Y, Z - 3.5), 0, 5),
     'nether': ('the_nether', 18000, (0.5, 61, -4.5), 0, 15),
+    'entities': ('overworld', 6000, (EX + 0.5, Y, EZ - 4.5), 0, 5),
     # 🤖 Agent: The HUD over light (HUD below): chat over the sun high in the sky, the hotbar over the sky; and the same
     # view without chat, which shows where the sun's light passes white (hdr_gates).
     'hud_sun': ('overworld', 4000, (X + 0.5, Y + 3, Z - 9.5), -70, -85),
@@ -355,25 +381,8 @@ SCENES = {
     # 🤖 Agent: The relief floor from its south edge, looking north and down, the sun low in the east: displaced
     # stone and sand within [displacement]'s distance, the pillars' shadows over them.
     'relief': ('overworld', 2500, (X - 23.5, Y, Z - 17.5), 180, 35),
-    # 🤖 Agent: Entities on the platform, the sun low in the east: a pig, a zombie with a helmet and a sword, a
-    # glowing sheep (its outline) and an armour stand with a chestplate (SUMMON).
-    'entities': ('overworld', 2500, (X + 0.5, Y + 3, Z - 9.5), 0, 40),
 }
-# 🤖 Agent: What a scene summons before it is shot, still and silent. It stays for the scenes after it, so a
-# session shoots it last. Given NBT, /summon skips finalizeSpawn's random equipment and colours.
-STILL_MOB = 'NoAI:1b,Silent:1b,Rotation:[180f,0f]'
-SUMMON = {'entities': (
-    f'summon minecraft:pig {X - 4} {Y} {Z - 6} {{{STILL_MOB}}}',
-    f'summon minecraft:zombie {X - 1} {Y} {Z - 6} {{{STILL_MOB},equipment:{{head:{{id:"minecraft:iron_helmet",'
-    'count:1},mainhand:{id:"minecraft:iron_sword",count:1}}}',
-    f'summon minecraft:sheep {X + 2} {Y} {Z - 6} {{{STILL_MOB},Glowing:1b}}',
-    f'summon minecraft:armor_stand {X + 5} {Y} {Z - 5} {{ShowArms:1b,Rotation:[180f,0f],'
-    'equipment:{chest:{id:"minecraft:diamond_chestplate",count:1}}}',
-    # 🤖 Agent: No dropped item: the client seeds its bob and spin from its entity id, and the mobs generated with
-    # the terrain take ids from the same counter as their chunks finish, so the item's id, and its pose, moves
-    # between runs (ids 5 apart, 698 pixels of the sword, in 2 of 5 runs).
-)}
-WORLD = ['day_water', 'night_lights', 'glass', 'nether']
+WORLD = ['day_water', 'night_lights', 'glass', 'nether', 'entities']
 # 🤖 Agent: What each HUD scene shows over the world: chat, and the pause menu (its blur and darkening) over it.
 HUD = {'hud_sun': ('chat',), 'hud_lava': ('chat',), 'menu': ('chat', 'pause')}
 # 🤖 Agent: The options a scene turns off while it is shot. Over the sun, clouds and the vignette: either, drawn over
@@ -388,8 +397,10 @@ def shoot(game, out, scene):
     game.command(f'execute in minecraft:{where} run time set {day_time}')
     game.command(f'execute in minecraft:{where} run tp @s {x} {y} {z} {yaw} {pitch}')
     game.ctl('look', yaw, pitch)
-    for c in SUMMON.get(scene, ()):
-        game.command(c)
+    if scene == 'entities':
+        # 🤖 Agent: The hurt flash is the client's, and gone once the cow is sent again (after the Nether): hurt
+        # with the player there, it stays in the frozen world.
+        game.command('damage @e[type=minecraft:cow,limit=1] 1')
     for option in off:
         game.ctl('options-set', option, 'false')
     if 'chat' in shows:
@@ -434,10 +445,10 @@ def set_hdr(game, on):
 
 SESSIONS = {
     # 🤖 Agent: name: (horizon-graphics.txt, extra environment, scenes, HDR turned off after the first shots)
-    'vanilla': ('', {}, WORLD + list(HUD) + ['sun', 'entities'], False),
+    'vanilla': ('', {}, WORLD + list(HUD) + ['sun'], False),
     # 🤖 Agent: An offered HDR output without a system report must leave Auto in SDR.
     'auto_unknown': ('hdr:auto\n', {'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights'], False),
-    'golden_hour': ('', {'HORIZON_SHADER_PACK': 'golden_hour'}, WORLD + ['entities'], False),
+    'golden_hour': ('', {'HORIZON_SHADER_PACK': 'golden_hour'}, WORLD, False),
     'golden_hour_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'golden_hour', 'HORIZON_HDR_OUTPUT': 'pq'},
                         ['day_water', 'night_lights'], False),
     'hdr_toggle': ('hdr:true\n', {'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights'], True),
@@ -453,10 +464,7 @@ SESSIONS = {
     'visbuffer': ('', {'HORIZON_VISBUFFER': '1', 'HORIZON_FLAT_DRAWS': '1'}, ['day_water', 'night_lights'], False),
     'hdr_visbuffer': ('hdr:true\n', {'HORIZON_HDR_OUTPUT': 'pq', 'HORIZON_VISBUFFER': '1', 'HORIZON_FLAT_DRAWS': '1'},
                       ['day_water', 'night_lights'], False),
-    # 🤖 Agent: Entities in each pack and in vanilla, and once in HDR, where the float frame takes them and the glowing
-    # outline under hdr_gates; the packs' HDR sessions draw them as their SDR ones do.
-    'float_hdr': ('hdr:true\n', {'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'},
-                  WORLD + list(HUD) + ['entities'], False),
+    'float_hdr': ('hdr:true\n', {'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'}, WORLD + list(HUD), False),
     'float_oit': ('hdr:true\n', {'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'}, WORLD, False),
     # 🤖 Agent: On a display with little headroom (300 nits), the HUD at half brightness: the tone curve and the HUD's
     # composite have the least room there (hdr_gates). An older file's 50% of a 200-nit paper white: it reads as 100
