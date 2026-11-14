@@ -1471,7 +1471,7 @@ impl Game<'_> {
                             item.target = uuid;
                         }
                     } else {
-                        let r = &mut g.world.random;
+                        let mut r = horizon_client::random_source::entity(); // player.getRandom()
                         let pitch = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
                         g.audio
                             .play("minecraft:entity.item.pickup", Some(p), 0.2, pitch);
@@ -1805,8 +1805,7 @@ impl Game<'_> {
                     c.at = pos;
                 }
             }
-            // Wall-mounted entities do not move.
-            Target::Frame(_) | Target::Painting(_) => {}
+            Target::Frame(_) | Target::Painting(_) => self.teleport_hanging(t, v),
             // The commands leave a natural knot out (`without_knots`).
             Target::Knot(_) => {}
         }
@@ -1840,7 +1839,7 @@ impl Game<'_> {
         rotation: Option<[f32; 2]>,
         turn_riders: bool,
     ) -> R<bool> {
-        match self.teleport_vehicle_across(t, level, pos, rotation, turn_riders) {
+        match self.teleport_any_across(t, level, pos, rotation, turn_riders) {
             Ok(true) => return Ok(true),
             Ok(false) => {}
             Err(error) => {
@@ -2065,38 +2064,6 @@ impl Game<'_> {
         };
         self.feedback(message);
         Ok(targets.len() as i32)
-    }
-    /// `ServerClockManager.getInstance`: commands address clock-keyed state.
-    /// Keep the existing Overworld clock tied to the world's canonical day time.
-    pub(super) fn command_clock_time(&self, clock: &str) -> i64 {
-        if clock == "minecraft:overworld" {
-            self.world.day_time
-        } else {
-            self.ui.command_clocks.get(clock).map_or(0, |c| c.0)
-        }
-    }
-    pub(super) fn set_command_clock_time(&mut self, clock: &str, total: i64) {
-        if clock == "minecraft:overworld" {
-            self.world.day_time = total;
-        } else {
-            self.ui
-                .command_clocks
-                .entry(clock.to_owned())
-                .or_default()
-                .0 = total;
-        }
-    }
-    pub(super) fn command_clock_state(&mut self, clock: &str) -> &mut super::chat::WorldClock {
-        if clock == "minecraft:overworld" {
-            &mut self.ui.clock
-        } else {
-            &mut self
-                .ui
-                .command_clocks
-                .entry(clock.to_owned())
-                .or_default()
-                .1
-        }
     }
     /// `TimeCommand.getDefaultClock`: explicit registered clocks and dimension defaults are
     /// separate; built-in timelines and markers belong only to Overworld.
@@ -4252,30 +4219,7 @@ impl Game<'_> {
             _ => String::new(),
         };
         let message = self.expand_selectors(&raw);
-        // CommandSourceStack.getDisplayName: the executing entity's name.
-        let name = match self.command_source {
-            Some(source) => match source.entity {
-                Some(target) => self.target_name(target),
-                None => source
-                    .block
-                    .and_then(|pos| match self.world.block_entities.get(&pos) {
-                        Some(horizon_client::containers::BlockEntity::CommandBlock(block)) => {
-                            Some(block.name())
-                        }
-                        _ => None,
-                    })
-                    .or_else(|| {
-                        source.cart.and_then(|id| {
-                            self.carts
-                                .iter()
-                                .find(|cart| cart.id == id)
-                                .map(|cart| cart.command.name())
-                        })
-                    })
-                    .unwrap_or_else(|| self.server_name()),
-            },
-            None => self.player_display_name(),
-        };
+        let name = self.source_display_name();
         // A player's command whose output is captured (a function, `execute …
         // run say`, the command harness) gets the announcement with that
         // output, in order; everyone else gets the broadcast.
