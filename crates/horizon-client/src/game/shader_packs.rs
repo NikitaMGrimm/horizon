@@ -103,6 +103,8 @@ pub(crate) struct PickedPack {
     /// where HDR output is on (docs/design/hdr-linear-light.md, The HUD and menus; the renderer
     /// decides, `FrameRequest::shaders_pack`).
     pub shaders_pack: bool,
+    /// Its manifest declares `[ray_tracing]`: the device asks for ray queries (spec #16011).
+    pub ray_tracing: bool,
 }
 impl PickedPack {
     /// What it asks of the renderer's frame.
@@ -111,6 +113,7 @@ impl PickedPack {
             linear_pack: self.linear.is_some(),
             linear_blend: self.linear == Some(horizon_shader_api::Blend::Linear),
             shaders_pack: self.shaders_pack,
+            ray_tracing: self.ray_tracing,
         }
     }
 }
@@ -131,14 +134,16 @@ pub(super) fn picked_pack_shape(settings: &horizon_client::settings::Settings) -
             .is_none_or(|f| !active_pack(&f.to_string_lossy(), &settings.mods).is_empty());
     // One whose manifest doesn't read is about to be refused: it asks as no pack does.
     let own = horizon_shader_api::package::is_pack(&path);
-    let linear = (active && own)
+    // Read once, for the frame and ray tracing alike.
+    let manifest = (active && own)
         .then(|| horizon_shader_api::Pack::read_manifest(&path).ok())
-        .flatten()
-        .map(|m| m.blend);
+        .flatten();
+    let linear = manifest.as_ref().map(|m| m.blend);
     PickedPack {
         draws_flat: active && pack_draws_flat(&path),
         linear,
         shaders_pack: active && !own,
+        ray_tracing: manifest.is_some_and(|m| m.ray_tracing.is_some()),
     }
 }
 
@@ -1184,6 +1189,63 @@ mod native_pack_tests {
             }
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Spec #16011 item 5: the device asks for ray queries when the pick's manifest declares
+    /// `[ray_tracing]`, in a folder or a package; not for another pack, a classic, missing or
+    /// refused one, nor while the mod that owns it is off.
+    #[test]
+    fn a_picked_pack_with_ray_tracing_asks_the_device_for_ray_queries() {
+        use crate::game::native_shaders::{fingerprint, remember};
+        use horizon_client::settings::Settings;
+        let root = std::env::temp_dir().join(format!("horizon-rt-pick-{}", std::process::id()));
+        let manifest = |name: &str, extra: &str| {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let text = format!(
+                "schema = 1\nid = \"fixture\"\nname = \"N\"\nversion = \"1\"\napi = \"0.2\"\n\
+                 {extra}[[post]]\nfile = \"p.wgsl\"\n"
+            );
+            std::fs::write(dir.join(horizon_shader_api::MANIFEST), text).unwrap();
+            dir
+        };
+        let traced = manifest("native-rt_owner", "[ray_tracing]\n");
+        let plain = manifest("plain", "");
+        let classic = root.join("classic");
+        std::fs::create_dir_all(classic.join("shaders")).unwrap();
+        let sample = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../horizon-shader-api/packs/traced_shadows");
+        let package = root.join("traced.hshader");
+        let bytes = horizon_shader_api::Pack::read(&sample)
+            .unwrap()
+            .package()
+            .unwrap();
+        std::fs::write(&package, bytes).unwrap();
+        let mut settings = Settings::default();
+        settings.mods.installed.push(Installed {
+            id: "rt_owner".into(),
+            title: "RT Owner".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(NativePage::default()),
+        });
+        let mut asks = |path: &std::path::Path| {
+            settings.horizon.shader_pack = path.to_string_lossy().into_owned();
+            picked_pack_shape(&settings).frame().ray_tracing
+        };
+        assert!(asks(&traced));
+        assert!(asks(&package));
+        assert!(!asks(&plain));
+        assert!(!asks(&classic));
+        assert!(!asks(&root.join("missing")));
+        assert!(!asks(std::path::Path::new("")));
+        remember(&package, fingerprint(&package), false);
+        assert!(!asks(&package));
+        settings.mods.disabled.insert("rt_owner".into());
+        settings.horizon.shader_pack = traced.to_string_lossy().into_owned();
+        assert!(!picked_pack_shape(&settings).ray_tracing);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

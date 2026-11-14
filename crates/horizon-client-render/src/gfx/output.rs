@@ -89,6 +89,8 @@ pub struct FrameRequest {
     /// output shows at paper white. With no pack available or one of Horizon's own, the frame
     /// is the layered float one wherever HDR output goes.
     pub shaders_pack: bool,
+    /// The pack declares `[ray_tracing]`: the device asks for ray queries (`ray_query`).
+    pub ray_tracing: bool,
 }
 
 /// What a renderer's frame is drawn in, and what the hand, overlays and HUD draw on.
@@ -158,6 +160,22 @@ pub struct EffectiveOutput {
     /// The running shader pack lights the world itself: Horizon lifts none of it, so HDR
     /// Lighting has nothing to switch (`with_pack`).
     pub(crate) pack_lights: bool,
+    /// What its ray tracing is to a pack that asks for it; `None` before a renderer.
+    pub(crate) rays: Option<RayStatus>,
+}
+
+/// What a renderer's ray tracing is to a shader pack with `[ray_tracing]` (spec #16011 item 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum RayStatus {
+    /// It traces rays.
+    Ready,
+    /// The GPU and graphics API have ray queries, but the device was opened without them: the
+    /// pack picked at the next start gets them.
+    Restart,
+    /// The GPU or graphics API has no ray queries.
+    Unsupported,
+    /// `HORIZON_RAY_TRACING` is set to something other than `1`.
+    Off,
 }
 impl Default for EffectiveOutput {
     fn default() -> Self {
@@ -183,6 +201,7 @@ impl EffectiveOutput {
         nits: [203.0, 1000.0, 0.0],
         ui_brightness: 1.0,
         pack_lights: false,
+        rays: None,
     };
     /// This output while a shader pack runs (`pack`), a `shaders/` one or one of Horizon's
     /// own: it lights its world itself, and Horizon lifts nothing.
@@ -295,6 +314,7 @@ pub(crate) fn resolve_output(
         ui_brightness: settings.ui_nits(reading.luminance) as f32
             / settings.paper_white_nits(reading.luminance) as f32,
         pack_lights: false,
+        rays: None,
     }
 }
 
