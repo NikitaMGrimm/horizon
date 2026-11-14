@@ -1,7 +1,7 @@
 //! One of Horizon's own shader packs while it runs (docs/shaders.md): the frame its stages
 //! read, its sky, material, entity and post stages, and the timer of their passes.
 
-use horizon_shader_api::{Report, StageKind};
+use horizon_shader_api::{Report, StageKind, check::CheckedStage};
 
 use super::displace::Displacement;
 use super::native_entity::NativeEntity;
@@ -113,6 +113,13 @@ impl NativePack {
             let scene = scene.and_then(|s| s.traced(camera));
             trace.bind(device, &self.frame, scene.as_ref());
         }
+    }
+
+    /// Whether the pack's rays read the scene's entity layer: its files name `RAY_ENTITY`, and
+    /// its stages trace on this device.
+    pub(in crate::gfx) fn traces_entities(&self) -> bool {
+        let material = self.material.as_ref().and_then(|m| m.scene.as_ref());
+        self.post.traces_entities() || material.is_some_and(|t| t.traces_entities())
     }
 
     /// The pipelines the pack's terrain draws with this frame, and its group 3.
@@ -302,6 +309,7 @@ impl NativePack {
         // The decode and the tonemap run without a chain too.
         let tonemap = others.iter().find(|s| s.kind == StageKind::Tonemap);
         // A `[ray_tracing]` pack's passes as the check built them against the scene.
+        let entities = post.iter().any(CheckedStage::traces_entities);
         let scenes: Vec<(String, naga::Module)> = post
             .iter_mut()
             .filter_map(|s| Some((s.label.clone(), s.scene.take()?)))
@@ -316,7 +324,7 @@ impl NativePack {
             && super::surface_setup::ray_query::on(device)
             && !material.as_ref().is_some_and(traced);
         if !scenes.is_empty() && !refused {
-            let shape = super::native_post::trace::TraceShape::of(terrain);
+            let shape = super::native_post::trace::TraceShape::of(terrain, entities);
             if !post.trace_scene(device, scenes, constants, &shape, &frame.pbr)
                 && let Some(m) = material.as_mut()
             {

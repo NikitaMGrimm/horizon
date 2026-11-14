@@ -253,6 +253,13 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-14: API 0.2 (additions, experimental): under `[ray_tracing]` the scene holds the entities the camera draws in
+  a third layer, only for a pack whose files name its constant, `RAY_ENTITY` (outside a comment; dead code counts).
+  Such a pack's `trace_layers` and `trace_any_layers` take it, its `RayHit` gains `entity`, and on an entity hit
+  `hit_normal_map` and `hit_specular_map` give their defaults; a ray stops where vanilla's entity alpha test keeps the
+  pixel. `trace` and `trace_any` keep reading solid terrain alone. The check refuses a pack's own `RAY_ENTITY` or post
+  `output` by that name there, and a `displacement` or `vertex` that reaches the layer. Packs that don't name it are
+  built from the same WGSL as before, a test holds.
 - 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` the scene holds translucent terrain (water,
   stained glass, ice) in a second layer. Where `trace` is, the prelude gets
   `fn trace_layers(origin, direction, max_distance, layers) -> RayHit`, `fn trace_any_layers(...) -> bool` and the
