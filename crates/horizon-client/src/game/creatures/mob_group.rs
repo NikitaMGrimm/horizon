@@ -368,9 +368,12 @@ impl<M: MobSlot> Group<M> {
         let sampled = super::super::tick_profile::start_mob(&self.mobs[i].mob().kind);
         // The level's stream is one for every lane: a turn that draws from it waits for the
         // turns before it. On its own stream it waits for none.
-        let mut own = self
-            .own_random
-            .then(|| horizon_client::parallel::mob_turn_random(self.mobs[i].mob().id, w.game_time));
+        let mut own = self.own_random.then(|| {
+            LevelRandom::for_level(horizon_client::parallel::mob_turn_random(
+                self.mobs[i].mob().id,
+                w.game_time,
+            ))
+        });
         let kept = horizon_client::mobs::riders::tick(
             &mut self.mobs,
             i,
