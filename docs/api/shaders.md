@@ -253,6 +253,9 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-14: API 0.2 (experimental): `RAY_ENTITY` also holds the camera's own body in first person, so it casts a
+  traced shadow as in third person, with or without `[shadow]`. A ray that starts within a quarter block of the
+  camera (`dot(origin, origin) <= 0.0625`) passes it: it starts inside it.
 - 2026-11-14: API 0.2 (additions, experimental): under `[ray_tracing]` the entity stage gets `RayHit`, the trace
   functions, `hit_normal_map`, `hit_specular_map` and `block_pbr_maps` too, as the material stage has them, where its
   files name a trace function; an entity stage that names none is built from the same WGSL as before, a test holds.
