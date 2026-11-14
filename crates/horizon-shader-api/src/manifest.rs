@@ -545,6 +545,7 @@ fn check_post_targets(post: &[Stage], ray_tracing: bool) -> Result<(), String> {
         "trace_any_layers",
         "RAY_SOLID",
         "RAY_TRANSLUCENT",
+        "RAY_ENTITY",
         "hit_normal_map",
         "hit_specular_map",
         "block_pbr_maps",
