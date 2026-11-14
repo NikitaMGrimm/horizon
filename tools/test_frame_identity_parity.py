@@ -315,13 +315,13 @@ def prepare(game):
     # 🤖 Agent: A lava pool for the HUD over light, north of the platform, behind every other viewpoint and too far
     # for its light to reach them.
     game.command(f'fill {X - 7} {Y - 1} {Z - 35} {X + 7} {Y - 1} {Z - 29} minecraft:lava')
-    # 🤖 Agent: Relief, north-west, behind every other viewpoint: a stone floor with a patch of sand, the blocks
-    # relief_pack gives heights, and smooth stone pillars on its east side whose morning shadows fall across it.
-    lx, lz = X - 24, Z - 24
-    game.command(f'fill {lx - 6} {Y - 1} {lz - 6} {lx + 6} {Y - 1} {lz + 6} minecraft:stone')
-    game.command(f'fill {lx - 3} {Y - 1} {lz - 2} {lx - 1} {Y - 1} {lz} minecraft:sand')
+    # 🤖 Agent: Relief (RELIEF_AT): a stone floor with a patch of sand, the blocks relief_pack gives heights, and smooth
+    # stone pillars on its east side whose morning shadows fall across it.
+    lx, ly, lz = RELIEF_AT
+    game.command(f'fill {lx - 6} {ly - 1} {lz - 6} {lx + 6} {ly - 1} {lz + 6} minecraft:stone')
+    game.command(f'fill {lx - 3} {ly - 1} {lz - 2} {lx - 1} {ly - 1} {lz} minecraft:sand')
     for z in (lz - 4, lz - 1, lz + 2):
-        game.command(f'fill {lx + 4} {Y} {z} {lx + 4} {Y + 2} {z} minecraft:smooth_stone')
+        game.command(f'fill {lx + 4} {ly} {z} {lx + 4} {ly + 2} {z} minecraft:smooth_stone')
     # 🤖 Agent: The Nether: a pocket carved out of its rock, lit by glowstone, lava and soul fire.
     # 🤖 Agent: Carved before the player goes there: the Nether's rock and lava would hold it, and set it on fire.
     game.command('execute in minecraft:the_nether run forceload add -16 -16 16 16')
@@ -337,6 +337,12 @@ def prepare(game):
     game.command('kill @e[type=!player]')
 
 
+# 🤖 Agent: Where the relief floor's centre block stands: 12 blocks up, nothing below it, between the lava pool and
+# x 33..43, z -27..-18, kept free for an items scene. Cast against the scenes' blocks (a 70° frame at 854x480 from
+# every viewpoint's place, yaw and pitch), no other viewpoint sees it, and past its own blocks it sees only sky. Level
+# with the others there is no such place inside the forceloaded square: the viewpoints looking south see every spot
+# not behind a wall, and from behind a wall it is the wall that shows.
+RELIEF_AT = (X + 16, Y + 12, Z - 30)
 SCENES = {
     # 🤖 Agent: name: (where, time of day, the player's feet, yaw, pitch)
     'day_water': ('overworld', 6000, (X + 0.5, Y + 3, Z - 9.5), 0, 25),
@@ -352,7 +358,7 @@ SCENES = {
     'menu': ('overworld', 18000, (X + 0.5, Y + 3, Z - 27.5), 180, 45),
     # 🤖 Agent: The relief floor from its south edge, looking north and down, the sun low in the east: displaced
     # stone and sand within [displacement]'s distance, the pillars' shadows over them.
-    'relief': ('overworld', 2500, (X - 23.5, Y, Z - 17.5), 180, 35),
+    'relief': ('overworld', 2500, (RELIEF_AT[0] + 0.5, RELIEF_AT[1], RELIEF_AT[2] + 6.5), 180, 35),
 }
 WORLD = ['day_water', 'night_lights', 'glass', 'nether']
 # 🤖 Agent: What each HUD scene shows over the world: chat, and the pause menu (its blur and darkening) over it.
