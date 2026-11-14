@@ -56,7 +56,7 @@ impl Renderer {
     /// resident now; another pack, or none, drops it (`ray_query::wanted`: with
     /// `HORIZON_RAY_TRACING=1` every pack keeps one). Called before the pack's first frame, so
     /// the scene is there when it gathers what it traces. A rebuild of the pack that runs keeps
-    /// its kept resources (`NativePack::carry`).
+    /// its kept resources (`NativePack::carry`); else they go before the new pack's are made.
     pub(in crate::gfx) fn replace_native(
         &mut self,
         mut pack: Option<crate::gfx::native_pack::NativePack>,
@@ -64,6 +64,9 @@ impl Renderer {
         if let (Some(new), Some(old)) = (&mut pack, &mut self.native) {
             new.carry(old);
         }
+        let old = self.native.as_mut().and_then(|p| p.post.as_mut());
+        let new = pack.as_mut().and_then(|p| p.post.as_mut());
+        crate::gfx::native_post::kept::install(&self.device, new, old);
         let traces = pack.as_ref().is_some_and(|p| p.traces);
         follow(
             &mut self.ray_scene,

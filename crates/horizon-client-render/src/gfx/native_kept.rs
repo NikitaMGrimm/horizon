@@ -1,20 +1,19 @@
 //! A shader pack's kept resources (#16011 item 4): the storage its `[[resource]]`s declare,
-//! made per view, the layout entries a pass binds them with, what a device lacks for them, and
-//! the epochs that say when they start over. Nothing binds or clears them yet; the game still
-//! refuses such a pack.
+//! made per view when the pack is installed, the layout entries a pass binds them with, what a
+//! device lacks for them, and the epochs that say when they start over. Nothing binds or clears
+//! them yet; the game still refuses such a pack.
 use horizon_shader_api::check::{CheckedStage, Report};
 use horizon_shader_api::kept::{self, Dispatch, Format, Keep, Kept, Shape};
 use horizon_shader_api::stages::{KeptAccess, KeptBinding, kept_bindings};
 use horizon_shader_api::{Manifest, StageKind};
 
 /// One resource: a buffer, or a texture's two versions, which swap each frame.
-#[cfg_attr(not(test), expect(dead_code, reason = "bound from P4a on"))]
 pub(super) enum Held {
     Buffer(wgpu::Buffer),
     Pair([wgpu::Texture; 2]),
 }
 
-/// A pack's kept resources for one view, in `[[resource]]` order.
+/// A pack's kept resources for one view, in `[[resource]]` order: none made until `allocate`.
 pub(super) struct KeptStore {
     kept: Kept,
     held: Vec<Held>,
@@ -26,17 +25,40 @@ pub(super) struct KeptStore {
 
 impl KeptStore {
     /// Every resource of `kept`, zeros, the R-relative textures at `scale` of `size` (R).
+    #[cfg(test)]
     pub(super) fn new(device: &wgpu::Device, kept: &Kept, size: [u32; 2]) -> Self {
-        let held = (kept.resources.iter())
-            .map(|r| make(device, &r.name, r.shape, size))
-            .collect();
-        let kept = kept.clone();
-        let next = ([1, 1], size);
+        let mut store = Self::declared(kept, size);
+        store.allocate(device);
+        store
+    }
+
+    /// The store of `kept` at `size`, nothing made yet.
+    pub(super) fn declared(kept: &Kept, size: [u32; 2]) -> Self {
         Self {
-            kept,
-            held,
+            kept: kept.clone(),
+            held: Vec::new(),
             size,
-            next,
+            next: ([1, 1], size),
+        }
+    }
+
+    /// Makes every resource, zeros, unless they are made.
+    fn allocate(&mut self, device: &wgpu::Device) {
+        if self.held.is_empty() {
+            let (resources, size) = (&self.kept.resources, self.size);
+            self.held = (resources.iter())
+                .map(|r| make(device, &r.name, r.shape, size))
+                .collect();
+        }
+    }
+
+    /// Destroys every resource now, not when the GPU is done with the last frame.
+    fn free(&mut self) {
+        for held in self.held.drain(..) {
+            match held {
+                Held::Buffer(buffer) => buffer.destroy(),
+                Held::Pair(textures) => textures.iter().for_each(wgpu::Texture::destroy),
+            }
         }
     }
 
@@ -56,6 +78,23 @@ impl KeptStore {
                 *held = make(device, &r.name, r.shape, size);
             }
         }
+    }
+}
+
+/// Installs the kept resources of `new`, the post stage of the pack that runs from now on,
+/// where `old`'s ran: a store `new` carried over (`NativePack::carry`, before) stays; else
+/// `old`'s is destroyed before `new`'s is made, so a reload never holds two stores, and a pack
+/// that fails to build never makes one.
+pub(in crate::gfx) fn install(
+    device: &wgpu::Device,
+    new: Option<&mut super::NativePost>,
+    old: Option<&mut super::NativePost>,
+) {
+    if let Some(store) = old.and_then(|p| p.kept.as_mut()) {
+        store.free();
+    }
+    if let Some(store) = new.and_then(|p| p.kept.as_mut()) {
+        store.allocate(device);
     }
 }
 

@@ -1226,7 +1226,7 @@ impl NativePost {
             named: None,
             plan,
             kept: (!resources.is_empty())
-                .then(|| kept::KeptStore::new(device, &manifest.kept, [1, 1])),
+                .then(|| kept::KeptStore::declared(&manifest.kept, [1, 1])),
             format,
             display,
         })

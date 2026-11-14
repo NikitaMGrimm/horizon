@@ -453,3 +453,72 @@ fn a_rebuild_carries_the_epochs_and_options_reset_what_they_name() {
         .is_none()
     );
 }
+
+/// #16011 item 4: a pack's kept resources are made at install (`replace_native`), not while it
+/// builds, so one that fails to build makes none; a reload destroys the old store before it
+/// makes the new one, and a carried store stays. Counted with `Instance::generate_report`.
+#[test]
+fn a_reload_never_holds_two_stores() {
+    let instance = crate::gfx::test_gpu::instance();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        return;
+    };
+    let Ok((device, _)) = pollster::block_on(adapter.request_device(&Default::default())) else {
+        return;
+    };
+    // Live buffers and textures.
+    let count = || {
+        let hub = instance.generate_report()?.hub;
+        Some([hub.buffers.num_allocated, hub.textures.num_allocated])
+    };
+    if count().is_none() {
+        return;
+    }
+    let frame = super::super::NativeFrame::new(
+        &device,
+        None,
+        Vec::new(),
+        Default::default(),
+        None,
+        (horizon_shader_api::Api::V0_2, false),
+    );
+    let post = |resources: &str, colour: &str| {
+        let pass = format!("fn post(input: PostInput) -> vec4<f32> {{ return {colour}; }}\n");
+        let report = report(
+            &format!("{resources}[[post]]\nfile = \"a.wgsl\"\n"),
+            &[("a.wgsl", &pass)],
+        );
+        let stages = (report.stages.into_iter())
+            .filter(|s| s.kind == StageKind::Post)
+            .collect();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        super::super::NativePost::new(&device, stages, &report.manifest, &[], format, &frame, None)
+            .unwrap()
+    };
+    let delta = |from: [usize; 2]| count().map(|c| [c[0] - from[0], c[1] - from[1]]);
+    // Building one makes what building one without resources makes: nothing kept.
+    let before = count().unwrap();
+    let bare = post("", "input.color");
+    let made = delta(before).unwrap();
+    drop(bare);
+    let before = count().unwrap();
+    let mut first = post(BUFFERS, "input.color");
+    assert_eq!(delta(before), Some(made));
+    // Installed: the buffer and the texture's two versions.
+    let built = count().unwrap();
+    install(&device, Some(&mut first), None);
+    assert_eq!(delta(built), Some([1, 2]));
+    // A reload with another file: the first store goes, then the second is made.
+    let mut second = post(BUFFERS, "input.color * 0.5");
+    let built = count().unwrap();
+    install(&device, Some(&mut second), Some(&mut first));
+    assert_eq!(delta(built), Some([0, 0]));
+    assert!(first.kept.as_ref().is_some_and(|k| k.held.is_empty()));
+    // A carried store stays: nothing destroyed, nothing made.
+    let mut third = post(BUFFERS, "input.color * 0.5");
+    third.carry(&mut second);
+    let built = count().unwrap();
+    install(&device, Some(&mut third), Some(&mut second));
+    assert_eq!(delta(built), Some([0, 0]));
+    assert_eq!(third.kept.as_ref().map(|k| k.held.len()), Some(2));
+}
