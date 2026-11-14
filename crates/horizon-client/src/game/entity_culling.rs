@@ -89,6 +89,13 @@ impl EntityCullDecision {
     }
 }
 
+/// `Game::pack_shadow_casters` under a native pack, whose `shadow` pass draws the entities or
+/// whose rays read the scene's entity layer (`ray_entities`): no spans to hide entities with,
+/// and the camera's own model in first person for either, which draws it (its shadow).
+pub(super) const fn native_casters(shadow: bool, ray_entities: bool) -> (bool, bool) {
+    (false, shadow || ray_entities)
+}
+
 impl Game<'_> {
     pub(super) fn prepare_entity_culling(&mut self, camera: glam::DVec3) {
         // The ray scene's entity layer reads the stream's vertices: GPU-posed models have none.
@@ -99,9 +106,7 @@ impl Game<'_> {
         // Spans tell the pack's passes which entities are hidden; without them, nothing changes.
         self.pack_shadow_casters = match (&self.renderer, &self.pack_ids) {
             (Some(r), Some(_)) => r.pack_shadow_casters(),
-            // A native pack's shadow pass has no spans to hide entities with: it only needs
-            // the first-person model.
-            (Some(r), None) => (false, r.native_shadow()),
+            (Some(r), None) => native_casters(r.native_shadow(), r.traces_entities()),
             _ => (false, false),
         };
     }

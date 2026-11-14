@@ -6712,7 +6712,7 @@ impl Game<'_> {
         let player_start = out.len();
         self.mark_motion(player_start, Self::MOTION_OWN_PLAYER);
         self.player_model_geometry(camera, self.own_player_alpha(), &mut out);
-        // A native pack's shadow pass alone gets the first-person model (no per-entity draws).
+        // A native pack's shadow pass and rays alone get the first-person model (no entity draws).
         if self.pack_ids.is_none() && !self.own_body_in_view() {
             self.shadow_only_vertices
                 .borrow_mut()
