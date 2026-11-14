@@ -1,17 +1,26 @@
 //! A shader pack's kept resources (#16011 item 4): the storage its `[[resource]]`s declare,
 //! made per view, the layout entries a pass binds them with, what a device lacks for them, and
-//! the epochs that say when they start over. Each frame of the post chain starts by swapping,
-//! fitting and clearing them (`KeptStore::begin`); nothing binds them yet, and the game still
-//! refuses such a pack.
+//! the epochs that say when they start over; the post chain's passes bind them, and each frame
+//! starts by swapping, fitting and clearing them (`KeptStore::begin`). Compute passes don't run
+//! yet, and the game still refuses such a pack.
 use horizon_shader_api::check::{CheckedStage, Report};
 use horizon_shader_api::kept::{self, Dispatch, Format, Keep, Kept, Shape};
-use horizon_shader_api::stages::{KeptAccess, KeptBinding, kept_bindings};
+use horizon_shader_api::stages::{GROUP, KeptAccess, KeptBinding, kept_bindings};
 use horizon_shader_api::{Manifest, StageKind};
+
+use super::{NativePost, Writes};
 
 /// One resource: a buffer, or a texture's two versions, which swap each frame.
 pub(super) enum Held {
     Buffer(wgpu::Buffer),
     Pair([wgpu::TextureView; 2]),
+}
+
+/// A post pass's kept bindings, and its layouts: the chain's shared entries and those.
+pub(super) struct KeptPass {
+    bindings: Vec<KeptBinding>,
+    pub(super) layout: wgpu::BindGroupLayout,
+    pub(super) pipeline: wgpu::PipelineLayout,
 }
 
 /// A pack's kept resources for one view, in `[[resource]]` order.
@@ -21,6 +30,8 @@ pub(super) struct KeptStore {
     size: [u32; 2],
     /// This frame's view and world epochs and R, from frame prep (`NativePack::write`).
     next: ([u32; 2], [u32; 2]),
+    /// Each post pass's bindings and layouts (`chain`); a rebuild carries the rest, not these.
+    passes: Vec<KeptPass>,
     /// Which version of each texture this frame writes; the other is `_previous`.
     parity: usize,
     /// Real frames handed over (`frame`), and the one `begin` last started.
@@ -43,6 +54,7 @@ impl KeptStore {
             held,
             size,
             next,
+            passes: Vec::new(),
             parity: 0,
             serial: 0,
             begun: 0,
@@ -119,10 +131,137 @@ impl KeptStore {
     }
 }
 
-impl super::NativePost {
-    /// Takes the kept resources of `old`, the pack this one rebuilds (`NativePack::carry`).
+/// The kept resources of a post chain of the ordinary passes `stages` of `manifest`, each pass's
+/// layouts holding the group's `shared` entries and its kept ones: none without
+/// `[[resource]]`, an error where the device can't run them or the pack has compute passes.
+pub(super) fn chain(
+    device: &wgpu::Device,
+    manifest: &Manifest,
+    stages: &[CheckedStage],
+    shared: &[wgpu::BindGroupLayoutEntry],
+) -> Result<Option<KeptStore>, String> {
+    let kept = &manifest.kept;
+    if kept.resources.is_empty() {
+        return Ok(None);
+    }
+    if let Some(why) = refusal(&device.limits(), manifest, stages, shared) {
+        return Err(why);
+    }
+    if manifest.post.iter().any(|p| p.compute) {
+        return Err("compute [[post]] passes don't run yet".into());
+    }
+    let mut store = KeptStore::new(device, kept, [1, 1]);
+    store.passes = (manifest.post.iter())
+        .map(|entry| {
+            let bindings = kept_bindings(manifest, entry);
+            let mut entries = shared.to_vec();
+            entries.extend(layout_entries(
+                kept,
+                &bindings,
+                wgpu::ShaderStages::FRAGMENT,
+            ));
+            let label = Some("Native shader pack post, kept");
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label,
+                entries: &entries,
+            });
+            let mut groups: [Option<&wgpu::BindGroupLayout>; GROUP as usize + 1] =
+                Default::default();
+            groups[GROUP as usize] = Some(&layout);
+            let pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label,
+                bind_group_layouts: &groups,
+                ..Default::default()
+            });
+            KeptPass {
+                bindings,
+                layout,
+                pipeline,
+            }
+        })
+        .collect();
+    Ok(Some(store))
+}
+
+/// Where each `[[post]]` entry's `output` draws: one of the pack's `targets`
+/// (`Manifest::post_targets`), a kept texture, or nowhere of its own (the chain).
+pub(super) fn outputs(manifest: &Manifest, targets: &[(&str, f32)]) -> Vec<Option<Writes>> {
+    let kept = |name| (manifest.kept.resources.iter()).position(|r| r.name == name);
+    (manifest.post.iter())
+        .map(|p| {
+            let name = p.output.as_deref()?;
+            let target = targets.iter().position(|t| t.0 == name).map(Writes::Target);
+            target.or_else(|| kept(name).map(Writes::Kept))
+        })
+        .collect()
+}
+
+/// The format a pass that `writes` off the screen draws in: a kept texture's own, else the
+/// chain's.
+pub(super) fn target(kept: &Option<KeptStore>, writes: Writes) -> wgpu::TextureFormat {
+    match (kept, writes) {
+        (Some(k), Writes::Kept(r)) => match k.kept.resources[r].shape {
+            Shape::Fixed { format: f, .. } | Shape::Scaled { format: f, .. } => format(f),
+            Shape::Buffer { .. } => unreachable!("the check takes only a texture as an output"),
+        },
+        _ => super::INTERMEDIATE,
+    }
+}
+
+/// Post pass `pass`'s kept bindings and layouts, if the chain has kept resources (the tonemap,
+/// `None`, has none).
+pub(super) fn pass(kept: &Option<KeptStore>, pass: Option<usize>) -> Option<&KeptPass> {
+    Some(&kept.as_ref()?.passes[pass?])
+}
+
+/// Post pass `pass`'s kept group entries for the frames whose written version is `parity`.
+pub(super) fn entries(
+    kept: &Option<KeptStore>,
+    pass: Option<usize>,
+    parity: usize,
+) -> Vec<wgpu::BindGroupEntry<'_>> {
+    let (Some(k), Some(p)) = (kept, self::pass(kept, pass)) else {
+        return Vec::new();
+    };
+    (p.bindings.iter())
+        .map(|b| wgpu::BindGroupEntry {
+            binding: b.binding,
+            resource: match (&k.held[b.resource], b.access) {
+                (Held::Buffer(buffer), _) => buffer.as_entire_binding(),
+                (Held::Pair(v), KeptAccess::Previous) => {
+                    wgpu::BindingResource::TextureView(&v[1 - parity])
+                }
+                (Held::Pair(v), _) => wgpu::BindingResource::TextureView(&v[parity]),
+            },
+        })
+        .collect()
+}
+
+/// This frame's set of the cached `groups`, one a parity with kept resources.
+pub(super) fn current<'a>(
+    kept: &Option<KeptStore>,
+    groups: &'a [wgpu::BindGroup],
+) -> &'a [wgpu::BindGroup] {
+    let n = groups.len() / (1 + usize::from(kept.is_some()));
+    &groups[kept.as_ref().map_or(0, |k| k.parity) * n..][..n]
+}
+
+/// This frame's version of kept texture `r`, a pass's output.
+pub(super) fn output(kept: &Option<KeptStore>, r: usize) -> &wgpu::TextureView {
+    match kept.as_ref().map(|k| (&k.held[r], k.parity)) {
+        Some((Held::Pair(v), parity)) => &v[parity],
+        _ => unreachable!("an output is a texture of the chain's store"),
+    }
+}
+
+impl NativePost {
+    /// Takes the kept resources of `old`, the pack this one rebuilds (`NativePack::carry`),
+    /// keeping its own passes' layouts, which its pipelines were made with.
     pub(in crate::gfx) fn carry(&mut self, old: &mut Self) {
-        self.kept = old.kept.take().or(self.kept.take());
+        if let (Some(new), Some(was)) = (&mut self.kept, &mut old.kept) {
+            std::mem::swap(&mut new.passes, &mut was.passes);
+            std::mem::swap(new, was);
+        }
     }
 
     /// Starts this frame's use of the kept resources at R `size` (`KeptStore::begin`).

@@ -342,7 +342,8 @@ impl NativePost {
         shape: &TraceShape<'_>,
         pbr: &[wgpu::TextureView; 2],
     ) -> bool {
-        if scenes.len() != self.passes.len() {
+        // A pass with kept resources doesn't trace yet: its layout has no scene.
+        if scenes.len() != self.passes.len() || self.kept.is_some() {
             return false;
         }
         let build = |layout: &wgpu::BindGroupLayout| {
