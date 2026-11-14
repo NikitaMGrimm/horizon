@@ -631,3 +631,51 @@ fn shader_api_0_1_has_none_of_it() {
     };
     assert!(old(&compute("")).contains("[[post]] compute is shader API 0.2"));
 }
+
+/// #16011 item 4's caps on compute work: 2^25 invocations a dispatch and 2^26 a frame over
+/// every compute pass, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160 rounded
+/// up to them.
+#[test]
+fn compute_work_is_capped_per_dispatch_and_per_frame() {
+    use horizon_shader_api::kept::invocations;
+    let entry = |dispatch: &str, workgroup: &str| {
+        format!(
+            "[[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = {dispatch}\n\
+             workgroup = {workgroup}\n"
+        )
+    };
+    let counted = |dispatch: &str, workgroup: &str| {
+        let m = parse(&entry(dispatch, workgroup)).unwrap();
+        invocations(&m.post[0])
+    };
+    // 3840×2160 in 8×8 workgroups fills them; in 7×7 the edges round up to 549×309 of them.
+    assert_eq!(counted("\"pixels\"", "[8, 8, 1]"), 8_294_400);
+    assert_eq!(counted("\"pixels\"", "[7, 7, 1]"), 549 * 309 * 49);
+    // A partly filled workgroup counts in full.
+    assert_eq!(counted("[100, 1, 1]", "[64, 1, 1]"), 128);
+    // 2^25 a dispatch: 8192×4096 cells take it.
+    parse(&entry("[8192, 4096, 1]", "[256, 1, 1]")).unwrap();
+    refused(
+        &entry("[8192, 4097, 1]", "[256, 1, 1]"),
+        "c.wgsl: 33562624 invocations (whole workgroups, \"pixels\" counted at 3840×2160); a \
+         dispatch may run 33554432",
+    );
+    refused(
+        &entry("[8193, 4096, 1]", "[256, 1, 1]"),
+        "c.wgsl: 34603008 invocations",
+    );
+    // 2^26 a frame: seven pixel dispatches and 9,048,064 cells take it, a workgroup more doesn't.
+    let pixels = entry("\"pixels\"", "[8, 8, 1]").repeat(7);
+    let with = |cells: u32| {
+        format!(
+            "{pixels}{}",
+            entry(&format!("[{cells}, 1, 1]"), "[256, 1, 1]")
+        )
+    };
+    parse(&with(9_048_064)).unwrap();
+    refused(
+        &with(9_048_065),
+        "the compute passes run 67109120 invocations a frame (whole workgroups, \"pixels\" \
+         counted at 3840×2160); a pack may run 67108864",
+    );
+}

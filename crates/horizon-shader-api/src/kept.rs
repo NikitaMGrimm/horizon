@@ -18,6 +18,13 @@ pub const MAX_WORKGROUP: [u32; 3] = [256, 256, 64];
 pub const MAX_WORKGROUP_INVOCATIONS: u32 = 256;
 /// The workgroups a fixed dispatch may need along an axis (wgpu's default limit).
 pub const MAX_WORKGROUPS: u32 = 65535;
+/// The invocations of one dispatch, and of every compute pass of a frame (per view) together,
+/// counted as whole workgroups (`invocations`).
+pub const MAX_DISPATCH_INVOCATIONS: u64 = 1 << 25;
+pub const MAX_FRAME_INVOCATIONS: u64 = 1 << 26;
+/// The size a `"pixels"` dispatch counts as: R isn't known at load, and such a dispatch scales
+/// with R as a fragment pass does, so the caps measure the pack, not the window.
+pub const PIXELS_COUNTED_AS: [u32; 2] = [3840, 2160];
 
 /// What clears a kept resource (docs/api/shaders-reference-0.2.md, "Kept resources").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -260,6 +267,34 @@ fn resource(r: RawResource, ray_tracing: bool) -> Result<Resource, String> {
     })
 }
 
+/// The invocations a compute entry of a valid shape runs, as whole workgroups (every invocation
+/// of a partly filled one runs `compute`), its `"pixels"` at `PIXELS_COUNTED_AS`.
+pub fn invocations(s: &Stage) -> u64 {
+    let (Some(workgroup), Some(dispatch)) = (s.workgroup, s.dispatch) else {
+        return 0;
+    };
+    let [w, h] = PIXELS_COUNTED_AS;
+    let cells = match dispatch {
+        Dispatch::Pixels => [w, h, 1],
+        Dispatch::Cells(cells) => cells,
+    };
+    (cells.iter().zip(workgroup))
+        .map(|(c, w)| u64::from(c.div_ceil(w)) * u64::from(w))
+        .product()
+}
+
+/// The frame's compute entries `computes`, together within `MAX_FRAME_INVOCATIONS`.
+fn frame_invocations<'a>(computes: impl Iterator<Item = &'a Stage>) -> Result<(), String> {
+    let total: u64 = computes.map(invocations).sum();
+    if total > MAX_FRAME_INVOCATIONS {
+        return Err(format!(
+            "the compute passes run {total} invocations a frame (whole workgroups, \"pixels\" \
+             counted at 3840×2160); a pack may run {MAX_FRAME_INVOCATIONS}"
+        ));
+    }
+    Ok(())
+}
+
 /// A compute entry's `workgroup` and `dispatch`.
 fn compute_shape(s: &Stage) -> Result<(), String> {
     let (Some(workgroup), Some(dispatch)) = (s.workgroup, s.dispatch) else {
@@ -288,6 +323,14 @@ fn compute_shape(s: &Stage) -> Result<(), String> {
                 s.file
             ));
         }
+    }
+    let n = invocations(s);
+    if n > MAX_DISPATCH_INVOCATIONS {
+        return Err(format!(
+            "{}: {n} invocations (whole workgroups, \"pixels\" counted at 3840×2160); a \
+             dispatch may run {MAX_DISPATCH_INVOCATIONS}",
+            s.file
+        ));
     }
     Ok(())
 }
@@ -372,7 +415,7 @@ fn post_entries(post: &[Stage]) -> Result<(), String> {
         }
         compute_shape(p)?;
     }
-    Ok(())
+    frame_invocations(post.iter().filter(|p| p.compute))
 }
 
 /// Every rule of the keys above but the targets `check_post_targets` counts.

@@ -257,7 +257,8 @@ draws them itself (the material stage covers terrain only). The first-person han
   every invocation running and `in_bounds` false past the dispatch. Each pass's prelude declares only the resources it
   lists, at group 3 from binding 64. `horizon-shader check` builds compute files as it builds post passes, refuses a
   file that uses a resource its pass doesn't list, and refuses sampling or gathering an `r32float` or `rgba32float`
-  texture (`textureLoad` only). Compute files don't get `trace` yet, and `[material]` can't read kept resources yet:
+  texture (`textureLoad` only). Compute work is capped at 2^25 invocations a dispatch and 2^26 a frame over every
+  compute pass, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160. Compute files don't get `trace` yet, and `[material]` can't read kept resources yet:
   both come in later steps. The game refuses a pack with a compute pass until a later Horizon runs it. Packs without
   them are built from the same WGSL as before, a test holds.
 - 2026-11-13: API 0.2 (additions, experimental, not run yet): kept resources (#16011 item 4). `[[resource]]`

@@ -3,8 +3,9 @@
 use crate::check::{MAX_EXPRESSIONS, MAX_TEXTURE_READS};
 use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT, SURFACE, Struct};
 use crate::kept::{
-    Element, Format, MAX_BUFFER_BYTES, MAX_COMPUTE_POST, MAX_FIXED_TEXTURE_BYTES, MAX_RESOURCES,
-    MAX_WORKGROUP, MAX_WORKGROUP_INVOCATIONS,
+    Element, Format, MAX_BUFFER_BYTES, MAX_COMPUTE_POST, MAX_DISPATCH_INVOCATIONS,
+    MAX_FIXED_TEXTURE_BYTES, MAX_FRAME_INVOCATIONS, MAX_RESOURCES, MAX_WORKGROUP,
+    MAX_WORKGROUP_INVOCATIONS, PIXELS_COUNTED_AS,
 };
 use crate::manifest::{Api, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES};
 use crate::package::{MAX_TOTAL, MAX_WGSL};
@@ -214,9 +215,12 @@ fn kept() -> String {
     out + &format!(
         "Limits: {MAX_RESOURCES} resources, {MAX_COMPUTE_POST} compute `[[post]]` entries; {} MiB of buffers and {} KiB of\n\
          fixed-size textures, both versions counted; each R-relative kept texture takes two of the post targets `output`s share; a workgroup of up to {MAX_WORKGROUP:?} and\n\
-         {MAX_WORKGROUP_INVOCATIONS} invocations.\n\n",
+         {MAX_WORKGROUP_INVOCATIONS} invocations; {MAX_DISPATCH_INVOCATIONS} invocations a dispatch and {MAX_FRAME_INVOCATIONS} a frame over every\n\
+         compute pass, counted as whole workgroups, a `\"pixels\"` dispatch as {}×{} (R isn't known at load).\n\n",
         MAX_BUFFER_BYTES >> 20,
-        MAX_FIXED_TEXTURE_BYTES >> 10
+        MAX_FIXED_TEXTURE_BYTES >> 10,
+        PIXELS_COUNTED_AS[0],
+        PIXELS_COUNTED_AS[1]
     )
 }
 
