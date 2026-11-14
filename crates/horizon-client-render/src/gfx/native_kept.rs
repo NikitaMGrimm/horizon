@@ -1,6 +1,7 @@
 //! A shader pack's kept resources (#16011 item 4): the storage its `[[resource]]`s declare,
 //! made per view, the layout entries a pass binds them with, what a device lacks for them, and
-//! the epochs that say when they start over. Nothing binds or clears them yet; the game still
+//! the epochs that say when they start over. Each frame of the post chain starts by swapping,
+//! fitting and clearing them (`KeptStore::begin`); nothing binds them yet, and the game still
 //! refuses such a pack.
 use horizon_shader_api::check::{CheckedStage, Report};
 use horizon_shader_api::kept::{self, Dispatch, Format, Keep, Kept, Shape};
@@ -8,10 +9,9 @@ use horizon_shader_api::stages::{KeptAccess, KeptBinding, kept_bindings};
 use horizon_shader_api::{Manifest, StageKind};
 
 /// One resource: a buffer, or a texture's two versions, which swap each frame.
-#[cfg_attr(not(test), expect(dead_code, reason = "bound from P4a on"))]
 pub(super) enum Held {
     Buffer(wgpu::Buffer),
-    Pair([wgpu::Texture; 2]),
+    Pair([wgpu::TextureView; 2]),
 }
 
 /// A pack's kept resources for one view, in `[[resource]]` order.
@@ -19,9 +19,15 @@ pub(super) struct KeptStore {
     kept: Kept,
     held: Vec<Held>,
     size: [u32; 2],
-    /// This frame's view and world epochs and R, from frame prep (`NativePack::write`), which
-    /// it clears and fits by from P4a on.
+    /// This frame's view and world epochs and R, from frame prep (`NativePack::write`).
     next: ([u32; 2], [u32; 2]),
+    /// Which version of each texture this frame writes; the other is `_previous`.
+    parity: usize,
+    /// Real frames handed over (`frame`), and the one `begin` last started.
+    serial: u32,
+    begun: u32,
+    /// The epochs the resources were last cleared for.
+    cleared: [u32; 2],
 }
 
 impl KeptStore {
@@ -37,18 +43,24 @@ impl KeptStore {
             held,
             size,
             next,
+            parity: 0,
+            serial: 0,
+            begun: 0,
+            cleared: [1, 1],
         }
     }
 
-    /// Takes this frame's `epochs` (view, world) and R, which it clears and fits by.
+    /// Takes this frame's `epochs` (view, world) and R, which it clears and fits by: a real
+    /// frame, which `begin` starts once.
     pub(super) fn frame(&mut self, epochs: [u32; 2], size: [u32; 2]) {
         self.next = (epochs, size);
+        self.serial = self.serial.wrapping_add(1);
     }
 
-    /// Remakes the R-relative textures, as zeros, when R changes.
-    pub(super) fn fit(&mut self, device: &wgpu::Device, size: [u32; 2]) {
+    /// Remakes the R-relative textures, as zeros, when R changes; whether it did.
+    pub(super) fn fit(&mut self, device: &wgpu::Device, size: [u32; 2]) -> bool {
         if size == self.size {
-            return;
+            return false;
         }
         self.size = size;
         for (r, held) in self.kept.resources.iter().zip(&mut self.held) {
@@ -56,6 +68,54 @@ impl KeptStore {
                 *held = make(device, &r.name, r.shape, size);
             }
         }
+        true
+    }
+
+    /// Starts a frame of the chain at R `size`: fits R, and once a real frame (however often
+    /// it is called) swaps the textures' versions and clears, in `encoder`, the `keep = "view"`
+    /// resources when the view epoch moved and the `keep = "world"` ones when the world's did.
+    /// Whether textures were remade, so bind groups holding them go.
+    pub(super) fn begin(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+    ) -> bool {
+        let remade = self.fit(device, size);
+        if self.begun == self.serial {
+            return remade;
+        }
+        (self.begun, self.parity) = (self.serial, 1 - self.parity);
+        let epochs = self.next.0;
+        let moved = [0, 1].map(|i| epochs[i] != self.cleared[i]);
+        self.cleared = epochs;
+        for (r, held) in self.kept.resources.iter().zip(&self.held) {
+            if !moved[usize::from(r.keep == Keep::World)] {
+                continue;
+            }
+            match held {
+                Held::Buffer(buffer) => encoder.clear_buffer(buffer, 0, None),
+                // `CLEAR_TEXTURE` is optional: a render pass clears.
+                Held::Pair(views) => {
+                    for view in views {
+                        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Kept resource clear"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            ..Default::default()
+                        }));
+                    }
+                }
+            }
+        }
+        remade
     }
 }
 
@@ -63,6 +123,18 @@ impl super::NativePost {
     /// Takes the kept resources of `old`, the pack this one rebuilds (`NativePack::carry`).
     pub(in crate::gfx) fn carry(&mut self, old: &mut Self) {
         self.kept = old.kept.take().or(self.kept.take());
+    }
+
+    /// Starts this frame's use of the kept resources at R `size` (`KeptStore::begin`).
+    pub(super) fn begin_kept(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+    ) {
+        if (self.kept.as_mut()).is_some_and(|k| k.begin(device, encoder, size)) {
+            self.groups = None;
+        }
     }
 
     /// Hands the kept resources this frame's `epochs` (view, world) and R (`NativePack::write`).
@@ -230,7 +302,7 @@ fn format(format: Format) -> wgpu::TextureFormat {
 fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held {
     let pair = |f, [width, height]: [u32; 2]| {
         [0, 1].map(|_| {
-            device.create_texture(&wgpu::TextureDescriptor {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(name),
                 size: wgpu::Extent3d {
                     width,
@@ -247,7 +319,8 @@ fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held
                     | wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
-            })
+            });
+            texture.create_view(&Default::default())
         })
     };
     match shape {

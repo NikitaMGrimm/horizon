@@ -1263,9 +1263,6 @@ impl NativePost {
         history_reset: bool,
         scene: Option<&trace::Traced<'_>>,
     ) {
-        if let Some(kept) = &mut self.kept {
-            kept.fit(device, size);
-        }
         if let Some(d) = &mut self.display {
             if d.scene.as_ref().is_none_or(|s| s.0 != size) {
                 d.scene = Some((
@@ -1501,6 +1498,7 @@ impl NativePost {
         let window = [screen.texture().width(), screen.texture().height()];
         let scene = scene.and_then(|(scene, camera)| scene.traced(camera));
         let scene = scene.as_ref();
+        self.begin_kept(device, encoder, size);
         self.prepare(device, world, size, window, history_reset, scene);
         if let Some(t) = timing.as_deref_mut() {
             t.mark(device, encoder, (world.0, self.format));

@@ -55,6 +55,7 @@ fn sizes(store: &KeptStore) -> Vec<(u64, Option<[u32; 2]>)> {
                 (b.size(), None)
             }
             Held::Pair([a, b]) => {
+                let (a, b) = (a.texture(), b.texture());
                 let usage = T::STORAGE_BINDING | T::TEXTURE_BINDING | T::RENDER_ATTACHMENT;
                 assert_eq!((a.usage(), b.usage()), (usage, usage));
                 assert_eq!((size(a), a.format()), (size(b), b.format()));
@@ -78,7 +79,7 @@ fn each_shape_is_made_with_its_size_and_usages_and_fit_remakes_the_scaled_ones()
     let Held::Pair([r32, _]) = &store.held[7] else {
         panic!("a texture")
     };
-    assert_eq!(r32.format(), wgpu::TextureFormat::R32Float);
+    assert_eq!(r32.texture().format(), wgpu::TextureFormat::R32Float);
     store.fit(&device, [40, 9]);
     assert_eq!(
         sizes(&store),
@@ -109,13 +110,9 @@ fn every_shape_allocates_and_binds_without_a_validation_error() {
                 label: None,
                 entries: &layout_entries(&kept, &[binding], visibility),
             });
-            let view;
             let resource = match held {
                 Held::Buffer(b) => b.as_entire_binding(),
-                Held::Pair([t, _]) => {
-                    view = t.create_view(&Default::default());
-                    wgpu::BindingResource::TextureView(&view)
-                }
+                Held::Pair([view, _]) => wgpu::BindingResource::TextureView(view),
             };
             let _group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -452,4 +449,37 @@ fn a_rebuild_carries_the_epochs_and_options_reset_what_they_name() {
         )
         .is_none()
     );
+}
+
+/// `begin` starts a real frame (`frame`) once, however often it is called: it swaps the
+/// versions then, records its clears of every shape validly (the view's when the view epoch
+/// moved, the world's when the world's did), and says when a new R remade textures. Run with
+/// `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn begin_starts_a_frame_once_and_clears_what_the_epochs_moved() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let mut kept = every_shape();
+    for r in kept.resources.iter_mut().step_by(2) {
+        r.keep = horizon_shader_api::kept::Keep::World;
+    }
+    let mut store = KeptStore::new(&device, &kept, [8, 8]);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut begin = |store: &mut KeptStore, size| {
+        let remade = store.begin(&device, &mut encoder, size);
+        (remade, store.parity, store.cleared)
+    };
+    assert_eq!(begin(&mut store, [8, 8]), (false, 0, [1, 1]));
+    store.frame([1, 1], [8, 8]);
+    assert_eq!(begin(&mut store, [8, 8]), (false, 1, [1, 1]));
+    assert_eq!(begin(&mut store, [8, 8]), (false, 1, [1, 1]));
+    store.frame([2, 1], [8, 8]);
+    assert_eq!(begin(&mut store, [8, 8]), (false, 0, [2, 1]));
+    store.frame([3, 2], [4, 4]);
+    assert_eq!(begin(&mut store, [4, 4]), (true, 1, [3, 2]));
+    queue.submit([encoder.finish()]);
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
 }
