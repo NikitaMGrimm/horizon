@@ -1384,7 +1384,7 @@ impl Game<'_> {
                 .map(|e| e.0.trim_start_matches("minecraft:"))
                 .collect();
             let bounds = m.bounds();
-            self.effects_on_death(&names, bounds, false, Some(m.id), Some(&mut m.random));
+            self.effects_on_death(&names, bounds, m.silent, Some(m.id), Some(&mut m.random));
         }
         self.creatures.deferred_hits = true;
         let event_result = self.handle_mob_events_reusable(&mut events);
@@ -6023,6 +6023,8 @@ impl Game<'_> {
         let Some(index) = self.mob_interaction_target(target) else {
             return Ok(false);
         };
+        // CamelHusk.interact: any click on it keeps it (`setPersistenceRequired`).
+        horizon_client::mobs::camel::keep_on_interact(&mut self.mobs[index]);
         // PlayerInteractTrigger: the name tag as it was before it named the mob.
         let used = self.held().cloned();
         if self.name_mob(index) {
@@ -6032,10 +6034,8 @@ impl Game<'_> {
             }
             return Ok(true);
         }
-        if self
-            .held()
-            .is_some_and(|stack| &*stack.item == "minecraft:shears")
-        {
+        let shears = self.held().is_some_and(|s| &*s.item == "minecraft:shears");
+        if shears {
             let mob = &self.mobs[index];
             let shearable = match mob.species() {
                 Species::Sheep => !mob.extra.sheared && !mob.is_baby(),
@@ -7477,50 +7477,6 @@ pub(super) fn from_loot(stack: &horizon_world::loot::LootStack) -> ItemStack {
         item.data_mut().set_loot_component(id, value);
     }
     item
-}
-impl Game<'_> {
-    /// The rest of `NetherPortalBlock.randomTick` after a won roll: with a
-    /// player close enough for spawning, a zombified piglin spawns on the block
-    /// under the portal column when it is a valid spawn.
-    pub(super) fn portal_spawn(&mut self, pos: [i32; 3]) {
-        // ChunkMap.anyPlayerCloseEnoughForSpawning: a non-spectator within 128
-        // blocks of the chunk centre.
-        let centre = [
-            f64::from((pos[0] >> 4) * 16 + 8),
-            f64::from((pos[2] >> 4) * 16 + 8),
-        ];
-        let close = self.level_players().iter().any(|p| {
-            let (dx, dz) = (p.position.x - centre[0], p.position.z - centre[1]);
-            !p.spectator && dx * dx + dz * dz < 16384.0
-        });
-        if !close {
-            return;
-        }
-        let mut y = pos[1];
-        while &*self
-            .res
-            .facts()
-            .get(self.world.block(pos[0], y, pos[2]))
-            .name
-            == "minecraft:nether_portal"
-        {
-            y -= 1;
-        }
-        // isValidSpawn: a sturdy top face (portal frames emit no light).
-        let below = self.res.facts().get(self.world.block(pos[0], y, pos[2]));
-        if below.sturdy_full & (1 << 1) == 0 {
-            return;
-        }
-        let at = [
-            f64::from(pos[0]) + 0.5,
-            f64::from(y + 1),
-            f64::from(pos[2]) + 0.5,
-        ];
-        // setPortalCooldown: the new piglin does not travel at once.
-        if let Some(id) = self.spawn_mob("minecraft:zombified_piglin", at, false) {
-            self.set_portal_cooldown(id);
-        }
-    }
 }
 /// `LivingEntity.knockback` on `p`: [`Game::knock_back_player`]; 1.8.9's
 /// `EntityLivingBase.knockBack` under `legacy` rules.
