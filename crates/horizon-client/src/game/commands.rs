@@ -766,7 +766,6 @@ impl Game<'_> {
         origin: [f64; 3],
     ) -> Vec<(Target, f64)> {
         let level = self.experience.level;
-        let creative = self.creative;
         // EntitySelector tests the type before any predicate. With no scores=
         // or team= (whose holders may be made as they are read), the rest of
         // the extra filter is a pure test of each candidate, so the ones of
@@ -798,7 +797,7 @@ impl Game<'_> {
                     return None;
                 }
                 for (name, neg) in &s.names {
-                    let n = self.target_name(t).plain();
+                    let n = self.target_plain_name(t);
                     if (n == *name) == *neg {
                         return None;
                     }
@@ -807,7 +806,8 @@ impl Game<'_> {
                     return None;
                 }
                 let player = match t {
-                    Target::Player => Some((level, if creative { "creative" } else { "survival" })),
+                    // ServerPlayer.gameMode: the real mode, not `creative`.
+                    Target::Player => Some((level, self.mode.name())),
                     Target::Guest(conn) => self.guest_level_and_mode(conn),
                     _ => None,
                 };
@@ -1593,7 +1593,7 @@ impl Game<'_> {
                 // in it (whose chunks lose their tickets) is abandoned.
                 if let Some(conn) = self.lan_acting {
                     horizon_client::lan::hub::teleport_cause(Some("command"));
-                    self.server_trips.retain(|trip| !trip.is(conn));
+                    self.hold_for_chunks(conn, v);
                 }
                 let from = self
                     .player
@@ -3296,33 +3296,11 @@ impl Game<'_> {
         }
         Ok(count)
     }
-    /// Player.giveExperiencePoints including negative amounts.
-    /// The caller reports the level change to the mods.
+    /// Player.giveExperiencePoints including negative amounts, which
+    /// `Experience::give` walks down a level at a time. The caller reports the
+    /// level change to the mods.
     fn give_points(&mut self, amount: i32) {
-        let e = &mut self.experience;
-        let mut sound_level = None;
-        e.progress += amount as f32 / horizon_client::entities::Experience::needed(e.level) as f32;
-        e.total = e.total.saturating_add(amount).clamp(0, i32::MAX);
-        while e.progress < 0.0 {
-            let f = e.progress * horizon_client::entities::Experience::needed(e.level) as f32;
-            if e.level > 0 {
-                e.level -= 1;
-                e.progress = 1.0 + f / horizon_client::entities::Experience::needed(e.level) as f32;
-            } else {
-                e.level = 0;
-                e.progress = 0.0;
-            }
-        }
-        while e.progress >= 1.0 {
-            e.progress =
-                (e.progress - 1.0) * horizon_client::entities::Experience::needed(e.level) as f32;
-            e.level += 1;
-            if e.level % 5 == 0 {
-                sound_level.get_or_insert(e.level);
-            }
-            e.progress /= horizon_client::entities::Experience::needed(e.level) as f32;
-        }
-        if let Some(level) = sound_level {
+        if let Some(level) = self.experience.give(amount) {
             self.play_level_up(1, level);
         }
     }
