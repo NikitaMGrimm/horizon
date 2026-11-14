@@ -51,7 +51,7 @@ impl<'a> TraceShape<'a> {
 /// What a stage built against the scene reads besides the TLAS and the store.
 pub(in crate::gfx) struct Rays {
     /// The prelude's `horizon_ray_space`: the camera in the scene's space, `split`, the
-    /// scene's counts of solid and of terrain instances, and the entity layer's three bases.
+    /// scene's counts of solid and of terrain instances, and the entity layer's four bases.
     space: wgpu::Buffer,
     /// The prelude's `horizon_ray_layers`.
     layers: wgpu::Buffer,
@@ -369,10 +369,10 @@ impl Rays {
 
 /// `horizon_RaySpace`'s twelve words for `scene`, its sprite arrays holding `split` layers each:
 /// the retained block entities' first instance at word 6, and the entity layer's bases from word
-/// 8, where WGSL aligns a `vec3<u32>`.
+/// 8, where WGSL aligns a `vec4<u32>`.
 pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 12] {
     let [x, y, z] = scene.camera.map(f32::to_bits);
-    let [a, b, c] = scene.entities.as_ref().map_or([0; 3], |e| e.bases);
+    let [a, b, c, d] = scene.entities.as_ref().map_or([0; 4], |e| e.bases);
     let retained = scene.entities.as_ref().map_or(0, |e| e.retained_instances);
     let instances = [scene.solid_instances, scene.translucent_instances];
     [
@@ -387,7 +387,7 @@ pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 12] {
         a,
         b,
         c,
-        0,
+        d,
     ]
 }
 
