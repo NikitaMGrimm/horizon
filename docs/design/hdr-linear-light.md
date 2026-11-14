@@ -268,6 +268,7 @@ pack's post chain, or the frame under linear storage), where bright pixels would
 interpolates the float frame's light before the tone curve, and the made frame goes through the tone curve, the HUD's
 layer and HDR output's last pass as the real one does; the compatibility frame keeps it off with HDR output.
 The rules such a pass keeps now are in [hdr-passes.md](../hdr-passes.md).
+Where a 0.2 pack's stages, post chain and `[tonemap]` sit around them is in [shader-api-frame.md](shader-api-frame.md) (proposed).
 
 ## Tests
 
