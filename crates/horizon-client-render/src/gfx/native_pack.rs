@@ -4,7 +4,7 @@
 use horizon_shader_api::{Report, StageKind, check::CheckedStage};
 
 use super::displace::Displacement;
-use super::native_entity::NativeEntity;
+use super::native_entity::{EntityPipelines, NativeEntity};
 use super::native_material::{DisplacedShape, MaterialPipelines, NativeMaterial, TerrainShape};
 use super::native_post::{NativeFrame, NativePost};
 use super::native_shadow::{NativeShadow, ShadowGrid};
@@ -97,20 +97,26 @@ impl NativePack {
         let post = self.post.trace(queue, scene.as_ref());
         let material = self.material.as_ref();
         let terrain = material.and_then(|m| m.trace(queue, scene.as_ref()));
-        self.frame.ray_distance = post.or(terrain);
+        let entity = self.entity.as_ref().and_then(|e| e.scene.as_ref());
+        let entities = entity.and_then(|e| e.trace(queue, scene.as_ref()));
+        self.frame.ray_distance = post.or(terrain).or(entities);
         self.frame.write(queue, frame, size, display);
     }
 
-    /// Joins the frame's group with this frame's `scene` from `camera` for a material stage
-    /// that traces: after the frame's group changed for this frame, before the terrain draws.
+    /// Joins the frame's group with this frame's `scene` from `camera` for a material or entity
+    /// stage that traces: after the frame's group changed for this frame, before the terrain
+    /// and the entities draw.
     pub(in crate::gfx) fn bind_scene(
         &mut self,
         device: &wgpu::Device,
         scene: Option<&RayScene>,
         camera: glam::DVec3,
     ) {
+        let scene = scene.and_then(|s| s.traced(camera));
         if let Some(trace) = self.material.as_mut().and_then(|m| m.scene.as_mut()) {
-            let scene = scene.and_then(|s| s.traced(camera));
+            trace.bind(device, &self.frame, scene.as_ref());
+        }
+        if let Some(trace) = self.entity.as_mut().and_then(|e| e.scene.as_mut()) {
             trace.bind(device, &self.frame, scene.as_ref());
         }
     }
@@ -119,7 +125,16 @@ impl NativePack {
     /// its stages trace on this device.
     pub(in crate::gfx) fn traces_entities(&self) -> bool {
         let material = self.material.as_ref().and_then(|m| m.scene.as_ref());
-        self.post.traces_entities() || material.is_some_and(|t| t.traces_entities())
+        let entity = self.entity.as_ref().and_then(|e| e.scene.as_ref());
+        self.post.traces_entities()
+            || material.is_some_and(|t| t.traces_entities())
+            || entity.is_some_and(|t| t.traces_entities())
+    }
+
+    /// The pipelines the pack's entities draw with this frame, and its group 3, with an entity
+    /// stage.
+    pub(in crate::gfx) fn entities(&self) -> Option<(&EntityPipelines, &wgpu::BindGroup)> {
+        Some(self.entity.as_ref()?.drawn(&self.frame.group))
     }
 
     /// The pipelines the pack's terrain draws with this frame, and its group 3.
@@ -298,12 +313,13 @@ impl NativePack {
                 )
             })
             .transpose()?;
-        let entity = others
+        let mut entity = others
             .iter()
             .find(|s| s.kind == StageKind::Entity)
             .map(|stage| {
                 let groups = [terrain.entities, terrain.retained_entities];
-                NativeEntity::new(device, format, groups, &frame, stage, constants)
+                let shape = super::native_post::trace::TraceShape::of(terrain, false);
+                NativeEntity::new(device, format, groups, &frame, (stage, &shape), constants)
             })
             .transpose()?;
         // The decode and the tonemap run without a chain too.
@@ -316,20 +332,30 @@ impl NativePack {
             .collect();
         let manifest = &report.manifest;
         let mut post = NativePost::new(device, post, manifest, constants, format, &frame, tonemap)?;
-        // One scene for every stage, as `frame.has_ray_tracing` says: where the material stage
-        // traces and the device refuses its pipelines, the post passes keep missing too.
-        let traced = |m: &NativeMaterial| m.scene.is_some();
-        let wanted = |s: &horizon_shader_api::check::CheckedStage| s.scene_source.is_some();
-        let refused = others.iter().any(wanted)
-            && super::surface_setup::ray_query::on(device)
-            && !material.as_ref().is_some_and(traced);
-        if !scenes.is_empty() && !refused {
+        // One scene for every stage, as `frame.has_ray_tracing` says: where the material or the
+        // entity stage traces and the device refuses its pipelines, the other stages keep
+        // missing too.
+        let wanted = |kind| {
+            let wants = |s: &CheckedStage| s.kind == kind && s.scene_source.is_some();
+            others.iter().any(wants)
+        };
+        let lacks = |kind, built: bool| wanted(kind) && !built;
+        let refused = super::surface_setup::ray_query::on(device)
+            && (lacks(
+                StageKind::Material,
+                material.as_ref().is_some_and(|m| m.scene.is_some()),
+            ) || lacks(
+                StageKind::Entity,
+                entity.as_ref().is_some_and(|e| e.scene.is_some()),
+            ));
+        let tracing = !scenes.is_empty();
+        let posted = tracing && !refused && {
             let shape = super::native_post::trace::TraceShape::of(terrain, entities);
-            if !post.trace_scene(device, scenes, constants, &shape, &frame.pbr)
-                && let Some(m) = material.as_mut()
-            {
-                m.scene = None;
-            }
+            post.trace_scene(device, scenes, constants, &shape, &frame.pbr)
+        };
+        if refused || (tracing && !posted) {
+            material.iter_mut().for_each(|m| m.scene = None);
+            entity.iter_mut().for_each(|e| e.scene = None);
         }
         let mut labels: Vec<String> = sky.iter().map(|s| s.label.clone()).collect();
         labels.extend(
@@ -450,6 +476,102 @@ mod tests {
         let report = check(&Pack::from_files(files).unwrap()).unwrap();
         let built = NativePack::new(&device, &queue, &terrain, report, &[], Default::default());
         assert!(built.is_err(), "the pack should be refused");
+    }
+
+    /// On a device with ray queries, an entity stage that traces is built a second time against
+    /// the scene, beside the entities' own groups, with the entity layer's bindings where the
+    /// pack names `RAY_ENTITY`; one that doesn't trace is built once, as before.
+    #[test]
+    fn an_entity_stage_that_traces_is_built_against_the_scene() {
+        use horizon_shader_api::{MANIFEST, Pack, check};
+        let ray_query = crate::gfx::surface_setup::ray_query::ray_scene::entity_tests::ray_device;
+        let Some((device, queue)) = ray_query() else {
+            eprintln!("no GPU with ray queries: skipped");
+            return;
+        };
+        let layout = |entries: &[wgpu::BindGroupLayoutEntry]| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries,
+            })
+        };
+        let entities = layout(&super::super::native_entity::entity_entries());
+        // The retained block entities' place, read by their vertex shader only.
+        let retained = layout(&[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }]);
+        let empty = layout(&[]);
+        let sprites = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let views: Vec<_> = (0..8)
+            .map(|_| {
+                sprites.create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2Array),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let terrain = TerrainShape {
+            globals: &empty,
+            flat: None,
+            sprites: [8.0, 1.0],
+            sprite_views: &views,
+            format: wgpu::TextureFormat::Rgba16Float,
+            linear: true,
+            sprite_tags: &[],
+            sprite_materials: &[],
+            entities: &entities,
+            retained_entities: &retained,
+            weather_groups: [&empty, &empty],
+            pbr: None,
+        };
+        let build = |entity: &str| {
+            let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
+                [entity]\nfile = \"entity.wgsl\"\n[ray_tracing]\n";
+            let files = [(MANIFEST, manifest), ("entity.wgsl", entity)]
+                .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+                .into();
+            let report = check(&Pack::from_files(files).unwrap()).unwrap();
+            let lights = Default::default();
+            NativePack::new(&device, &queue, &terrain, report, &[], lights)
+                .unwrap()
+                .0
+        };
+        let sun = "fn entity(input: EntityInput) -> Surface {\n    \
+            let start = input.position + input.normal * 0.05;\n    \
+            let shade = select(1.0, 0.4, trace_any_layers(start, frame.sun_direction, 64.0, LAYERS));\n    \
+            return Surface(vec4<f32>(input.albedo.rgb * shade, input.albedo.a));\n}\n";
+        let solid = build(&format!("const LAYERS: u32 = RAY_SOLID;\n{sun}"));
+        let stage = solid.entity.as_ref().unwrap();
+        assert!(stage.scene.as_ref().is_some_and(|s| !s.traces_entities()));
+        assert!(!solid.traces_entities());
+        let mobs = build(&format!(
+            "const LAYERS: u32 = RAY_SOLID | RAY_ENTITY;\n{sun}"
+        ));
+        assert!(mobs.entity.as_ref().unwrap().scene.is_some());
+        assert!(mobs.traces_entities());
+        let quiet =
+            build("fn entity(input: EntityInput) -> Surface { return Surface(input.albedo); }\n");
+        assert!(quiet.entity.as_ref().unwrap().scene.is_none());
     }
 
     fn option(id: &str, kind: OptionKind) -> PackOption {

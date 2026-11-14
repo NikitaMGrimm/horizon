@@ -7,8 +7,8 @@
 //! entry points, no `horizon_` names; in 0.2 none of the structs Horizon hands it
 //! constructed), then translated to SPIR-V, Metal and HLSL with its options at their
 //! defaults, minimums and maximums. A post stage of a pack with `[ray_tracing]`, and its
-//! material stage where that traces, is checked twice: as every device runs it, where `trace`
-//! misses, and against the scene.
+//! material and entity stages where they trace, are checked twice: as every device runs
+//! them, where `trace` misses, and against the scene.
 use crate::inputs::{DISPLACEMENT_INPUT, Frame, RAY_HIT};
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
@@ -67,8 +67,8 @@ pub struct CheckedStage {
     pub label: String,
     pub module: naga::Module,
     pub info: ModuleInfo,
-    /// A post stage of a pack with `[ray_tracing]`, or its material stage where that calls
-    /// a trace function, built against the scene (`compose_scene`): what the renderer runs
+    /// A post stage of a pack with `[ray_tracing]`, or its material or entity stage where that
+    /// calls a trace function, built against the scene (`compose_scene`): what the renderer runs
     /// while it binds the scene, on a device with ray queries. `module` is the same stage with a
     /// `trace` that misses, which every device takes.
     pub scene: Option<naga::Module>,
@@ -292,7 +292,8 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
     let composed = compose(pack, kind, file);
     let module = parse(&composed)?;
     let info = validate(&module, &composed, Capabilities::default())?;
-    // A stage the scene changes nothing in (a material stage that doesn't trace) is built once.
+    // A stage the scene changes nothing in (a material or entity stage that doesn't trace) is
+    // built once.
     let traced = Some(compose_scene(pack, kind, file)).filter(|s| s.text != composed.text);
     let scene = match traced {
         Some(mut composed) => {

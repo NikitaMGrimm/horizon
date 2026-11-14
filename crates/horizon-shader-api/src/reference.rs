@@ -108,11 +108,11 @@ space the pack's colours are in, and `frame.luminance` holds that space's lumina
 fn ray_tracing() -> String {
     let mut out = String::from(
         "### Ray tracing\n\n\
-         With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass or a `[material]` stage) the post\n\
-         stage's prelude also has `RayHit` and the functions and constants below, so does the material stage's where its\n\
-         files name one of the four trace functions, and the `Frame` of every stage of the pack has `has_ray_tracing` and\n\
-         `ray_distance`. A pack without the key has none of them, and a material stage that names no trace function is\n\
-         built as without it.\n\n\
+         With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass, a `[material]` or an `[entity]`\n\
+         stage) the post stage's prelude also has `RayHit` and the functions and constants below, so do the material and\n\
+         entity stages' where their files name one of the four trace functions, and the `Frame` of every stage of the pack\n\
+         has `has_ray_tracing` and `ray_distance`. A pack without the key has none of them, and a material or entity stage\n\
+         that names no trace function is built as without it.\n\n\
          - `fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit`: the nearest solid surface\n  \
          from `origin` (camera-relative, in blocks, as `view_position` gives it) along the unit vector `direction`, within\n  \
          `max_distance` blocks.\n\
@@ -136,8 +136,8 @@ fn ray_tracing() -> String {
          - `fn hit_normal_map(hit: RayHit) -> vec4<f32>`, `fn hit_specular_map(hit: RayHit) -> vec4<f32>`: the resource\n  \
          packs' LabPBR maps at the hit, its sprite's texel at `hit.uv` at full size, as `block_normal_map_level(uv, 0.0)`\n  \
          and `block_specular_map_level(uv, 0.0)` read a drawn surface's; their defaults without maps, and on a miss.\n\
-         - In the post stage, `fn block_pbr_maps() -> bool`: whether the resource packs ship LabPBR maps, as the material\n  \
-         stage's.\n\n\
+         - In the post and entity stages, `fn block_pbr_maps() -> bool`: whether the resource packs ship LabPBR maps, as\n  \
+         the material stage's.\n\n\
          A ray starts at `origin` itself, so move a point off its own surface before tracing from it. What stops it is what\n\
          the surface's own pass draws. In the solid layer it passes through the clear texels of a cut-out texture (leaves,\n\
          plants), as terrain's alpha test does: a texel stops it from alpha 0.5 up. In the translucent layer every texel\n\
@@ -155,13 +155,16 @@ fn ray_tracing() -> String {
          In the material stage only `material` traces: `displacement` and the vertex stage's `vertex`, whose files share\n\
          its module, run in vertex shaders, and the check refuses a pack where either reaches a trace function.\n\
          `material` runs for every terrain fragment drawn, so a ray costs more there than in a post pass: keep its rays for\n\
-         translucent surfaces (`input.translucent`), which leave no surface for a post pass to light.\n\n",
+         translucent surfaces (`input.translucent`), which leave no surface for a post pass to light.\n\n\
+         In the entity stage `entity` traces as `material` does, in the world's colour pass only (the shadow map's\n\
+         entities don't run the stage). A ray it casts with `RAY_ENTITY` in its layers can hit the entity it starts on:\n\
+         move its origin off the surface, as from terrain.\n\n",
     );
     out += &table(&RAY_HIT, None);
     out += &format!(
         "Bindings {RAY_SCENE_BINDING} to {} of group {GROUP} hold the scene while the game traces ({RAY_ENTITY_STORE_BINDING} to\n\
          {RAY_ENTITY_RETAINED_BINDING} the entity layer, for a pack that names it), and in a post pass bindings {PBR_NORMALS_BINDING} and {PBR_SPECULAR_BINDING} the LabPBR maps (the\n\
-         material stage has them there already). They are Horizon's, as their `horizon_` names say, and change with the\n\
+         material and entity stages have them there already). They are Horizon's, as their `horizon_` names say, and change with the\n\
          renderer.\n\n",
         RAY_SPRITES_BINDING + RAY_SPRITE_ARRAYS - 1
     );

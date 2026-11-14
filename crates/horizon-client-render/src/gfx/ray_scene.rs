@@ -1143,7 +1143,7 @@ mod retained;
 
 #[cfg(test)]
 #[path = "ray_entity_tests.rs"]
-mod entity_tests;
+pub(in crate::gfx) mod entity_tests;
 
 #[cfg(test)]
 mod tests {

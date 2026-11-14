@@ -1,6 +1,7 @@
-//! The scene in the post passes and the material stage of a shader pack with `[ray_tracing]`
-//! (docs/shaders.md, spec #15624): where the device traces rays, each pass, and the terrain's
-//! pipelines of a material stage that calls `trace` or `trace_any`, are built a second time
+//! The scene in the post passes and the material and entity stages of a shader pack with
+//! `[ray_tracing]` (docs/shaders.md, spec #15624): where the device traces rays, each pass, and
+//! the terrain's or the entities' pipelines of a material or entity stage that calls `trace` or
+//! `trace_any`, are built a second time
 //! from what the check made against the scene (`CheckedStage::scene`, `scene_source`), and their
 //! group 3 also holds the TLAS, the store of the sections' vertices (gfx/ray_scene.rs), the
 //! block sprites and the pack's material id and tags of each sprite layer, which the prelude's
@@ -16,7 +17,7 @@ use horizon_shader_api::stages::{
     RAY_SPRITES_BINDING, RAY_STORE_BINDING,
 };
 
-use super::super::native_material::{MaterialPipelines, TerrainShape, terrain_entries};
+use super::super::native_material::{MaterialPipelines, TerrainShape};
 use super::{INTERMEDIATE, NativeFrame, NativePost, post_pipeline};
 pub(in crate::gfx) use crate::gfx::surface_setup::ray_query::ray_scene::{RayScene, Traced};
 
@@ -71,11 +72,11 @@ pub(super) struct NativeTrace {
     pbr: [wgpu::TextureView; 2],
 }
 
-/// A material stage's terrain pipelines built against the scene, and its frame's group with
-/// the scene in it.
-pub(in crate::gfx) struct TerrainTrace {
+/// A stage's pipelines `P` built against the scene (a material stage's terrain, an entity
+/// stage's entities), and its frame's group with the scene in it.
+pub(in crate::gfx) struct StageTrace<P> {
     layout: wgpu::BindGroupLayout,
-    pipelines: MaterialPipelines,
+    pipelines: P,
     rays: Rays,
     /// The group, made for the frame's group `.0` and the scene of generation `.1` (the TLAS and
     /// the store are replaced as they grow, and the frame's group as its targets change).
@@ -468,19 +469,22 @@ impl NativeTrace {
     }
 }
 
-impl TerrainTrace {
-    /// The terrain's pipelines against the scene, made by `build` with the frame's group
-    /// joined with it, where the device traces rays and the terrain's fragment stage, which
-    /// also reads terrain.wgsl's group 0, holds the bindings.
+/// A material stage's terrain against the scene.
+pub(in crate::gfx) type TerrainTrace = StageTrace<MaterialPipelines>;
+
+impl<P> StageTrace<P> {
+    /// The stage's pipelines against the scene, made by `build` with the frame's group joined
+    /// with it, where the device traces rays and the stage's fragment shader, which also reads
+    /// its own groups' entries `others` (terrain.wgsl's group 0, the entities'), holds the
+    /// bindings.
     pub(in crate::gfx) fn new(
         device: &wgpu::Device,
         frame: &NativeFrame,
-        (terrain, entities): (&TerrainShape<'_>, bool),
-        build: impl FnOnce(&wgpu::BindGroupLayout) -> Result<MaterialPipelines, String>,
+        (others, shape): (&[wgpu::BindGroupLayoutEntry], &TraceShape<'_>),
+        build: impl FnOnce(&wgpu::BindGroupLayout) -> Result<P, String>,
     ) -> Option<Self> {
-        let groups = (frame.entries.as_slice(), terrain_entries());
-        let shape = TraceShape::of(terrain, entities);
-        let (layout, pipelines, rays) = with_scene(device, (groups.0, &groups.1), &shape, build)?;
+        let groups = (frame.entries.as_slice(), others);
+        let (layout, pipelines, rays) = with_scene(device, groups, shape, build)?;
         Some(Self {
             layout,
             pipelines,
@@ -490,7 +494,7 @@ impl TerrainTrace {
         })
     }
 
-    /// This frame's `frame.ray_distance` when the terrain traces `scene`: writes where the
+    /// This frame's `frame.ray_distance` when the stage traces `scene`: writes where the
     /// camera is in it.
     pub(in crate::gfx) fn trace(
         &self,
@@ -500,7 +504,7 @@ impl TerrainTrace {
         Some(self.rays.write(queue, scene?))
     }
 
-    /// Joins the frame's group, as it is now, with `scene`, this frame's: the terrain draws
+    /// Joins the frame's group, as it is now, with `scene`, this frame's: the stage draws
     /// with these pipelines while there is one.
     pub(in crate::gfx) fn bind(
         &mut self,
@@ -521,13 +525,13 @@ impl TerrainTrace {
         }
     }
 
-    /// Whether the terrain traces the entity layer.
+    /// Whether the stage traces the entity layer.
     pub(in crate::gfx) fn traces_entities(&self) -> bool {
         self.rays.entities
     }
 
-    /// The pipelines and group 3 the terrain draws with this frame, if it traces.
-    pub(in crate::gfx) fn drawn(&self) -> Option<(&MaterialPipelines, &wgpu::BindGroup)> {
+    /// The pipelines and group 3 the stage draws with this frame, if it traces.
+    pub(in crate::gfx) fn drawn(&self) -> Option<(&P, &wgpu::BindGroup)> {
         let (_, _, group) = self.group.as_ref().filter(|_| self.on)?;
         Some((&self.pipelines, group))
     }
@@ -558,6 +562,7 @@ impl NativeFrame {
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::native_material::terrain_entries;
     use super::*;
 
     #[test]

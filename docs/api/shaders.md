@@ -211,7 +211,7 @@ file = "entity.wgsl"
 blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
 
-[ray_tracing]              # optional, needs [[post]] or [material], no keys: the post stage gets `trace` and `trace_any`, the material stage where it calls them
+[ray_tracing]              # optional, needs [[post]], [material] or [entity], no keys: the post stage gets `trace` and `trace_any`, the material and entity stages where they call them
 ```
 
 API 0.1, the gamma line before it, is retired. To move a pack over, set `api = "0.2"` and treat every colour as
@@ -253,6 +253,11 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-14: API 0.2 (additions, experimental): under `[ray_tracing]` the entity stage gets `RayHit`, the trace
+  functions, `hit_normal_map`, `hit_specular_map` and `block_pbr_maps` too, as the material stage has them, where its
+  files name a trace function; an entity stage that names none is built from the same WGSL as before, a test holds.
+  `[ray_tracing]` needs a `[[post]]` pass, a `[material]` or an `[entity]` stage. The game binds the scene to the
+  entities' draw in the world's colour pass.
 - 2026-11-14: API 0.2 (experimental): `RAY_ENTITY` also holds the block entities at rest that the block entity cache
   keeps (on in every graphics preset: closed chests, shulker boxes, bells, decorated pots, banners), in view or not,
   so they cast traced shadows and show in reflections as the mobs do. A hit on one is an entity hit like any other.

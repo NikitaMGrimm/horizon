@@ -12,9 +12,15 @@
 //! `Renderer::take_entity_runs`) and the batch writes each one's kind into its quads' layer.
 //! What no run names is Horizon's own draw: it goes through `entity_color` with what
 //! `entity_vertex` computed for it, as without the stage.
+//!
+//! A stage that calls a trace function (`[ray_tracing]`) is built a second time against the
+//! scene, as the material stage's terrain is (`native_post/trace.rs`), and draws with it in
+//! frames that have the scene. Only the world's colour pass runs the stage: the native shadow
+//! pass draws the entities with its own depth shader, which traces nothing.
 
 use horizon_shader_api::{check::CheckedStage, stages::GROUP};
 
+use super::native_post::trace::{StageTrace, TraceShape};
 use super::native_post::{NativeFrame, present_constants};
 
 /// What a run of the entity geometry is to the stage, as `EntityInput.kind` numbers it. Items
@@ -264,25 +270,104 @@ pub(super) fn shader_source(source: &str) -> String {
     )
 }
 
-/// The pack's entity pipelines: the entity stream's ordinary quads, and the retained block
+/// The entities' group 0 (gfx.rs's entity draws, the native shadow pass's): their globals, the
+/// atlas, the lightmap and the glint, each with its sampler after it, and the armour glint.
+pub(super) fn entity_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
+    let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+        ty,
+        count: None,
+    };
+    let texture = wgpu::BindingType::Texture {
+        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+        view_dimension: wgpu::TextureViewDimension::D2,
+        multisampled: false,
+    };
+    let sampler = wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering);
+    let globals = wgpu::BindingType::Buffer {
+        ty: wgpu::BufferBindingType::Uniform,
+        has_dynamic_offset: false,
+        min_binding_size: None,
+    };
+    let mut entries = vec![entry(0, globals)];
+    entries.extend((1..=6).map(|b| entry(b, if b % 2 == 1 { texture } else { sampler })));
+    entries.push(entry(7, texture));
+    entries
+}
+
+/// The pipelines of an entity stage: the entity stream's ordinary quads, and the retained block
 /// entities.
-pub struct NativeEntity {
+pub struct EntityPipelines {
     entities: wgpu::RenderPipeline,
     retained: wgpu::RenderPipeline,
 }
 
+/// The pack's entity stage: its pipelines, and for a stage that calls a trace function, where
+/// the device takes the scene, the same against the scene.
+pub struct NativeEntity {
+    /// Built with a `trace` that misses: every device, every frame without the scene.
+    pipelines: EntityPipelines,
+    pub(super) scene: Option<StageTrace<EntityPipelines>>,
+}
+
 impl NativeEntity {
     /// The pipelines of the pack's entity `stage` with the option values `constants`, into a
-    /// frame of `format`, against the entities' group 0 and the retained block entities' group 1.
-    pub fn new(
+    /// frame of `format`, against the entities' group 0 and the retained block entities' group
+    /// 1; for a stage that traces, also against the scene of `shape`.
+    pub(super) fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
-        [entities, retained]: [&wgpu::BindGroupLayout; 2],
+        groups: [&wgpu::BindGroupLayout; 2],
         frame: &NativeFrame,
-        stage: &CheckedStage,
+        (stage, shape): (&CheckedStage, &TraceShape<'_>),
         constants: &[(String, f64)],
     ) -> Result<Self, String> {
-        let text = shader_source(&stage.source);
+        let build = |source: &str, group: &wgpu::BindGroupLayout| {
+            let layouts = (format, groups, group);
+            Self::pipelines(device, layouts, frame, (stage, source), constants)
+        };
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let built = build(&stage.source, &frame.layout);
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            return Err(format!("{}: {e}", stage.file));
+        }
+        let pipelines = built?;
+        let scene = stage.scene_source.as_deref().and_then(|source| {
+            let traced = TraceShape {
+                entities: stage.traces_entities(),
+                ..*shape
+            };
+            let others = (&entity_entries()[..], &traced);
+            StageTrace::new(device, frame, others, |group| build(source, group))
+        });
+        Ok(Self { pipelines, scene })
+    }
+
+    /// The pipelines and group 3 the entities draw with this frame: against the scene where the
+    /// stage traces, else the ones whose `trace` misses with the frame's own `group`.
+    pub(super) fn drawn<'a>(
+        &'a self,
+        group: &'a wgpu::BindGroup,
+    ) -> (&'a EntityPipelines, &'a wgpu::BindGroup) {
+        let traced = self.scene.as_ref().and_then(StageTrace::drawn);
+        traced.unwrap_or((&self.pipelines, group))
+    }
+
+    /// One set of the stage's pipelines from its `source` (`CheckedStage::source` or
+    /// `scene_source`), with `frame_group` as their group 3.
+    fn pipelines(
+        device: &wgpu::Device,
+        (format, [entities, retained], frame_group): (
+            wgpu::TextureFormat,
+            [&wgpu::BindGroupLayout; 2],
+            &wgpu::BindGroupLayout,
+        ),
+        frame: &NativeFrame,
+        (stage, source): (&CheckedStage, &str),
+        constants: &[(String, f64)],
+    ) -> Result<EntityPipelines, String> {
+        let text = shader_source(source);
         let module = naga::front::wgsl::parse_str(&text)
             .map_err(|e| format!("{}: {}", stage.file, e.emit_to_string(&text)))?;
         let mut constants = present_constants(&module, constants);
@@ -290,7 +375,6 @@ impl NativeEntity {
             super::linear_blend::frame_constants(format, frame.linear);
         constants.push(("horizon_vanilla_HDR_WRITE_LIGHT", write_light));
         constants.push(("horizon_vanilla_FRAME_LINEAR", linear));
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&stage.label),
             source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
@@ -318,7 +402,7 @@ impl NativeEntity {
                 Default::default();
             groups[0] = Some(entities);
             groups[1] = retained;
-            groups[GROUP as usize] = Some(&frame.layout);
+            groups[GROUP as usize] = Some(frame_group);
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Native shader pack entities"),
                 bind_group_layouts: &groups,
@@ -365,22 +449,19 @@ impl NativeEntity {
                 cache: None,
             })
         };
-        let built = Self {
+        Ok(EntityPipelines {
             entities: pipeline("horizon_entity_vs", None),
             retained: pipeline("horizon_entity_vs_static", Some(retained)),
-        };
-        if let Some(e) = pollster::block_on(scope.pop()) {
-            return Err(format!("{}: {e}", stage.file));
-        }
-        Ok(built)
+        })
     }
 }
 
 /// Sets the pipeline of the entity stream's ordinary quads, or of the `retained` block
-/// entities: the `stage`'s with the pack's frame at its group, else Horizon's `own`.
+/// entities: the `stage`'s with the pack's frame (and the scene, where it traces) at its
+/// group, else Horizon's `own`.
 pub(super) fn set_pipeline(
     pass: &mut wgpu::RenderPass<'_>,
-    stage: Option<(&NativeEntity, &wgpu::BindGroup)>,
+    stage: Option<(&EntityPipelines, &wgpu::BindGroup)>,
     own: &wgpu::RenderPipeline,
     retained: bool,
 ) {

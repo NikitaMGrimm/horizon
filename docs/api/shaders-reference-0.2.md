@@ -291,11 +291,11 @@ pass reads a blank one in place of the target it writes).
 
 ### Ray tracing
 
-With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass or a `[material]` stage) the post
-stage's prelude also has `RayHit` and the functions and constants below, so does the material stage's where its
-files name one of the four trace functions, and the `Frame` of every stage of the pack has `has_ray_tracing` and
-`ray_distance`. A pack without the key has none of them, and a material stage that names no trace function is
-built as without it.
+With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass, a `[material]` or an `[entity]`
+stage) the post stage's prelude also has `RayHit` and the functions and constants below, so do the material and
+entity stages' where their files name one of the four trace functions, and the `Frame` of every stage of the pack
+has `has_ray_tracing` and `ray_distance`. A pack without the key has none of them, and a material or entity stage
+that names no trace function is built as without it.
 
 - `fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit`: the nearest solid surface
   from `origin` (camera-relative, in blocks, as `view_position` gives it) along the unit vector `direction`, within
@@ -320,8 +320,8 @@ built as without it.
 - `fn hit_normal_map(hit: RayHit) -> vec4<f32>`, `fn hit_specular_map(hit: RayHit) -> vec4<f32>`: the resource
   packs' LabPBR maps at the hit, its sprite's texel at `hit.uv` at full size, as `block_normal_map_level(uv, 0.0)`
   and `block_specular_map_level(uv, 0.0)` read a drawn surface's; their defaults without maps, and on a miss.
-- In the post stage, `fn block_pbr_maps() -> bool`: whether the resource packs ship LabPBR maps, as the material
-  stage's.
+- In the post and entity stages, `fn block_pbr_maps() -> bool`: whether the resource packs ship LabPBR maps, as
+  the material stage's.
 
 A ray starts at `origin` itself, so move a point off its own surface before tracing from it. What stops it is what
 the surface's own pass draws. In the solid layer it passes through the clear texels of a cut-out texture (leaves,
@@ -342,6 +342,10 @@ In the material stage only `material` traces: `displacement` and the vertex stag
 its module, run in vertex shaders, and the check refuses a pack where either reaches a trace function.
 `material` runs for every terrain fragment drawn, so a ray costs more there than in a post pass: keep its rays for
 translucent surfaces (`input.translucent`), which leave no surface for a post pass to light.
+
+In the entity stage `entity` traces as `material` does, in the world's colour pass only (the shadow map's
+entities don't run the stage). A ray it casts with `RAY_ENTITY` in its layers can hit the entity it starts on:
+move its origin off the surface, as from terrain.
 
 ### `RayHit`
 
@@ -367,7 +371,7 @@ The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `
 
 Bindings 48 to 59 of group 3 hold the scene while the game traces (60 to
 63 the entity layer, for a pack that names it), and in a post pass bindings 12 and 13 the LabPBR maps (the
-material stage has them there already). They are Horizon's, as their `horizon_` names say, and change with the
+material and entity stages have them there already). They are Horizon's, as their `horizon_` names say, and change with the
 renderer.
 
 ## tonemap
