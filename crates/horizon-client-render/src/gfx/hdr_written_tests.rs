@@ -2,6 +2,7 @@ use super::{
     Hdr, Output,
     tests::{gpu, texel},
 };
+use std::{cell::RefCell, collections::HashMap};
 use wgpu::TextureFormat as F;
 use wgpu::util::DeviceExt;
 
@@ -115,6 +116,25 @@ struct Draw<'a> {
     lightmap: [u8; 16 * 16 * 4],
     /// Draws through `test_own_vertex`, which hands the shader's own vertex work its corners,
     /// in place of `test_vertex`'s ready-made output.
+    own_vertex: bool,
+    pipelines: RefCell<HashMap<PipelineKey, wgpu::RenderPipeline>>,
+}
+/// Everything that changes a pipeline built by `Draw::render`: the entry point,
+/// the override constants, and the draw's own flags. The shader and layout only
+/// change in `stage`, which empties the cache.
+#[derive(PartialEq, Eq, Hash)]
+struct PipelineKey {
+    entry: String,
+    written: bool,
+    tier: u32,
+    overlay: u32,
+    terrain: bool,
+    raw: bool,
+    hdr_lighting: bool,
+    material: bool,
+    /// `Draw::prefix`, which names the override constants.
+    prefix: &'static str,
+    /// `Draw::own_vertex`, which picks the vertex entry point.
     own_vertex: bool,
 }
 impl<'a> Draw<'a> {
@@ -551,6 +571,7 @@ impl<'a> Draw<'a> {
             prefix: "",
             lightmap: levels,
             own_vertex: false,
+            pipelines: RefCell::default(),
         }
     }
 
@@ -590,6 +611,7 @@ impl<'a> Draw<'a> {
             });
         self.material_frame = Some(frame);
         self.raw = true;
+        self.pipelines.borrow_mut().clear();
     }
     fn render(
         &self,
@@ -630,43 +652,62 @@ impl<'a> Draw<'a> {
             _ => "test_vertex",
         };
         let format = F::Rgba16Float;
-        let pipeline = self
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
-                layout: Some(&self.layout),
-                vertex: wgpu::VertexState {
-                    module: &self.shader,
-                    entry_point: Some(vertex),
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &constants,
-                        ..Default::default()
+        let key = PipelineKey {
+            entry: entry.to_owned(),
+            written,
+            tier,
+            overlay,
+            terrain: self.terrain,
+            raw: self.raw,
+            hdr_lighting: self.hdr_lighting,
+            material: self.material_frame.is_some(),
+            prefix: self.prefix,
+            own_vertex: self.own_vertex,
+        };
+        let cached = self.pipelines.borrow().get(&key).cloned();
+        let pipeline = cached.unwrap_or_else(|| {
+            let built = self
+                .device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(&self.layout),
+                    vertex: wgpu::VertexState {
+                        module: &self.shader,
+                        entry_point: Some(vertex),
+                        compilation_options: wgpu::PipelineCompilationOptions {
+                            constants: &constants,
+                            ..Default::default()
+                        },
+                        buffers: &[],
                     },
-                    buffers: &[],
-                },
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &self.shader,
-                    entry_point: Some(entry),
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &constants,
-                        ..Default::default()
-                    },
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(if self.raw || (self.terrain && entry != "fs_translucent") {
-                            wgpu::BlendState::REPLACE
-                        } else {
-                            wgpu::BlendState::ALPHA_BLENDING
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            });
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &self.shader,
+                        entry_point: Some(entry),
+                        compilation_options: wgpu::PipelineCompilationOptions {
+                            constants: &constants,
+                            ..Default::default()
+                        },
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: Some(
+                                if self.raw || (self.terrain && entry != "fs_translucent") {
+                                    wgpu::BlendState::REPLACE
+                                } else {
+                                    wgpu::BlendState::ALPHA_BLENDING
+                                },
+                            ),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                });
+            self.pipelines.borrow_mut().insert(key, built.clone());
+            built
+        });
         let frame = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
@@ -756,11 +797,27 @@ fn float_plain_fragments_keep_rgb_and_write_only_coverage() {
                     ("fs_sky_celestial", coverage),
                 ]
             };
-            for plain in [false, true] {
+            // `HDR_LIGHTING` is only a pipeline constant for terrain, so entity
+            // pipelines are identical for both values and need one pass.
+            for plain in if terrain {
+                vec![false, true]
+            } else {
+                vec![false]
+            } {
                 draw.hdr_lighting = !plain;
                 for &(entry, alpha) in &entries {
-                    for tier in [0, 3, 4] {
-                        for overlay in if terrain { vec![0, 1] } else { vec![0, 6] } {
+                    // These vertex functions never read `TEST_TIER` or
+                    // `TEST_OVERLAY`, so one combination covers them.
+                    let fixed =
+                        matches!(entry, "fs_native_model" | "fs_native_fluid" | "fs_sunrise");
+                    for tier in if fixed { vec![0] } else { vec![0, 3, 4] } {
+                        for overlay in if fixed {
+                            vec![0]
+                        } else if terrain {
+                            vec![0, 1]
+                        } else {
+                            vec![0, 6]
+                        } {
                             let old = draw.render(false, entry, tier, overlay, [0.0; 4]);
                             let float = draw.render(true, entry, tier, overlay, [0.0; 4]);
                             assert_eq!(
