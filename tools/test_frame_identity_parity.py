@@ -512,9 +512,12 @@ def session_checks(shots, sessions):
         if 'HORIZON_VISBUFFER' in extra and not built:
             problems.append(f'{name}: the visibility buffer didn\'t run')
         # 🤖 Agent: Improved Transparency needs blendable float targets; without them the option changes nothing.
-        if name in ('oit', 'hdr_oit', 'float_oit') and without in sessions and all(
-                compare(shots / f'{without}.{s}{x}', shots / f'{name}.{s}{x}', None) is None
-                for s in scenes for x in ('.png', '-hdr.png') if (shots / f'{name}.{s}{x}').exists()):
+        # A missing shot on either side is already reported above, so it doesn't count here.
+        pairs = [(shots / f'{without}.{s}{x}', shots / f'{name}.{s}{x}')
+                 for s in scenes for x in ('.png', '-hdr.png')]
+        pairs = [(a, b) for a, b in pairs if a.exists() and b.exists()]
+        if name in ('oit', 'hdr_oit', 'float_oit') and without in sessions and pairs and all(
+                compare(a, b, None) is None for a, b in pairs):
             problems.append(f'{name}: the same as without Improved Transparency: it didn\'t run')
     return problems
 

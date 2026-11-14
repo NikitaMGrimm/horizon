@@ -182,6 +182,16 @@ class SessionCheckTests(unittest.TestCase):
         self.assertEqual(identity.build_checks(self.dir, ['visbuffer']),
                          ["change: visbuffer: the visibility buffer didn't run"])
 
+    def test_improved_transparency_beside_a_missing_reference_shot_reports_the_missing_shot(self):
+        missing, *rest = identity.SESSIONS['vanilla'][2]
+        self.assertIn(missing, identity.SESSIONS['oit'][2])
+        for scene in rest:
+            self.shot(f'vanilla.{scene}.png')
+        for scene in identity.SESSIONS['oit'][2]:
+            self.shot(f'oit.{scene}.png', [row[::-1] for row in self.rows])
+        self.assertEqual(identity.session_checks(self.dir, ['vanilla', 'oit']),
+                         [f'vanilla.{missing}: screenshot missing'])
+
     def test_the_visibility_buffer_line_stays_in_a_log_longer_than_400_lines(self):
         for scene in identity.SESSIONS['visbuffer'][2]:
             self.shot(f'visbuffer.{scene}.png')
