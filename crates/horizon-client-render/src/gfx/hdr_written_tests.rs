@@ -2,6 +2,7 @@ use super::{
     Hdr, Output,
     tests::{gpu, texel},
 };
+use std::{cell::RefCell, collections::HashMap};
 use wgpu::TextureFormat as F;
 use wgpu::util::DeviceExt;
 
@@ -109,6 +110,23 @@ struct Draw<'a> {
     material_frame: Option<super::super::native_post::NativeFrame>,
     /// More pipeline constants, for the material wrappers' own.
     constants: Vec<(&'static str, f64)>,
+    pipelines: RefCell<HashMap<PipelineKey, wgpu::RenderPipeline>>,
+}
+/// Everything that changes a pipeline built by `Draw::render`: the entry point,
+/// the override constants, and the draw's own flags. The shader and layout only
+/// change in `pack_stage`, which empties the cache.
+#[derive(PartialEq, Eq, Hash)]
+struct PipelineKey {
+    entry: String,
+    written: bool,
+    tier: u32,
+    overlay: u32,
+    terrain: bool,
+    raw: bool,
+    hdr_lighting: bool,
+    material: bool,
+    /// `Draw::constants`, each value by its bits.
+    constants: Vec<(&'static str, u64)>,
 }
 impl<'a> Draw<'a> {
     fn render_oit(
@@ -526,6 +544,7 @@ impl<'a> Draw<'a> {
             hdr_lighting: true,
             material_frame: None,
             constants: Vec::new(),
+            pipelines: RefCell::default(),
         }
     }
 
@@ -570,6 +589,7 @@ impl<'a> Draw<'a> {
             });
         self.material_frame = Some(frame);
         self.raw = true;
+        self.pipelines.borrow_mut().clear();
     }
     fn render(
         &self,
@@ -620,43 +640,65 @@ impl<'a> Draw<'a> {
             _ => "test_vertex",
         };
         let format = F::Rgba16Float;
-        let pipeline = self
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
-                layout: Some(&self.layout),
-                vertex: wgpu::VertexState {
-                    module: &self.shader,
-                    entry_point: Some(vertex),
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &constants,
-                        ..Default::default()
+        let key = PipelineKey {
+            entry: entry.to_owned(),
+            written,
+            tier,
+            overlay,
+            terrain: self.terrain,
+            raw: self.raw,
+            hdr_lighting: self.hdr_lighting,
+            material: self.material_frame.is_some(),
+            constants: self
+                .constants
+                .iter()
+                .map(|&(name, value)| (name, value.to_bits()))
+                .collect(),
+        };
+        let cached = self.pipelines.borrow().get(&key).cloned();
+        let pipeline = cached.unwrap_or_else(|| {
+            let built = self
+                .device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(&self.layout),
+                    vertex: wgpu::VertexState {
+                        module: &self.shader,
+                        entry_point: Some(vertex),
+                        compilation_options: wgpu::PipelineCompilationOptions {
+                            constants: &constants,
+                            ..Default::default()
+                        },
+                        buffers: &[],
                     },
-                    buffers: &[],
-                },
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &self.shader,
-                    entry_point: Some(entry),
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &constants,
-                        ..Default::default()
-                    },
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(if self.raw || (self.terrain && entry != "fs_translucent") {
-                            wgpu::BlendState::REPLACE
-                        } else {
-                            wgpu::BlendState::ALPHA_BLENDING
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            });
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &self.shader,
+                        entry_point: Some(entry),
+                        compilation_options: wgpu::PipelineCompilationOptions {
+                            constants: &constants,
+                            ..Default::default()
+                        },
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: Some(
+                                if self.raw || (self.terrain && entry != "fs_translucent") {
+                                    wgpu::BlendState::REPLACE
+                                } else {
+                                    wgpu::BlendState::ALPHA_BLENDING
+                                },
+                            ),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                });
+            self.pipelines.borrow_mut().insert(key, built.clone());
+            built
+        });
         let frame = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
