@@ -62,6 +62,10 @@ fn vanilla(kind: StageKind) -> &'static str {
             "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n"
         }
         StageKind::Entity => VANILLA_ENTITY,
+        StageKind::Compute | StageKind::BeforeWorld => {
+            "fn compute(input: ComputeInput) {}
+"
+        }
     }
 }
 

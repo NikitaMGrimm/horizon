@@ -380,6 +380,74 @@ Bindings 48 to 59 of group 3 hold the scene while the game traces (60 to
 material and entity stages have them there already). They are Horizon's, as their `horizon_` names say, and change with the
 renderer.
 
+## Kept resources and compute passes
+
+**Checked, not run yet:** `horizon-shader check` takes these keys, and the game refuses a pack that declares a
+`[[resource]]`, a `[[before_world]]` entry or a compute `[[post]]` entry: it needs a later Horizon.
+
+- `[[resource]]`: `name`; `buffer` (bytes) with `element` (`u32`, `atomic<u32>`, `f32`, `vec4<u32>`, `vec4<f32>`), or `format`
+  (`rgba16float`, `r32float`, `rgba32float`) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `"view"`
+  (screen history) or `"world"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in
+  blocks, clears it). A texture has this frame's version, `<name>`, and last frame's, `<name>_previous`; a buffer
+  has one. Both names are free WGSL names, as an `output`'s, and no word WGSL reserves.
+- `[[before_world]]`: a compute pass once a frame, before the world draws: `file`, `dispatch` (`[x, y, z]`
+  cells, or `"pixels"`, one per texel of the render size), `workgroup = [x, y, z]`, `reads` and `writes`.
+- `[[post]]` with `compute = true` and the same keys: a dispatch in the chain where it stands. It has no `output`
+  or `scale`, isn't the last entry and doesn't advance `previous`. An ordinary pass lists what it `reads`, and its
+  `output` may name a kept texture, which it draws at that texture's size.
+- An option's `resets = "view"` clears the view's kept resources when the player changes it, `"world"` all
+  of them.
+
+A pass lists every resource it uses: in `reads` this frame's `x` or last frame's `x_previous`, in `writes` (a
+compute pass's) `x`, once. An `output` is its pass's write. Its prelude declares only what it lists, so a name
+it doesn't list is the file's own, and using such a resource is refused as unlisted. The check also refuses a
+compute pass that writes a texture and reads it back (read `_previous`, or a buffer), and a pass that reads its
+own `output`.
+
+A compute file defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's
+workgroup size. Every invocation of every workgroup runs it, so `var<workgroup>` and `workgroupBarrier()`
+reductions stay uniform: one beyond the dispatch has `in_bounds` false and touches no resource. A compute
+`[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`; a `[[before_world]]` pass has
+the frame, the samplers and the shadow maps (bindings below) with `shadow_position`.
+
+**Not yet, in later steps:** a compute or `[[before_world]]` file doesn't get `trace` or the other ray functions
+under `[ray_tracing]`, and `[material]` can't read kept resources.
+
+### `ComputeInput`
+
+One invocation of a dispatch, for `fn compute(input: ComputeInput)`.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `cell` | `vec3<u32>` | The invocation's cell: where it is in the whole dispatch. |
+| `local` | `u32` | Its index in its workgroup, from 0 to the workgroup's invocations less 1. |
+| `size` | `vec3<u32>` | The dispatch's cells: its `dispatch`, or the render size and 1 for `"pixels"`. |
+| `in_bounds` | `bool` | Whether `cell` is within `size`. Every invocation of every workgroup runs: one beyond `size` touches no resource, but still reaches every `workgroupBarrier()`. |
+
+A pass's prelude declares the resources it lists, the pack's resource i at binding 64 + 2i of group
+3 and its `_previous` at 65 + 2i: a buffer `var<storage, read_write> x: array<element>` where written,
+`var<storage, read>` where only read (an `atomic<u32>` buffer then reads as `array<u32>`); a texture
+`texture_storage_2d<format, write>` where written, else `texture_2d<f32>`. An `r32float` or `rgba32float`
+texture is read with `textureLoad` only: the check refuses sampling or gathering one, also through a function's
+argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.
+
+`[[before_world]]` resources (bind group 3):
+
+| Binding | Declaration | Meaning |
+| --- | --- | --- |
+| 0 | `var<uniform> frame: Frame` | The frame (`Frame`). |
+| 4 | `var linear_sampler: sampler` | Bilinear filtering, clamped to the edges. |
+| 5 | `var nearest_sampler: sampler` | Nearest texel, clamped to the edges. |
+| 6 | `var shadow_map: texture_depth_2d` | This frame's shadow map: the depth of the solid terrain and entities the light sees, 0 at the light, 1 away from it (and where nothing is), stored at `shadow_position`'s mapping. Valid while `frame.has_shadow` is 1 (the pack asks for it with `[shadow]`), else a 1×1 map that lights everything. |
+| 7 | `var shadow_sampler: sampler_comparison` | Depth comparison, bilinear (2×2 percentage-closer filtering): `textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy, p.z)` is 1 where the point is lit, 0 in shadow. |
+| 9 | `var shadow_map_translucent: texture_depth_2d` | `shadow_map` with the translucent terrain (water, stained glass, ice) the light passes through drawn in too, read with `shadow_sampler` the same way: a point lit in `shadow_map` but not here lies under such a surface, which `shadow_color` gives the colour of. |
+| 10 | `var shadow_color: texture_2d<f32>` | The texture colour times the vertex colour (rgb: the tint, the face's directional shade and ambient occlusion) of the nearest translucent surface the light passes through at each texel of `shadow_map_translucent`, white where there is none; alpha is 1 on a fluid (water) and the texture's alpha, at most 0.99, on anything else. Read it with `textureLoad` at `shadow_position`'s xy times `textureDimensions(shadow_color)`. |
+
+Limits: 8 resources, 4 `[[before_world]]` entries, 8 compute
+`[[post]]` entries; 32 MiB of buffers and 1024 KiB of fixed-size textures, both versions counted; each R-relative
+kept texture takes two of the post targets `output`s share; a workgroup of up to [256, 256, 64] and
+256 invocations.
+
 ## tonemap
 
 `fn tonemap(input: TonemapInput) -> vec3<f32>`

@@ -278,6 +278,27 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   reference says; it pointed the other way, so a normal map turned into world axes by the reference's rule had both
   in-plane components negated. `w` is unchanged. A 0.2 pack that negated the tangent to make up for it must stop.
   API 0.1 keeps the old direction: its WGSL is frozen.
+- 2026-11-13: API 0.2 (additions, experimental, not run yet): `[[before_world]]` (#16011 item 4): compute passes
+  once a frame before the world draws, with the keys of a compute `[[post]]` entry, at most 4. Their prelude has the
+  frame, the samplers and the shadow maps. The game refuses a pack with one until a later Horizon runs it.
+- 2026-11-13: API 0.2 (additions, experimental, not run yet): compute passes (#16011 item 4). `[[post]]`
+  entries with `compute = true` are dispatches in the chain, with `dispatch` (`[x, y, z]` cells or `"pixels"`),
+  `workgroup`, `reads` and `writes`, at most 8; an ordinary pass lists the kept resources it `reads`. A compute file
+  defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's workgroup size,
+  every invocation running and `in_bounds` false past the dispatch. Each pass's prelude declares only the resources it
+  lists, at group 3 from binding 64. `horizon-shader check` builds compute files as it builds post passes, refuses a
+  file that uses a resource its pass doesn't list, and refuses sampling or gathering an `r32float` or `rgba32float`
+  texture (`textureLoad` only). Compute files don't get `trace` yet, and `[material]` can't read kept resources yet:
+  both come in later steps. The game refuses a pack with a compute pass until a later Horizon runs it. Packs without
+  them are built from the same WGSL as before, a test holds.
+- 2026-11-13: API 0.2 (additions, experimental, not run yet): kept resources (#16011 item 4). `[[resource]]`
+  declares a buffer (`buffer` bytes of an `element`: `u32`, `atomic<u32>`, `f32`, `vec4<u32>` or `vec4<f32>`) or a
+  texture (`format`: `rgba16float`, `r32float` or `rgba32float`; a fixed `size` or a `scale` of the render size) a
+  pack keeps between frames, `keep = "view"` or `"world"`, the latter fixed in size and with `[kept] reach`. A
+  `[[post]] output` may name a kept texture; an option may say what it `resets`. `horizon-shader check` takes them,
+  with their names, counts and memory checked (at most 8 resources, 32 MiB of buffers, 1 MiB of fixed textures, and
+  R-relative textures two each of the 4 post targets); the game refuses a pack that declares one until a later
+  Horizon runs them. Compute passes and the WGSL that reads the resources come next.
 - 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` the scene holds translucent terrain (water,
   stained glass, ice) in a second layer. Where `trace` is, the prelude gets
   `fn trace_layers(origin, direction, max_distance, layers) -> RayHit`, `fn trace_any_layers(...) -> bool` and the

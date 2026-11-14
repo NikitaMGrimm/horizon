@@ -358,6 +358,18 @@ let start = input.position + input.normal * 0.05;
 let shadowed = frame.has_ray_tracing == 1u && trace_any(start, frame.sun_direction, 64.0);
 ```
 
+## Compute passes and kept resources
+
+Shader API 0.2 has the keys for storage a pack keeps between frames and for compute passes: `[[resource]]` (buffers,
+and textures with this frame's and last frame's versions), `[kept] reach`, `[[before_world]]`, `[[post]]` entries
+with `compute = true`, and an option's `resets`. A compute file defines `fn compute(input: ComputeInput)`.
+`horizon-shader check` takes them now, but **they run in a later Horizon**: this game refuses a pack that declares a
+resource or a compute pass. The keys, their limits and the WGSL each pass sees are in the
+[reference](api/shaders-reference-0.2.md#kept-resources-and-compute-passes).
+
+Two parts come in later steps, not with these keys: a compute or `[[before_world]]` file doesn't get `trace` or the
+other ray functions under `[ray_tracing]`, and `[material]` can't read kept resources.
+
 ## Options
 
 A picked pack with options gets a Shader Options... button at the top of the Shader Packs page. Float and int options

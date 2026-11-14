@@ -302,9 +302,15 @@ fn manifest_refused(path: &Path) -> Option<String> {
     }
 }
 
-/// Why the game doesn't draw a pack the check may still pass: `[frame] primaries = "bt2020"`
-/// isn't served yet (#14584).
+/// Why the game doesn't draw a pack the check may still pass: kept resources and compute
+/// entries have no runtime yet, and `[frame] primaries = "bt2020"` isn't served yet (#14584).
 fn not_drawn(m: &Manifest) -> Option<&'static str> {
+    if m.computes() {
+        return Some(
+            "[[resource]], [[before_world]] and compute [[post]] entries need a later Horizon: \
+             this one checks them but doesn't run them",
+        );
+    }
     (m.primaries == Primaries::Bt2020).then_some(
         "[frame] primaries = \"bt2020\" isn't served yet: leave it out, or set \"bt709\"",
     )
@@ -462,6 +468,11 @@ mod tests {
                 "0.2",
                 "[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n",
                 "primaries = \"bt2020\" isn't served yet",
+            ),
+            (
+                "0.2",
+                "[[resource]]\nname = \"cache\"\nbuffer = 64\nelement = \"u32\"\nkeep = \"view\"\n",
+                "need a later Horizon",
             ),
             ("0.2", "[frame\n", "horizon-shaders.toml"),
         ] {
