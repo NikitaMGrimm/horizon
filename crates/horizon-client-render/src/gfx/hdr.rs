@@ -1332,7 +1332,7 @@ var<private> params: ReferenceParams;
                 let light = scene_peak + (sun_peak - scene_peak) * i as f32 / 64.0;
                 let g = f64::from(light.powf(1.0 / 2.2));
                 assert!(
-                    unchanged(&mut hdr, [g, g * 0.6, g * 0.1, 1.0], i > 0),
+                    unchanged(&mut hdr, [g, g * 0.6, g * 0.1, 1.0], light > scene_peak),
                     "{peak}: {light}"
                 );
             }
