@@ -1030,7 +1030,7 @@ fn post_pipeline(
     let present = present_constants(&module, constants);
     let present: Vec<(&str, f64)> = present.iter().map(|(id, v)| (*id, *v)).collect();
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(label),
+        label: Some(&super::dx12_compiler::module_label(label)),
         source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
     });
     let options = wgpu::PipelineCompilationOptions {

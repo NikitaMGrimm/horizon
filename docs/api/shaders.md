@@ -255,6 +255,10 @@ draws them itself (the material stage covers terrain only). The first-person han
   built from the same WGSL as before, a test holds. `[ray_tracing]` needs a `[[post]]` pass or a `[material]` stage.
   `horizon-shader check` builds such a material stage both ways and refuses a pack whose `displacement` or `vertex`
   (both run in vertex shaders) reaches `trace` or `trace_any`.
+- 2026-11-13: API 0.2 (fix, experimental): `MaterialInput.tangent.xyz` now points where `uv.x` grows, as the
+  reference says; it pointed the other way, so a normal map turned into world axes by the reference's rule had both
+  in-plane components negated. `w` is unchanged. A 0.2 pack that negated the tangent to make up for it must stop.
+  API 0.1 keeps the old direction: its WGSL is frozen.
 - 2026-11-12: API 0.2 (additions, experimental): `[ray_tracing]`: the post stage of a pack that sets it gets
   `fn trace(origin, direction, max_distance) -> RayHit` and `fn trace_any(...) -> bool`, which read the terrain around
   the camera where the game traces rays (`HORIZON_RAY_TRACING=1` on a GPU with ray queries) and miss where it doesn't,
