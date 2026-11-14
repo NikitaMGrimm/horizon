@@ -106,8 +106,11 @@ fn every_stage_compiles_under_ray_tracing() {
         let scene = kind.prelude_traced(Tracing::Scene);
         let text = format!("{scene}{own}{}", kind.entries());
         validate_for(&text, Capabilities::default() | Capabilities::RAY_QUERY);
-        // Only the post and material stages' modules need the device's ray queries.
-        let rays = matches!(kind, StageKind::Post | StageKind::Material);
+        // Only the post, material and entity stages' modules need the device's ray queries.
+        let rays = matches!(
+            kind,
+            StageKind::Post | StageKind::Material | StageKind::Entity
+        );
         assert_eq!(scene.contains("ray_query"), rays, "{kind:?}");
         assert!(!stub.contains("ray_query") && !stub.contains("acceleration_structure"));
     }

@@ -901,7 +901,7 @@ fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass_or_a_material_stage() {
     let cases = [
         (
             SMALLEST.replace("[[post]]", "[sky]") + "[ray_tracing]\n",
-            "[ray_tracing] needs a [[post]] pass or a [material] stage",
+            "[ray_tracing] needs a [[post]] pass, a [material] or an [entity] stage",
         ),
         (
             format!("{SMALLEST}[ray_tracing]\nbounces = 2\n"),
