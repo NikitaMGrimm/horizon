@@ -72,6 +72,8 @@ pub(super) struct NativeShaders {
     /// The runs of this frame's entity geometry that the pack's `[entity]` stage lights
     /// (`Game::lit_entity`), up to the renderer taking them (`Renderer::take_entity_runs`).
     pub entity_runs: std::cell::RefCell<EntityRuns>,
+    /// The same runs' vertices posed on the GPU, counted as `SkinFrame::vertices` counts them.
+    pub posed_runs: std::cell::RefCell<EntityRuns>,
 }
 
 impl NativeShaders {
@@ -105,6 +107,11 @@ impl NativeShaders {
         self.looked = None;
     }
 
+    /// Hands the next frame's runs to the renderer (`Renderer::take_entity_runs`).
+    pub fn hand_entity_runs(&mut self, renderer: &mut horizon_client::gfx::Renderer) {
+        renderer.take_entity_runs(self.entity_runs.get_mut(), self.posed_runs.get_mut());
+    }
+
     pub fn picking(name: &str) -> Self {
         Self {
             picked: name.to_owned(),
@@ -121,34 +128,52 @@ impl Game<'_> {
     /// material (a translucent item in a hand, an energy swirl) and unlit overlays (the beam
     /// that heals the dragon, an End portal) stay Horizon's all the same: `EntityBatch` names
     /// only its ordinary quads, and the stage's shader passes the unlit ones on.
+    /// The models the run posed on the GPU (`entity_skin`) are the vertices it drew there
+    /// from `posed` on (`SkinFrame::vertices` when it began): the stage lights them alike.
     /// Kept only while the pack in use has the stage.
-    fn lit_run(&self, run: std::ops::Range<usize>, kind: EntityKind) {
+    fn lit_run(&self, run: std::ops::Range<usize>, posed: u32, kind: EntityKind) {
         let stage = self.renderer.as_ref();
         if stage.is_some_and(|r| r.draws_entity_stage()) {
             self.native_shaders.entity_runs.borrow_mut().push(run, kind);
+            let posed = posed as usize..self.skin_frame.borrow().vertices as usize;
+            self.native_shaders
+                .posed_runs
+                .borrow_mut()
+                .push(posed, kind);
         }
+    }
+
+    /// Where the next run's posed vertices start (`lit_posed_entity`).
+    pub(super) fn posed_vertices(&self) -> u32 {
+        self.skin_frame.borrow().vertices
     }
 
     /// Vertices `run` are an entity's model: a mob's or a player's with what it holds and
     /// wears, a vehicle's, a projectile's.
     pub(super) fn lit_entity(&self, run: std::ops::Range<usize>) {
-        self.lit_run(run, EntityKind::Entity);
+        self.lit_run(run, self.posed_vertices(), EntityKind::Entity);
+    }
+
+    /// [`Self::lit_entity`] of a run that may have posed models on the GPU since its posed
+    /// vertices numbered `posed` (`posed_vertices`).
+    pub(super) fn lit_posed_entity(&self, run: std::ops::Range<usize>, posed: u32) {
+        self.lit_run(run, posed, EntityKind::Entity);
     }
 
     /// Vertices `run` are block entities' models.
     pub(super) fn lit_block_entity(&self, run: std::ops::Range<usize>) {
-        self.lit_run(run, EntityKind::BlockEntity);
+        self.lit_run(run, self.posed_vertices(), EntityKind::BlockEntity);
     }
 
-    /// What `draw` adds to `out` is entities' models (`lit_entity`).
+    /// What `draw` adds to `out` is entities' models (`lit_entity`), on the GPU too.
     pub(super) fn lit(
         &mut self,
         out: &mut Vec<horizon_client::mesher::Vertex>,
         draw: impl FnOnce(&mut Self, &mut Vec<horizon_client::mesher::Vertex>),
     ) {
-        let start = out.len();
+        let (start, posed) = (out.len(), self.posed_vertices());
         draw(self, out);
-        self.lit_entity(start..out.len());
+        self.lit_posed_entity(start..out.len(), posed);
     }
 
     /// Builds the pack at `path` when its files changed since it was last read.

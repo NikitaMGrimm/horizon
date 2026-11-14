@@ -9775,7 +9775,7 @@ impl Game<'_> {
                 } else {
                     horizon_client::debug_overlay::GPU_TIMING_GAP
                 });
-                renderer.take_entity_runs(self.native_shaders.entity_runs.get_mut());
+                self.native_shaders.hand_entity_runs(renderer);
                 horizon_client::spans::time("renderer", || renderer.render(&frame))
             }
             None => Err("renderer".into()),

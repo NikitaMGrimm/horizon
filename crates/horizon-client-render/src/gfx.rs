@@ -6679,8 +6679,6 @@ impl Renderer {
                 self.native.is_some(),
                 || native_render::render_needs().entity_spans,
             )
-            // Posed vertices don't carry an entity kind yet: an `[entity]` stage keeps CPU posing.
-            && !self.draws_entity_stage()
     }
 
     /// Whether the layers tagged `OIT_ENTITY` (the eyes render type's, horse
