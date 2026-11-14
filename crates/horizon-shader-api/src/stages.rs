@@ -474,8 +474,8 @@ pub const RAY_STORE_BINDING: u32 = 49;
 /// array holds (a `u32`), how many of the scene's instances, its first ones, are solid
 /// terrain's (a `u32`), where the translucent terrain's end (a `u32`: the entity layer's
 /// instance is the next), where the retained block entities' instances start (a `u32`, after
-/// the stream's), then at byte 32 the first quad of each of the stream instance's three
-/// geometries (three `u32`), 48 bytes in all.
+/// the stream's), then at byte 32 the first quad of each of the stream instance's four
+/// geometries (four `u32`), 48 bytes in all.
 pub const RAY_SPACE_BINDING: u32 = 50;
 /// Two words per sprite layer: the pack's `[[materials]]` id, then its `[[tags]]` bits.
 pub const RAY_LAYERS_BINDING: u32 = 51;
@@ -669,8 +669,8 @@ struct horizon_RaySpace {
 +|    // The first instance of the block entities kept on the GPU, after the stream's: their quads
 +|    // are in `horizon_ray_retained`.
 +|    retained_instances: u32,
-+|    // The first quad of each of the entity layer's three geometries in `horizon_ray_entities`.
-+|    entity_bases: vec3<u32>,
++|    // The first quad of each of the entity layer's four geometries in `horizon_ray_entities`.
++|    entity_bases: vec4<u32>,
 }
 @group(3) @binding(48) var horizon_ray_scene: acceleration_structure;
 // Every traced section's quads as `TerrainVertex` (six words: the position, the uv's two u16,
@@ -771,9 +771,10 @@ fn horizon_ray_tangent(t: horizon_RayTriangle, e1: vec3<f32>, e2: vec3<f32>, nor
 // terrain's cutout test: bit 15 of the layer marks a quad over opaque texels; another stops it
 // where its texel's alpha is 0.5 or more. Translucent terrain's (terrain.wgsl's
 // `fs_translucent`): every texel but a clear one, alpha below 0.01, stops it.
-fn horizon_ray_stops(c: RayIntersection) -> bool {
+-|fn horizon_ray_stops(c: RayIntersection) -> bool {
++|fn horizon_ray_stops(c: RayIntersection, from_camera: bool) -> bool {
 +|    if c.instance_index >= horizon_ray_space.translucent_instances {
-+|        return horizon_ray_entity_stops(c);
++|        return horizon_ray_entity_stops(c, from_camera);
 +|    }
     let t = horizon_ray_triangle(c.instance_custom_data, c.primitive_index, c.barycentrics);
     let layer = horizon_ray_word(t.corners.x, 4u) & 0xffffu;
@@ -793,8 +794,11 @@ fn horizon_ray_cast(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, 
 -|    rayQueryInitialize(&query, horizon_ray_scene, RayDesc(flags, layers & 3u, 0.0,
 +|    rayQueryInitialize(&query, horizon_ray_scene, RayDesc(flags, layers & 7u, 0.0,
         max(max_distance, 0.0), origin + horizon_ray_space.camera, direction));
++|    // A ray from within a quarter block of the camera starts inside its own body.
++|    let from_camera = dot(origin, origin) <= 0.0625;
     while rayQueryProceed(&query) {
-        if horizon_ray_stops(rayQueryGetCandidateIntersection(&query)) {
+-|        if horizon_ray_stops(rayQueryGetCandidateIntersection(&query)) {
++|        if horizon_ray_stops(rayQueryGetCandidateIntersection(&query), from_camera) {
             rayQueryConfirmIntersection(&query);
         }
     }
@@ -912,7 +916,7 @@ fn horizon_ray_entity_triangle(c: RayIntersection) -> horizon_RayTriangle {
         t.corners += vec3<u32>(horizon_ray_retained_vertex);
         return t;
     }
-    let first = horizon_ray_space.entity_bases[min(c.geometry_index, 2u)];
+    let first = horizon_ray_space.entity_bases[min(c.geometry_index, 3u)];
     return horizon_ray_triangle(first, c.primitive_index, c.barycentrics);
 }
 // Whether entity.wgsl draws the pixel of a quad whose layer word is `layer`, where its texel's
@@ -930,7 +934,13 @@ fn horizon_ray_entity_keeps(layer: u32, texel: f32, tint: f32, mask: f32) -> boo
     }
     return texel * tint >= 0.1;
 }
-fn horizon_ray_entity_stops(c: RayIntersection) -> bool {
+// The stream's fourth geometry is the camera's own body in first person (what only a shadow pass
+// draws): a ray `from_camera` passes it, before reading anything.
+fn horizon_ray_entity_stops(c: RayIntersection, from_camera: bool) -> bool {
+    if from_camera && c.geometry_index == 3u
+        && c.instance_index < horizon_ray_space.retained_instances {
+        return false;
+    }
     let t = horizon_ray_entity_triangle(c);
     let layer = horizon_ray_entity_word(t.corners.x, 5u);
     var mask = 0.0;

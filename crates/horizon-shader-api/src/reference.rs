@@ -126,9 +126,10 @@ fn ray_tracing() -> String {
          players, armour stands, item frames, vehicles, projectiles, falling blocks, block displays, the block entities\n  \
          at rest that the block entity cache keeps (on in every graphics preset: closed chests, shulker boxes, bells,\n  \
          decorated pots, banners, within vanilla's 64 blocks) in view or not, and the other block entities the camera\n  \
-         draws (a chest while it opens). Such a pack's `RayHit` also has `entity`. Not in it: particles, text, the hand,\n  \
-         the camera's own body in first person, translucent items, additive glows, beams and portals, and other block\n  \
-         entities out of view. `trace` and `trace_any` never read it.\n\
+         draws (a chest while it opens). Such a pack's `RayHit` also has `entity`. The camera's own body in first person\n  \
+         is in it too, but a ray that starts within a quarter block of the camera (`dot(origin, origin) <= 0.0625`)\n  \
+         passes it, since it starts inside it. Not in it: particles, text, the hand, translucent items, additive glows,\n  \
+         beams and portals, and other block entities out of view. `trace` and `trace_any` never read it.\n\
          - `fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit` and\n  \
          `fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool`: `trace`\n  \
          and `trace_any` over the layers `layers` names; `trace(o, d, m)` is `trace_layers(o, d, m, RAY_SOLID)`. With no\n  \

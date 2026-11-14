@@ -27,7 +27,9 @@
 //! marked, read from its vertex buffer as it is, its instance after the translucent ones. It is
 //! built again every frame, after the stream's upload, so the TLAS is too. Its third geometry is
 //! the entities the camera doesn't draw (step 2): the game moves them out of what the camera
-//! draws (`Renderer::take_ray_only`), and the batch puts them where no pass draws from. The
+//! draws (`Renderer::take_ray_only`), and the batch puts them where no pass draws from. Its
+//! fourth is the camera's own body in first person, the stream's shadow-only quads where they
+//! are: a ray that starts at the camera passes it (the prelude's `horizon_ray_entity_stops`). The
 //! block entities the renderer keeps on the GPU have a BLAS a section (step 3, `ray_retained.rs`),
 //! their instances after the stream's.
 
@@ -59,8 +61,9 @@ const ENTITY_STRIDE: u64 = std::mem::size_of::<Vertex>() as u64;
 const ENTITY_INPUT: wgpu::BufferUsages =
     wgpu::BufferUsages::STORAGE.union(wgpu::BufferUsages::BLAS_INPUT);
 /// The entity layer's geometries, each a range of the stream: the ordinary quads the camera
-/// draws, improved transparency's, and the ray-only ones (`EntityBatch::ray_ranges`).
-pub(in crate::gfx) const GEOMETRIES: usize = 3;
+/// draws, improved transparency's, the ray-only ones, and the shadow-only ones (the camera's own
+/// body in first person) (`EntityBatch::ray_ranges`).
+pub(in crate::gfx) const GEOMETRIES: usize = 4;
 
 /// The renderer's side: the calls gfx.rs makes, each one line there.
 impl Renderer {
@@ -104,10 +107,11 @@ impl Renderer {
             self.uploads
                 .buffer(encoder, &self.entity_buffer, 0, vertices);
         }
-        // The ray-only geometry and a retained section can hold more quads than anything drawn:
-        // the shared indices cover them.
+        // The ray-only and shadow-only geometries and a retained section can hold more quads than
+        // anything drawn: the shared indices cover them.
         let retained = frame.static_block_entities;
-        let most = || (self.entity_batch.ray_ranges[2].1).max(Retained::most_quads(retained));
+        let [.., (_, ray_only), (_, shadow_only)] = self.entity_batch.ray_ranges;
+        let most = || (ray_only.max(shadow_only)).max(Retained::most_quads(retained));
         if entities && most() > self.index_quads {
             self.index_quads = most().next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
@@ -150,7 +154,8 @@ impl Renderer {
     }
 
     /// Takes the frame's ray-only entities (`EntityBatch::ray_only`): their vertices, which the
-    /// game moved out of the entity stream, and their runs. Both are left empty.
+    /// game moved out of the entity stream, and their runs. Both are left empty. The batch also
+    /// learns whether the layer is on, for the frame's shadow-only quads (`EntityBatch::ray`).
     pub fn take_ray_only(
         &mut self,
         vertices: &mut Vec<Vertex>,
@@ -158,6 +163,7 @@ impl Renderer {
     ) {
         std::mem::swap(&mut self.entity_batch.ray_only, vertices);
         std::mem::swap(&mut self.entity_batch.ray_kinds, runs);
+        self.entity_batch.ray = self.traces_entities();
         vertices.clear();
         runs.clear();
     }
@@ -187,9 +193,9 @@ fn reach_box(camera: DVec3, reach: i32) -> (glam::Vec3, glam::Vec3) {
 }
 
 /// What the entity layer is built from this frame: the entity stream's vertex buffer, its
-/// texture atlas, and where the batch's ordinary, improved transparency and ray-only quads are
-/// in it, as (first quad, quads) (`EntityBatch::ray_ranges`); and the retained block entities'
-/// sections.
+/// texture atlas, and where the batch's ordinary, improved transparency, ray-only and shadow-only
+/// quads are in it, as (first quad, quads) (`EntityBatch::ray_ranges`); and the retained block
+/// entities' sections.
 pub(in crate::gfx) struct Stream<'a> {
     buffer: &'a wgpu::Buffer,
     atlas: &'a wgpu::TextureView,
@@ -197,7 +203,7 @@ pub(in crate::gfx) struct Stream<'a> {
     retained: &'a [StaticSectionSnapshot],
 }
 
-/// The entity layer: one BLAS of three geometries, the stream's ranges, read where they are
+/// The entity layer: one BLAS of four geometries, the stream's ranges, read where they are
 /// in its vertex buffer (positions first, camera-relative) with the shared quad indices, and
 /// built again every frame. wgpu has no refit, and a compacted BLAS can't be built again.
 struct Entities {
@@ -301,7 +307,7 @@ fn geometry_size(quads: u32) -> wgpu::BlasTriangleGeometrySizeDescriptor {
     }
 }
 
-/// The entity layer's BLAS, of three geometries of `sizes` quads at most.
+/// The entity layer's BLAS, of four geometries of `sizes` quads at most.
 fn entity_blas(device: &wgpu::Device, sizes: [u32; GEOMETRIES]) -> wgpu::Blas {
     device.create_blas(
         &wgpu::CreateBlasDescriptor {
@@ -428,7 +434,7 @@ pub(in crate::gfx) struct TracedEntities<'a> {
     pub vertices: wgpu::BufferBinding<'a>,
     pub atlas: &'a wgpu::TextureView,
     pub sampler: &'a wgpu::Sampler,
-    /// Each of the BLAS's three geometries' first quad in `vertices`.
+    /// Each of the BLAS's four geometries' first quad in `vertices`.
     pub bases: [u32; GEOMETRIES],
     /// The retained block entities' quads, and their first instance in the TLAS.
     pub retained: &'a wgpu::Buffer,

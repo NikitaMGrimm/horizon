@@ -310,9 +310,10 @@ that names no trace function is built as without it.
   players, armour stands, item frames, vehicles, projectiles, falling blocks, block displays, the block entities
   at rest that the block entity cache keeps (on in every graphics preset: closed chests, shulker boxes, bells,
   decorated pots, banners, within vanilla's 64 blocks) in view or not, and the other block entities the camera
-  draws (a chest while it opens). Such a pack's `RayHit` also has `entity`. Not in it: particles, text, the hand,
-  the camera's own body in first person, translucent items, additive glows, beams and portals, and other block
-  entities out of view. `trace` and `trace_any` never read it.
+  draws (a chest while it opens). Such a pack's `RayHit` also has `entity`. The camera's own body in first person
+  is in it too, but a ray that starts within a quarter block of the camera (`dot(origin, origin) <= 0.0625`)
+  passes it, since it starts inside it. Not in it: particles, text, the hand, translucent items, additive glows,
+  beams and portals, and other block entities out of view. `trace` and `trace_any` never read it.
 - `fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit` and
   `fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool`: `trace`
   and `trace_any` over the layers `layers` names; `trace(o, d, m)` is `trace_layers(o, d, m, RAY_SOLID)`. With no

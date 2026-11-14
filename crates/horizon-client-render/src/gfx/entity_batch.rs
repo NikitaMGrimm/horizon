@@ -126,24 +126,42 @@ pub(super) struct EntityBatch {
     /// For a native pack's `[entity]` stage (`native_entity.rs`) and the ray scene's entity
     /// layer: the runs of the next `update`'s entities that they take.
     pub(super) kinds: EntityRuns,
-    /// The ordinary quads, the improved transparency ones and the ray-only ones in `combined`,
-    /// as (first quad, quads): the entity layer's geometries (gfx/ray_scene.rs).
+    /// The ordinary quads, the improved transparency ones, the ray-only ones and the shadow-only
+    /// ones in `combined`, as (first quad, quads): the entity layer's geometries
+    /// (gfx/ray_scene.rs).
     pub(super) ray_ranges: [(u32, u32); GEOMETRIES],
     /// The entities the camera doesn't draw within the ray scene's reach, which the game moved
     /// out of the stream (`Renderer::take_ray_only`), and their runs: what `ray_only_quads`
     /// takes of them.
     pub(super) ray_only: Vec<Vertex>,
     pub(super) ray_kinds: EntityRuns,
+    /// Whether the ray scene has the entity layer this frame (`Renderer::take_ray_only`): the
+    /// shadow-only quads are then its fourth geometry.
+    pub(super) ray: bool,
     /// The last `update`'s `oit`.
     oit: bool,
 }
 
 impl EntityBatch {
     /// After `update`: the ray-only quads, then the quads only a native pack's shadow pass draws,
-    /// at the buffer's end (it draws them from there).
+    /// at the buffer's end (it draws them from there): the camera's own body in first person.
+    /// With the ray scene's entity layer on (`ray`) they are its fourth geometry where they lie,
+    /// marked as `tag_kinds` marks an entity's quads of the ordinary material or improved
+    /// transparency's; the native shadow shader reads only a quad's overlay.
     pub(super) fn append_shadow_only(&mut self, shadow_only: &[Vertex]) {
         self.append_ray_only();
+        let first = self.combined.len() / 4;
         self.combined.extend_from_slice(shadow_only);
+        let quads = if self.ray { shadow_only.len() / 4 } else { 0 };
+        self.ray_ranges[3] = (first as u32, quads as u32);
+        let bits = super::native_entity::kind_bits(super::native_entity::EntityKind::Entity);
+        for quad in self.combined.as_chunks_mut::<4>().0[first..][..quads].iter_mut() {
+            if matches!(material(quad[0].layer, self.oit), 0 | 9) {
+                for vertex in quad {
+                    vertex.layer |= bits | RAY_ENTITY_QUAD;
+                }
+            }
+        }
     }
 
     /// Appends the quads of `ray_only` the entity layer takes, marked as `tag_kinds` marks the
@@ -260,7 +278,7 @@ impl EntityBatch {
         self.combined.extend_from_slice(see_through);
         let oit_first: usize = counts[..9].iter().sum();
         let end = self.combined.len() / 4;
-        self.ray_ranges = [(0, counts[0]), (oit_first, counts[9]), (end, 0)]
+        self.ray_ranges = [(0, counts[0]), (oit_first, counts[9]), (end, 0), (end, 0)]
             .map(|(first, quads)| (first as u32, quads as u32));
         self.oit = oit;
         self.tag_kinds(oit_first);

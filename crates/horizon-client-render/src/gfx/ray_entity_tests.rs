@@ -18,22 +18,22 @@ fn the_layer_s_quads_are_cut_to_what_its_binding_holds() {
     let most = largest_entity_binding(&limits);
     assert_eq!(most, 5957);
     // Within it: as they are.
-    let ranges = [(0, 5000), (5000, 900), (5900, 50)];
+    let ranges = [(0, 5000), (5000, 900), (5900, 50), (5950, 7)];
     assert_eq!(within_binding(ranges, most), (ranges, false));
-    // The ray-only geometry, last in the stream, runs past it; one past its end starts there
+    // The shadow-only geometry, last in the stream, runs past it; one past its end starts there
     // with none.
     assert_eq!(
-        within_binding([(0, 5000), (5000, 900), (5950, 100)], most),
-        ([(0, 5000), (5000, 900), (5950, 7)], true)
+        within_binding([(0, 5000), (5000, 900), (5900, 50), (5950, 100)], most),
+        ([(0, 5000), (5000, 900), (5900, 50), (5950, 7)], true)
     );
     assert_eq!(
-        within_binding([(0, 6000), (6000, 10), (6020, 5)], most),
-        ([(0, 5957), (5957, 0), (5957, 0)], true)
+        within_binding([(0, 6000), (6000, 10), (6020, 5), (6025, 3)], most),
+        ([(0, 5957), (5957, 0), (5957, 0), (5957, 0)], true)
     );
     // An empty geometry past the end lost nothing.
     assert_eq!(
-        within_binding([(0, 10), (20, 0), (7000, 0)], most),
-        ([(0, 10), (20, 0), (5957, 0)], false)
+        within_binding([(0, 10), (20, 0), (7000, 0), (7000, 0)], most),
+        ([(0, 10), (20, 0), (5957, 0), (5957, 0)], false)
     );
 }
 
@@ -95,6 +95,7 @@ fn ray_only_quads_lie_past_every_draw_and_before_the_shadow_only_ones() {
         }
         batch.ray_kinds = runs;
         let counts = batch.update(&stream, &additive, &hand, &see_through, true);
+        batch.ray = ray;
         batch.append_shadow_only(&shadow_only);
         (batch, counts)
     };
@@ -108,7 +109,7 @@ fn ray_only_quads_lie_past_every_draw_and_before_the_shadow_only_ones() {
     let bytes = |v: &[Vertex]| bytemuck::cast_slice::<Vertex, u8>(v).to_vec();
     assert_eq!(bytes(&on.combined[..drawn]), bytes(&off.combined[..drawn]));
     let tail = &on.combined[on.combined.len() - 4..];
-    assert_eq!(bytes(tail), bytes(&shadow_only));
+    assert!(tail.iter().zip(&shadow_only).all(|(t, s)| t.pos == s.pos));
     assert_eq!(bytes(&off.combined[drawn..]), bytes(&shadow_only));
     // The ray-only ones: the body and improved transparency's layer, marked as an entity's.
     assert_eq!(on.ray_ranges[2], (6, 2));
@@ -133,8 +134,62 @@ fn ray_only_quads_lie_past_every_draw_and_before_the_shadow_only_ones() {
     plain.ray_only = ray_only.clone();
     plain.ray_kinds.push(0..12, EntityKind::Entity);
     plain.update(&stream, &[], &[], &[], false);
+    plain.ray = true;
     plain.append_shadow_only(&[]);
     assert_eq!(plain.ray_ranges[2], (3, 2));
+}
+
+/// The quads only the native shadow pass draws (the camera's own body in first person) stay the
+/// stream's last, where that pass counts back to them, in their order and with every field but
+/// the layer as they were. With the entity layer on they are its fourth geometry where they lie,
+/// marked as an entity's quads are, the ordinary material's and improved transparency's alone (a
+/// translucent item the player holds, and its shadow, stay out). Off, the stream is the same
+/// bytes as before the layer.
+#[test]
+fn the_shadow_only_quads_are_the_fourth_geometry_where_they_lie() {
+    use crate::gfx::entity_batch::{EntityBatch, OIT_ENTITY, SHADOW_OVERLAY};
+    use crate::gfx::native_entity::{EntityKind, kind_bits};
+    let tagged = |layer, x| quad(x, 0.0, layer, 0xffff_ffff);
+    let stream: Vec<Vertex> = [tagged(0, 0.0), tagged(OIT_ENTITY, 1.0)].concat();
+    let body: Vec<Vertex> = [
+        tagged(0, 6.0),
+        tagged(32, 7.0),
+        tagged(OIT_ENTITY, 8.0),
+        tagged(SHADOW_OVERLAY, 9.0),
+    ]
+    .concat();
+    let batch = |ray: bool, oit: bool| {
+        let mut batch = EntityBatch::default();
+        let counts = batch.update(&stream, &tagged(2, 3.0), &tagged(0, 4.0), &[], oit);
+        batch.ray = ray;
+        batch.append_shadow_only(&body);
+        (batch, counts)
+    };
+    let bytes = |v: &[Vertex]| bytemuck::cast_slice::<Vertex, u8>(v).to_vec();
+    for oit in [true, false] {
+        let ((off, counts_off), (on, counts_on)) = (batch(false, oit), batch(true, oit));
+        assert_eq!(counts_on, counts_off);
+        assert_eq!(on.combined.len(), off.combined.len());
+        let first = off.combined.len() - body.len();
+        assert_eq!(bytes(&off.combined[first..]), bytes(&body));
+        assert_eq!(bytes(&on.combined[..first]), bytes(&off.combined[..first]));
+        let quads = (first / 4) as u32;
+        assert_eq!(
+            (on.ray_ranges[3], off.ray_ranges[3]),
+            ((quads, 4), (quads, 0))
+        );
+        assert_eq!(on.ray_ranges[..3], off.ray_ranges[..3]);
+        let entity = kind_bits(EntityKind::Entity) | RAY_ENTITY_QUAD;
+        for (got, was) in on.combined[first..].iter().zip(&body) {
+            let marked = matches!(was.layer, 0 | OIT_ENTITY);
+            let layer = if marked {
+                was.layer | entity
+            } else {
+                was.layer
+            };
+            assert_eq!(bytes(&[Vertex { layer, ..*was }]), bytes(&[*got]));
+        }
+    }
 }
 
 /// A device with ray queries, if this machine has one.
@@ -170,7 +225,7 @@ fn quad(x: f32, z: f32, layer: u32, color: u32) -> [Vertex; 4] {
 /// What the scene's WGSL makes of the layer, run on the GPU: rays over each layer mask, and
 /// `horizon_ray_entity_keeps` on cases of entity.wgsl's alpha test.
 const PROBE: &str = "
-@group(0) @binding(0) var<storage, read_write> probe_out: array<vec4<f32>, 7>;
+@group(0) @binding(0) var<storage, read_write> probe_out: array<vec4<f32>, 8>;
 @compute @workgroup_size(1) fn probe() {
     let z = vec3<f32>(0.0, 0.0, 1.0);
     let a = trace_layers(vec3<f32>(0.3, 0.6, 0.0), z, 100.0, RAY_ENTITY);
@@ -191,6 +246,8 @@ const PROBE: &str = "
         f32(horizon_ray_entity_keeps(q | 0x2000000u | 7u, 1.0, 1.0, 0.0)));
     let c = trace_layers(vec3<f32>(20.3, 0.6, 0.0), z, 100.0, RAY_ENTITY);
     probe_out[6] = vec4<f32>(c.distance, f32(c.entity), c.tint.r, c.tint.b);
+    let d = trace_layers(vec3<f32>(30.3, 0.6, 0.0), z, 100.0, RAY_ENTITY);
+    probe_out[7] = vec4<f32>(d.distance, f32(d.entity), d.tint.r, d.tint.g);
 }
 ";
 
@@ -339,25 +396,29 @@ fn run_probe(
     bytemuck::cast_slice(&read.slice(..).get_mapped_range().unwrap()[..]).to_vec()
 }
 
-/// Three geometries apart in the stream, and the quads before and between them: a ray reads the
-/// quad its geometry's own base says, the ray-only geometry's too, passes the layer's quads that
+/// Four geometries apart in the stream, and the quads before and between them: a ray reads the
+/// quad its geometry's own base says, the ray-only and shadow-only geometries' too, passes the
+/// layer's quads that
 /// aren't marked, reaches the layer only when its mask names it, and finds the vertices' colour
 /// and light. The alpha test keeps what entity.wgsl draws.
 #[test]
-fn rays_reach_the_entity_layer_through_its_three_bases() {
+fn rays_reach_the_entity_layer_through_its_four_bases() {
     let Some((device, queue)) = ray_device() else {
         eprintln!("no GPU with ray queries: skipped");
         return;
     };
     let (red, green, blue, magenta) = (0xff00_00ff, 0xff00_ff00, 0xffff_0000, 0xffff_00ff);
+    let yellow = 0xff00_ffff;
     // Geometry 0: an unmarked quad, then a marked red one behind it. Then a blue quad in no
-    // geometry, geometry 1, a green quad, and the ray-only geometry 2, a magenta one.
+    // geometry, geometry 1, a green quad, the ray-only geometry 2, a magenta one, and the
+    // shadow-only geometry 3, a yellow one.
     let stream: Vec<Vertex> = [
         quad(0.0, 2.0, 0, blue),
         quad(0.0, 4.0, RAY_ENTITY_QUAD, red),
         quad(10.0, 1.0, RAY_ENTITY_QUAD, blue),
         quad(10.0, 3.0, RAY_ENTITY_QUAD, green),
         quad(20.0, 5.0, RAY_ENTITY_QUAD, magenta),
+        quad(30.0, 6.0, RAY_ENTITY_QUAD, yellow),
     ]
     .concat();
     use wgpu::util::DeviceExt;
@@ -370,12 +431,12 @@ fn rays_reach_the_entity_layer_through_its_three_bases() {
     let stream = Stream {
         buffer: &buffer,
         atlas: &atlas,
-        ranges: [(0, 2), (3, 1), (4, 1)],
+        ranges: [(0, 2), (3, 1), (4, 1), (5, 1)],
         retained: &[],
     };
     let mut entities = Entities::new(&device, &stream);
     assert!(!entities.fit(&device, &stream));
-    let indices = super::super::quad_indices(&device, 5);
+    let indices = super::super::quad_indices(&device, 6);
     let mut tlas = create_tlas(&device, 1);
     let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     tlas[0] = Some(wgpu::TlasInstance::new(
@@ -414,7 +475,7 @@ fn rays_reach_the_entity_layer_through_its_three_bases() {
         &traced,
         (&store, &layers, &sprites),
         PROBE,
-        7,
+        8,
     );
     // Through the unmarked quad to the red one; the green one at geometry 1's own base, not
     // the blue one before it.
@@ -428,8 +489,109 @@ fn rays_reach_the_entity_layer_through_its_three_bases() {
     assert_eq!(got[3], [1.0, 0.0, 0.0, 0.0]);
     assert_eq!(got[4], [1.0, 0.0, 0.0, 0.0]);
     assert_eq!(got[5], [0.0, 0.0, 0.0, 1.0]);
-    // The ray-only quad, at the third base.
+    // The ray-only quad, at the third base; the shadow-only one, at the fourth, from a ray that
+    // doesn't start at the camera.
     assert_eq!(got[6], [5.0, 1.0, 1.0, 1.0]);
+    assert_eq!(got[7], [6.0, 1.0, 1.0, 1.0]);
+}
+
+/// Rays from the camera and from elsewhere at the camera's own body (the shadow-only geometry)
+/// with an entity behind it.
+const BODY_PROBE: &str = "
+@group(0) @binding(0) var<storage, read_write> probe_out: array<vec4<f32>, 4>;
+@compute @workgroup_size(1) fn probe() {
+    let z = vec3<f32>(0.0, 0.0, 1.0);
+    let at = trace_layers(vec3<f32>(0.0, 0.2, 0.0), z, 100.0, RAY_ENTITY);
+    let edge = trace_layers(vec3<f32>(0.0, 0.25, 0.0), z, 100.0, RAY_SOLID | RAY_ENTITY);
+    let past = trace_layers(vec3<f32>(0.0, 0.26, 0.0), z, 100.0, RAY_ENTITY);
+    let outside = trace_layers(vec3<f32>(0.0, 0.5, -1.0), z, 100.0, RAY_ENTITY);
+    let short = trace_layers(vec3<f32>(0.0, 0.2, 0.0), z, 2.0, RAY_ENTITY);
+    probe_out[0] = vec4<f32>(at.distance, at.tint.r, edge.distance, edge.tint.r);
+    probe_out[1] = vec4<f32>(past.distance, past.tint.g, outside.distance, outside.tint.g);
+    probe_out[2] = vec4<f32>(short.distance,
+        f32(trace_any_layers(vec3<f32>(0.0, 0.2, 0.0), z, 2.0, RAY_ENTITY)),
+        f32(trace_any_layers(vec3<f32>(0.0, 0.2, 0.0), z, 4.0, RAY_ENTITY)),
+        f32(trace_any_layers(vec3<f32>(0.0, 0.5, -1.0), z, 2.0, RAY_ENTITY)));
+    // Another geometry's quad as close to the camera is not passed.
+    let near = trace_layers(vec3<f32>(5.0, 0.2, 0.0), z, 100.0, RAY_ENTITY);
+    probe_out[3] = vec4<f32>(near.distance, near.tint.b, 0.0, 0.0);
+}
+";
+
+/// The camera's own body in first person (the stream's fourth geometry) around the camera: a ray
+/// that starts within a quarter block of the camera passes it, to the red entity behind it, with
+/// `trace_layers` and `trace_any_layers`; one from farther off stops at it, as at any entity.
+/// Another geometry's quad as close to the camera stops a ray from there.
+#[test]
+fn a_ray_from_the_camera_passes_its_own_body() {
+    let Some((device, queue)) = ray_device() else {
+        eprintln!("no GPU with ray queries: skipped");
+        return;
+    };
+    let (red, green, blue) = (0xff00_00ff, 0xff00_ff00, 0xffff_0000);
+    let stream: Vec<Vertex> = [
+        quad(-0.5, 3.0, RAY_ENTITY_QUAD, red),
+        quad(4.5, 0.5, RAY_ENTITY_QUAD, blue),
+        quad(-0.5, 0.5, RAY_ENTITY_QUAD, green),
+    ]
+    .concat();
+    use wgpu::util::DeviceExt;
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&stream),
+        usage: wgpu::BufferUsages::VERTEX | ENTITY_INPUT,
+    });
+    let (atlas, sprites) = white(&device, &queue);
+    let stream = Stream {
+        buffer: &buffer,
+        atlas: &atlas,
+        ranges: [(0, 2), (2, 0), (2, 0), (2, 1)],
+        retained: &[],
+    };
+    let mut entities = Entities::new(&device, &stream);
+    entities.fit(&device, &stream);
+    let indices = super::super::quad_indices(&device, 4);
+    let mut tlas = create_tlas(&device, 1);
+    let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    tlas[0] = Some(wgpu::TlasInstance::new(
+        &entities.blas,
+        identity,
+        0,
+        RAY_ENTITY as u8,
+    ));
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let sizes = entities.built_sizes();
+    let builds = [entities.build(&sizes, &indices)];
+    encoder.build_acceleration_structures(builds.iter(), std::iter::once(&tlas));
+    let (store, layers) = (empty(&device, 24), empty(&device, 8));
+    let traced = Traced {
+        tlas: &tlas,
+        solid_instances: 0,
+        store: &store,
+        translucent_instances: 0,
+        entities: Some(TracedEntities {
+            vertices: buffer.as_entire_buffer_binding(),
+            atlas: &atlas,
+            sampler: &entities.sampler,
+            bases: entities.ranges.map(|r| r.0),
+            retained: entities.retained.store(),
+            retained_instances: 1,
+        }),
+        generation: 0,
+        camera: [0.0; 3],
+        distance: 100.0,
+    };
+    let tables = (&store, &layers, &sprites);
+    let got = run_probe((&device, &queue), encoder, &traced, tables, BODY_PROBE, 4);
+    // From the camera, and from a quarter block off it: past the body to the red entity.
+    assert_eq!(got[0], [3.0, 1.0, 3.0, 1.0]);
+    // Just past the quarter block, and from a block behind: the body, green.
+    assert_eq!(got[1], [0.5, 1.0, 1.5, 1.0]);
+    // Within 2 blocks of the camera nothing but the body: a miss for both; within 4, the red
+    // one. From a block behind, the body within 2.
+    assert_eq!(got[2], [-1.0, 0.0, 1.0, 1.0]);
+    // Geometry 0's quad as close: hit.
+    assert_eq!(got[3][..2], [0.5, 1.0]);
 }
 
 /// Rays at the stream's quad and at two retained sections' (`ray_retained.rs`).
@@ -504,7 +666,7 @@ fn rays_reach_retained_block_entities_through_their_sections() {
     let stream = Stream {
         buffer: &buffer,
         atlas: &atlas,
-        ranges: [(0, 1), (1, 0), (1, 0)],
+        ranges: [(0, 1), (1, 0), (1, 0), (1, 0)],
         retained: &[],
     };
     let mut entities = Entities::new(&device, &stream);
