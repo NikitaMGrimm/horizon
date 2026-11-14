@@ -253,6 +253,9 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-14: API 0.2 (experimental): `RAY_ENTITY` also holds the block entities at rest that the block entity cache
+  keeps (on in every graphics preset: closed chests, shulker boxes, bells, decorated pots, banners), in view or not,
+  so they cast traced shadows and show in reflections as the mobs do. A hit on one is an entity hit like any other.
 - 2026-11-14: API 0.2 (experimental): `RAY_ENTITY` also holds the entities within the scene's reach that the camera
   doesn't draw (behind or beside it, or hidden behind terrain), so they cast traced shadows and show in reflections,
   and turning the camera doesn't change the layer. Block entities out of view are not in it yet.
