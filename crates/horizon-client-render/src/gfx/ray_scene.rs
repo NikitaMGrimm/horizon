@@ -157,6 +157,14 @@ impl RayScene {
         })
     }
 
+    /// What a trace reads (spec #15624): the TLAS, the store of its sections' vertices (an
+    /// instance's custom data is its section's first quad there), and the chunk column its
+    /// instances sit relative to (none before the first TLAS) with the chunks around it.
+    #[expect(dead_code, reason = "spec #15624: shader packs' `trace` reads it next")]
+    pub(in crate::gfx) fn traced(&self) -> (&wgpu::Tlas, &wgpu::Buffer, Option<(i32, i32)>, i32) {
+        (&self.tlas, &self.unpacker.store, self.anchor, self.reach)
+    }
+
     fn mark(&mut self, key: SectionKey) {
         self.dirty.push(key);
     }
@@ -360,7 +368,8 @@ struct Unpacker {
 impl Unpacker {
     fn new(device: &wgpu::Device, capacity: u64) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Ray tracing: unpack sections"),
+            // No colon: DXC (DirectX 12) takes the label for a file name and fails to read it.
+            label: Some("Unpack sections"),
             source: wgpu::ShaderSource::Wgsl(unpack_shader().into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -675,6 +684,64 @@ mod tests {
         // Section 5 of column (3, -2), the world starting at y = -64, seen from column (2, -2).
         assert_eq!(instance_origin((3, 5, -2), -64, (2, -2)), [16.0, 16.0, 0.0]);
         assert_eq!(instance_origin((2, 0, -2), -64, (2, -2)), [0.0, -64.0, 0.0]);
+    }
+
+    const A: SectionKey = (0, 0, 0);
+    const B: SectionKey = (1, 0, 0);
+    const C: SectionKey = (2, 0, 0);
+
+    #[test]
+    fn freed_slots_merge_and_are_taken_first_fit() {
+        let mut slots = Slots::new(64, 64);
+        assert_eq!(slots.alloc(A, 16), Some(0));
+        assert_eq!(slots.alloc(B, 16), Some(16));
+        assert_eq!(slots.alloc(C, 16), Some(32));
+        slots.free(B);
+        slots.free(A);
+        // 32 fit only where A's and B's slots merged; the 16 left at the end come next.
+        assert_eq!(slots.alloc(A, 32), Some(0));
+        assert_eq!(slots.alloc(B, 8), Some(48));
+        assert_eq!(slots.capacity, 64);
+    }
+
+    #[test]
+    fn a_section_meshed_again_leaves_its_old_slot() {
+        let mut slots = Slots::new(64, 64);
+        slots.alloc(A, 8);
+        slots.alloc(B, 8);
+        assert_eq!(slots.alloc(A, 4), Some(0));
+        // Its old 8 are free again, but 16 don't fit before B.
+        assert_eq!(slots.alloc(A, 16), Some(16));
+        assert_eq!(slots.alloc(C, 8), Some(0));
+        assert_eq!(slots.first(B), Some(8));
+    }
+
+    #[test]
+    fn a_full_store_grows_and_every_slot_stays() {
+        let mut slots = Slots::new(16, 1 << 26);
+        assert_eq!(slots.alloc(A, 16), Some(0));
+        assert_eq!(slots.alloc(B, 8), Some(16));
+        assert_eq!(slots.capacity, 32);
+        // Larger than twice the store: the store takes it whole after its free 8.
+        assert_eq!(slots.alloc(C, 100), Some(24));
+        assert_eq!(slots.capacity, 132);
+        assert_eq!((slots.first(A), slots.first(B)), (Some(0), Some(16)));
+    }
+
+    #[test]
+    fn at_the_largest_store_a_section_waits_in_its_old_slot() {
+        let mut slots = Slots::new(16, 32);
+        slots.alloc(A, 16);
+        slots.alloc(B, 16);
+        assert_eq!(slots.alloc(C, 4), None);
+        assert_eq!(slots.alloc(A, 20), None);
+        assert_eq!(slots.first(A), Some(0));
+        // Nothing was lost on the way: A's slot was taken back.
+        assert_eq!(slots.alloc(C, 4), None);
+        slots.free(B);
+        assert_eq!(slots.alloc(A, 20), Some(0));
+        slots.clear();
+        assert_eq!(slots.alloc(C, 32), Some(0));
     }
 
     #[test]
