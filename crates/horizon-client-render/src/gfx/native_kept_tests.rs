@@ -392,6 +392,38 @@ fn frame_events_move_the_epochs_they_reset() {
     );
 }
 
+/// A screenshot sequence's frames follow each other on its clock however long one takes to draw:
+/// a wall-clock gap past 0.5 s between two of them is no pause, so the view's kept resources stay;
+/// the same gap without the clock is one.
+#[test]
+fn a_slow_sequence_frame_is_no_pause() {
+    use crate::gfx::pack_uniforms::FrameTiming;
+    use horizon_shader_api::kept::*;
+    let Some((device, _)) = device() else {
+        return;
+    };
+    let hud = crate::hud::HudBatch::new([4, 4]);
+    let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+    let mut native =
+        super::super::NativeFrame::new(&device, None, Vec::new(), Default::default(), None, false);
+    native.epochs = Some(Epochs::new(None));
+    let slow = std::time::Duration::from_secs(5);
+    for n in 1..=3 {
+        frame.pack.frame_timing = Some(FrameTiming::nth(n, 1000.0 / 60.0));
+        let reasons = if n == 1 { REASON_LOAD } else { 0 };
+        assert_eq!(
+            epochs_of(&mut native, &frame, [4, 4], false),
+            [1, 1, reasons]
+        );
+        native.last.as_mut().unwrap().2 -= slow;
+    }
+    frame.pack.frame_timing = None;
+    assert_eq!(
+        epochs_of(&mut native, &frame, [4, 4], false),
+        [2, 1, REASON_PAUSE]
+    );
+}
+
 /// A pack with kept resources, the options `a` (`resets = "view"`), `b` and `w` (`resets =
 /// "world"`), and `file` as its last post pass.
 fn with_options(file: &str) -> Report {
