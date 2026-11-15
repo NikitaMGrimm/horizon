@@ -211,6 +211,11 @@ keeps drawing. What a pack works with:
   coverage: the texture's alpha times the layer's opacity is cut below 0.1 and blends, the returned alpha is ignored,
   and the check refuses a `discard` reachable from `entity`. Under `"pack"` the returned alpha is cut and blends, and
   the stage may `discard`. Dissolve masks and culling are Horizon's under either.
+- **`[frame] fog`**: `"engine"` (the default) or `"pack"`, which fogs what its stages draw itself. Under `"pack"`
+  Horizon skips its fog on what `material` and `entity` return, and every stage gets `vanilla_fog(position)`,
+  vanilla's fog at a point, with the frame's two fog distances it reads (`fog_environment`, `fog_render`), so a pack
+  can start from vanilla's fog and change it. What Horizon draws itself (items, particles, clouds, the hand) keeps
+  vanilla's fog.
 
 ```toml
 [tonemap]                  # optional: the pack's own tone curve
@@ -227,6 +232,7 @@ coverage = "engine"        # optional: engine (default) or pack, when the stage 
 [frame]
 blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
+fog = "engine"             # optional: engine (default) or pack, when the pack fogs what its stages draw
 
 [ray_tracing]              # optional, needs [[post]] or [material], no keys: the post stage gets `trace` and `trace_any`, the material stage where it calls them
 [motion]                   # optional, needs [[post]]: the post stage's motion guide (not drawn yet)
@@ -271,6 +277,11 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-15: API 0.2 (addition, experimental): `[frame] fog = "pack"` turns Horizon's fog off on what the material
+  and entity stages return, and gives every stage `fn vanilla_fog(position: vec3<f32>) -> f32` and the frame's
+  `fog_environment` and `fog_render`, the two distances vanilla's fog takes the larger of, which `fog_start` and
+  `fog_end` merge. The enchantment glint Horizon adds after `entity` fades by `vanilla_fog`. A pack without the key
+  is drawn and checked as before, and `[material] fog = false` stays as it was; a manifest sets one of the two.
 - 2026-11-14: API 0.2 (**breaking**, experimental): the entity stage keeps the engine's coverage unless the pack
   declares it, with `[entity] coverage`, `"engine"` (the default) or `"pack"`. Under `"engine"` the texture's alpha
   times the layer's opacity is cut and blends, not the returned alpha, and `horizon-shader check` refuses a `discard`

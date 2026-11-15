@@ -99,6 +99,8 @@ const PREFIX: &str = "horizon_vanilla_";
 const ENTRIES: &str = "
 // The manifest's `[entity] coverage`: true for `pack`.
 override horizon_entity_coverage_pack: bool = false;
+// The manifest's `[frame] fog`: false for `pack`, whose stage fogs its surfaces itself.
+override horizon_entity_fog: bool = true;
 struct horizon_entity_out {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -243,6 +245,7 @@ fn horizon_entity_own(in: horizon_entity_out) -> horizon_vanilla_Out {
     if alpha < 0.1 { discard; }
     // Vanilla's order from here: the glint, then fog, both in vanilla's gamma.
     var color = vec4(horizon_encode(lit.rgb), alpha);
+    let unglinted = color;
     if o == 7u || o == 8u || o == 33u {
         color = horizon_vanilla_glint_over(color, textureSample(horizon_vanilla_glint_tex,
             horizon_vanilla_glint_sampler, in.glint_uv));
@@ -254,6 +257,12 @@ fn horizon_entity_own(in: horizon_entity_out) -> horizon_vanilla_Out {
     let f = max(horizon_vanilla_linear_fog(in.fog_distance.x, fog.x, fog.y),
         horizon_vanilla_linear_fog(in.fog_distance.y, fog.z, fog.w));
     let fog_color = horizon_vanilla_globals.fog_color;
+    if !horizon_entity_fog {
+        // The stage fogged its own colour: what the glint added fades as vanilla's fog over it
+        // would, `mix(c + g, fog, f)` being `mix(c, fog, f) + (1 - f) g`.
+        return horizon_vanilla_frame_stored(
+            vec4(mix(color.rgb, unglinted.rgb, f * fog_color.a), color.a));
+    }
     return horizon_vanilla_frame_stored(
         vec4(mix(color.rgb, fog_color.rgb, f * fog_color.a), color.a));
 }
@@ -287,7 +296,7 @@ impl NativeEntity {
         frame: &NativeFrame,
         stage: &CheckedStage,
         constants: &[(String, f64)],
-        coverage: horizon_shader_api::Coverage,
+        manifest: &horizon_shader_api::Manifest,
     ) -> Result<Self, String> {
         let text = shader_source(&stage.source);
         let module = naga::front::wgsl::parse_str(&text)
@@ -297,8 +306,10 @@ impl NativeEntity {
             super::linear_blend::frame_constants(format, frame.linear);
         constants.push(("horizon_vanilla_HDR_WRITE_LIGHT", write_light));
         constants.push(("horizon_vanilla_FRAME_LINEAR", linear));
-        let pack = coverage == horizon_shader_api::Coverage::Pack;
+        let pack = manifest.entity_coverage == horizon_shader_api::Coverage::Pack;
         constants.push(("horizon_entity_coverage_pack", f64::from(u8::from(pack))));
+        let engine = manifest.fog == horizon_shader_api::Fog::Engine;
+        constants.push(("horizon_entity_fog", f64::from(u8::from(engine))));
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&stage.label),
