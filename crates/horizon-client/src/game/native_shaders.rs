@@ -130,10 +130,11 @@ impl Game<'_> {
     /// only its ordinary quads, and the stage's shader passes the unlit ones on.
     /// The models the run posed on the GPU (`entity_skin`) are the vertices it drew there
     /// from `posed` on (`SkinFrame::vertices` when it began): the stage lights them alike.
-    /// Kept only while the pack in use has the stage.
+    /// Kept only while the pack in use has the stage, or its rays read the entity layer
+    /// (`names_entity_runs`).
     fn lit_run(&self, run: std::ops::Range<usize>, posed: u32, kind: EntityKind) {
         let stage = self.renderer.as_ref();
-        if stage.is_some_and(|r| r.draws_entity_stage()) {
+        if stage.is_some_and(|r| r.names_entity_runs()) {
             self.native_shaders.entity_runs.borrow_mut().push(run, kind);
             let posed = posed as usize..self.skin_frame.borrow().vertices as usize;
             self.native_shaders

@@ -8,8 +8,8 @@ design note for a new line ([api/stability.md](../api/stability.md)); this is th
 ## Why
 
 **The frame can't hold light brighter than white.** The world is drawn in vanilla's gamma space into the swapchain's
-8-bit format, or with HDR on into `Rgba16Unorm`, which clips at white after every pass as the 8-bit frame does
-(`gfx.rs` `WIDE_FRAME`). HDR output (`hdr.wgsl`) rebuilds the light above white at the end, from marks in the frame's
+8-bit format, or with HDR on into `Rgba16Unorm`, which clips at white after every pass as the 8-bit frame does.
+HDR output (`hdr.wgsl`) rebuilds the light above white at the end, from marks in the frame's
 alpha:
 
 | Alpha | Means |
@@ -110,7 +110,7 @@ frame. What that costs is measured in the series.
 
 **Why gamma storage.** Vanilla blends glass, water, clouds, particles and weather by fixed-function blending in
 gamma space. Keeping that encoding keeps every blend of values up to 1 as vanilla's, and solid surfaces and lighting
-are the same in either encoding. With HDR on and HDR Lighting off the picture is SDR's except where vanilla would have
+are the same in either encoding. With HDR on and the Vanilla look the picture is SDR's except where vanilla would have
 clipped at white before a later blend: the sun and moon add onto the sky (`RenderPipelines.CELESTIAL`, src alpha and
 one), so clouds or glass over a bright sun come out a little brighter than vanilla's. Goal 1 covers HDR off only;
 this case is held to the existing HDR-versus-SDR check (below).
@@ -137,7 +137,7 @@ The water mirror and `shadow_color` draw no blends, so they store linear in both
 - A 0.2 pack in SDR moves the frame from 4 to 8 bytes a pixel (about 15 MB more at 1440p), only while it runs. Its
   post chain already uses `Rgba16Float`.
 - WebGPU renders to, blends and filters `Rgba16Float` without optional features, unlike `Rgba16Unorm`
-  (`draws_wide_frame`); the 8-bit fallback stays only for the HUD's target. The GL backend is checked in the series.
+  (`draws_frame`); the 8-bit fallback stays only for the HUD's target. The GL backend is checked in the series.
 - Up to 1, half float steps at least 8 times finer than 8-bit, and far finer in the darks, so Smooth Gradients'
   gain stays without its setting.
 
@@ -339,7 +339,7 @@ The rules such a pass keeps now are in [hdr-passes.md](../hdr-passes.md).
    frames, [#9398](https://github.com/horizon-rust/horizon/pull/9398), in review), and requires identical PNGs, also
    after turning HDR on and off, and picking and dropping a 0.2 pack.
 2. **Golden Hour against main**: the same capture in SDR, and the offscreen HDR capture in HDR, identical.
-3. **HDR on, HDR Lighting off, against SDR**: the offscreen HDR capture ([#8947](https://github.com/horizon-rust/horizon/pull/8947)),
+3. **HDR on, the Vanilla look, against SDR**: the offscreen HDR capture ([#8947](https://github.com/horizon-rust/horizon/pull/8947)),
    within one 8-bit step outside the spots vanilla clips.
 4. **HDR look against today**: the same captures within a tolerance, with the differences allowed above (Light above
    white without marks) shown, and screenshots in the pull request,
@@ -405,7 +405,7 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
      it instead of at S: min(light, the disc's peak), the identity up to it. The frame carries no mark for the
      disc, so light that adds up past S (additive particles over a light source, lightning's quads over a bright
      background, the moon over a bright sky) is held at the disc's peak there too. Where T is at most S the disc's
-     peak is S and every pass computes what it did. Light Horizon doesn't lift (HDR Lighting off, the title, a 0.2 pack's own) has
+     peak is S and every pass computes what it did. Light Horizon doesn't lift (the Vanilla look, the title, a 0.2 pack's own) has
      no known peak, so there the curve's source still follows the display, as the 0.2 rule above describes. HDR off,
      the HUD, the black lift and the compatibility frame (HDR's default until step 5, whose look then changes once)
      don't change.
