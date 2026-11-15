@@ -377,9 +377,6 @@ Bindings 48 to 59 of group 3 hold the scene while the game traces, and in a post
 
 ## Kept resources and compute passes
 
-Not yet with `[ray_tracing]`: the game refuses a pack that has it beside a `[[resource]]`, a `[[before_world]]` entry
-or a compute `[[post]]` entry, as one that needs a later Horizon.
-
 - `[[resource]]`: `name`; `buffer` (bytes) with `element` (`u32`, `atomic<u32>`, `f32`, `vec4<u32>`, `vec4<f32>`), or `format`
   (`rgba16float`, `r32float`, `rgba32float`, `rgba32uint`) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `"view"`
   (screen history) or `"world"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in
