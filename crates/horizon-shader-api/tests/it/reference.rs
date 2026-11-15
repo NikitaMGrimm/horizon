@@ -173,7 +173,7 @@ const PINNED_0_2: [(StageKind, &str, &str); 6] = [
     ),
     (
         StageKind::Material,
-        "da65020d1ae6698b966784fdc46b9a9f3d3863b0d270939931240ca56114f5a4",
+        "44421906ba871e4bde6a5e89e659a376dd97e2b4debb82c8fae56fba280b3be3",
         "6716c28ae0e699d15695da89c0848ae9d242c0e146b8487aff463ccc19bff4d2",
     ),
     (
