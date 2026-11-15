@@ -766,7 +766,7 @@ const SMALLEST_0_2: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\
 
 #[test]
 fn both_lines_are_read() {
-    use horizon_shader_api::{Api, Blend, Primaries};
+    use horizon_shader_api::{Api, Blend, Coverage, Primaries};
     let m = Manifest::parse(SMALLEST_0_2).unwrap();
     assert_eq!(
         (m.api, m.blend, m.tonemap.is_none()),
@@ -786,6 +786,20 @@ fn both_lines_are_read() {
         assert!((p.luminance().iter().sum::<f32>() - 1.0).abs() < 1e-6);
     }
     assert_eq!(Manifest::parse(&sample_text()).unwrap().api, Api::V0_1);
+    // The material keeps the engine's coverage unless it says otherwise; 0.1's alpha always decides.
+    let material = format!("{SMALLEST_0_2}[material]\nfile = \"m.wgsl\"\n");
+    assert_eq!(
+        Manifest::parse(&material).unwrap().coverage,
+        Coverage::Engine
+    );
+    let own = format!("{material}coverage = \"pack\"\n");
+    assert_eq!(Manifest::parse(&own).unwrap().coverage, Coverage::Pack);
+    let engine = format!("{material}coverage = \"engine\"\n");
+    assert_eq!(Manifest::parse(&engine).unwrap().coverage, Coverage::Engine);
+    assert_eq!(
+        Manifest::parse(&sample_text()).unwrap().coverage,
+        Coverage::Pack
+    );
     let tonemap = format!("{SMALLEST_0_2}[tonemap]\nfile = \"t.wgsl\"\nname = \"Curve\"\n");
     let m = Manifest::parse(&tonemap).unwrap();
     assert_eq!(m.tonemap.as_ref().unwrap().name.as_deref(), Some("Curve"));
@@ -844,6 +858,18 @@ fn the_0_2_keys_are_refused_under_0_1_and_checked_under_0_2() {
             "[entity] is shader API 0.2",
         ),
         (
+            format!("{smallest_0_1}[material]\nfile = \"m.wgsl\"\ncoverage = \"pack\"\n"),
+            "[material] coverage is shader API 0.2",
+        ),
+        (
+            format!("{SMALLEST_0_2}[material]\nfile = \"m.wgsl\"\ncoverage = \"texture\"\n"),
+            "material.coverage \"texture\": engine or pack",
+        ),
+        (
+            format!("{SMALLEST_0_2}[entity]\nfile = \"e.wgsl\"\ncoverage = \"pack\"\n"),
+            "`coverage` is a key of [material] only",
+        ),
+        (
             format!("{SMALLEST_0_2}[entity]\nfile = \"e.wgsl\"\nfog = false\n"),
             "`fog` is a key of [material] only",
         ),
@@ -878,6 +904,79 @@ fn the_0_2_keys_are_refused_under_0_1_and_checked_under_0_2() {
         (
             "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n".into(),
             "or a [tonemap]",
+        ),
+    ];
+    for (text, needle) in cases {
+        let e = refused(&text);
+        assert!(e.contains(needle), "{needle:?} not in {e:?}");
+    }
+}
+
+#[test]
+fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass_or_a_material_stage() {
+    assert!(Manifest::parse(SMALLEST_0_2).unwrap().ray_tracing.is_none());
+    let asked = Manifest::parse(&format!("{SMALLEST_0_2}[ray_tracing]\n")).unwrap();
+    assert!(asked.ray_tracing.is_some());
+    // The material stage traces too: it alone is enough.
+    let material = SMALLEST_0_2.replace("[[post]]", "[material]") + "[ray_tracing]\n";
+    let asked = Manifest::parse(&material).unwrap();
+    assert!(asked.ray_tracing.is_some() && asked.post.is_empty());
+    // A traced ray's hit reads the tags and material ids: no material stage is needed.
+    let tags = "[[tags]]\nid = \"glass\"\nsprites = [\"block/glass\"]\n";
+    let materials = "[[materials]]\nid = 7\nsprites = [\"block/stone\"]\n";
+    let traced =
+        Manifest::parse(&format!("{SMALLEST_0_2}[ray_tracing]\n{tags}{materials}")).unwrap();
+    assert!(traced.material.is_none());
+    let sprites = [("minecraft:block/glass", 3), ("minecraft:block/stone", 5)];
+    assert_eq!(traced.sprite_tags(sprites), [(3, 1)]);
+    assert_eq!(traced.sprite_materials(sprites), [(5, 7)]);
+    for (list, message) in [
+        (tags, "tags are read by the material stage and by `trace`"),
+        (
+            materials,
+            "materials are read by the material stage, `trace`",
+        ),
+    ] {
+        let e = Manifest::parse(&format!("{SMALLEST_0_2}{list}")).unwrap_err();
+        assert!(e.to_string().contains(message), "{e}");
+    }
+    // `trace` is a name like any other for a pack that doesn't ask.
+    let named = SMALLEST_0_2.replace(
+        "[[post]]\n",
+        "[[post]]\nfile = \"t.wgsl\"\noutput = \"trace\"\n[[post]]\n",
+    );
+    assert_eq!(
+        Manifest::parse(&named).unwrap().post_targets()[0].0,
+        "trace"
+    );
+    let cases = [
+        (
+            SMALLEST_0_2.replace("0.2", "0.1") + "[ray_tracing]\n",
+            "[ray_tracing] is shader API 0.2",
+        ),
+        (
+            SMALLEST_0_2.replace("[[post]]", "[sky]") + "[ray_tracing]\n",
+            "[ray_tracing] needs a [[post]] pass or a [material] stage",
+        ),
+        (
+            format!("{SMALLEST_0_2}[ray_tracing]\nbounces = 2\n"),
+            "unknown field",
+        ),
+        (
+            format!("{named}[ray_tracing]\n"),
+            "output \"trace\" is not a free WGSL name",
+        ),
+        (
+            named.replace("\"trace\"", "\"trace_any_layers\"") + "[ray_tracing]\n",
+            "output \"trace_any_layers\" is not a free WGSL name",
+        ),
+        (
+            named.replace("\"trace\"", "\"RAY_TRANSLUCENT\"") + "[ray_tracing]\n",
+            "output \"RAY_TRANSLUCENT\" is not a free WGSL name",
+        ),
+        (
+            named.replace("\"trace\"", "\"hit_normal_map\"") + "[ray_tracing]\n",
+            "output \"hit_normal_map\" is not a free WGSL name",
         ),
     ];
     for (text, needle) in cases {
