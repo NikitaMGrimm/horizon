@@ -174,8 +174,9 @@ impl KeptStore {
 
 /// The kept resources and compute passes of the post chain `stages` (the `[[post]]` entries of
 /// `manifest`, in order), and its ordinary passes: each pass's layouts hold the group's
-/// `shared` entries and its kept ones. None without `[[resource]]` or compute entries; an error
-/// where the device can't run or make them (`unmet`) or refuses a compute pipeline.
+/// `shared` entries and its kept ones. None without `[[resource]]`: a compute pass would have
+/// nothing to write, so it doesn't run. An error where the device can't run or make them
+/// (`unmet`) or refuses a compute pipeline.
 pub(super) fn chain(
     device: &wgpu::Device,
     manifest: &Manifest,
@@ -185,8 +186,8 @@ pub(super) fn chain(
 ) -> Result<(Vec<CheckedStage>, Option<KeptStore>), String> {
     let kept = &manifest.kept;
     let computing = |s: &CheckedStage| s.kind == StageKind::Compute;
-    if kept.resources.is_empty() && !stages.iter().any(computing) {
-        return Ok((stages, None));
+    if kept.resources.is_empty() {
+        return Ok((stages.into_iter().filter(|s| !computing(s)).collect(), None));
     }
     if let Some(why) = unmet(device, manifest, &stages, shared) {
         return Err(why);
