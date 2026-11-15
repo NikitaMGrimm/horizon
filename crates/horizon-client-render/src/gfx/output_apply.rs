@@ -390,9 +390,9 @@ impl Renderer {
     }
 
     /// Whether this renderer's frame is the one a renderer made now would draw in
-    /// (`requested_frame`). The game makes the renderer again when it isn't
-    /// (docs/design/hdr-linear-light.md, "When it changes"), and the new one takes this one's
-    /// world (`take_world`).
+    /// (`requested_frame`). The game makes the renderer again when it
+    /// isn't (docs/design/hdr-linear-light.md, "When it changes"), and the new one
+    /// takes this one's world (`take_world`).
     pub fn frame_follows(
         &self,
         settings: &crate::graphics::Graphics,
@@ -492,6 +492,7 @@ mod tests {
     const NO_PACK: FrameRequest = FrameRequest {
         linear_pack: false,
         linear_blend: false,
+        ray_tracing: false,
         compatibility: false,
     };
     fn on() -> Graphics {
@@ -695,7 +696,7 @@ mod tests {
         /// What the system reports when it is read, and when (ms) it was.
         report: DisplayReading,
         reads: Vec<u64>,
-        /// The game follows the frame (`follow_frame`): the frames it made the
+        /// The game follows the frame: the frames it made the
         /// renderer again for. `None`: the renderer keeps the frame it was made with.
         made: Option<Vec<output::FrameConfiguration>>,
     }
