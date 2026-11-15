@@ -954,6 +954,7 @@ pub fn immune_to(source: &Damage) -> bool {
             | DamageKind::MaceSmash
             | DamageKind::Spear
             | DamageKind::MobAttack
+            | DamageKind::MobAttackNoAggro
             | DamageKind::Arrow
             | DamageKind::Thrown
             | DamageKind::Explosion
