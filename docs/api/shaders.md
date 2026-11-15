@@ -199,10 +199,22 @@ keeps drawing. What a pack works with:
   returns. BT.2020 holds colours outside sRGB, which HDR displays show. It needs `blend = "linear"`. `Frame` says
   which in `primaries`, with that space's luminance weights in `luminance`, after `black_level`. `"bt2020"` passes
   the check, but the game doesn't serve it yet.
+- **`[motion]`** (no keys, needs `[[post]]`): every post pass gets `fn motion_at(texel: vec2<i32>) -> MotionData`, how
+  each pixel's surface moved since last frame, for temporal passes. The check takes it, but **the game doesn't draw
+  it yet** and refuses a pack that has it.
+- **`[material] coverage`**: `"engine"` (the default) or `"pack"`, whose alpha decides which points of terrain are
+  drawn. Under `"engine"` solid and cutout terrain keep Horizon's alpha test on the texture's alpha and ignore the
+  returned alpha, translucent terrain is cut on the texture's alpha too and takes the returned alpha as its opacity,
+  and the check refuses a `discard` reachable from `material`. Under `"pack"` the returned alpha drives the alpha
+  test and the stage may `discard`, as in 0.1.
 
 ```toml
 [tonemap]                  # optional: the pack's own tone curve
 file = "tonemap.wgsl"
+
+[material]
+file = "material.wgsl"
+coverage = "engine"        # optional: engine (default) or pack, when the material cuts its own holes
 
 [entity]                   # optional: the colour of entities and block entities (items and particles later)
 file = "entity.wgsl"
@@ -212,14 +224,15 @@ blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
 
 [ray_tracing]              # optional, needs [[post]], [material] or [entity], no keys: the post stage gets `trace` and `trace_any`, the material and entity stages where they call them
+[motion]                   # optional, needs [[post]]: the post stage's motion guide (not drawn yet)
 ```
 
 API 0.1, the gamma line before it, is retired. To move a pack over, set `api = "0.2"` and treat every colour as
 linear light: decode a constant written for display values with a 2.2 power, compute luminance with
 `frame.luminance`, and stop returning `input.color.a` from post passes (their alpha is ignored). The example pack,
-`crates/horizon-shader-api/packs/golden_hour`, was moved this way.
-The packs `traced_shadows` and `traced_water` beside it are the smallest packs that trace rays, from a post
-pass and from the material stage ([the guide](../shaders.md#ray-tracing)).
+`crates/horizon-shader-api/packs/golden_hour`, was moved this way. `packs/traced_shadows` and
+`packs/traced_water` are the smallest packs that trace rays, from a post pass and from the material stage
+([the guide](../shaders.md#ray-tracing)).
 
 ## Testing a pack frame by frame
 
@@ -261,6 +274,15 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 - 2026-11-14: API 0.2 (experimental): `RAY_ENTITY` also holds the block entities at rest that the block entity cache
   keeps (on in every graphics preset: closed chests, shulker boxes, bells, decorated pots, banners), in view or not,
   so they cast traced shadows and show in reflections as the mobs do. A hit on one is an entity hit like any other.
+- **2026-11-13: API 0.1 removed (breaking, #15886).** Use shader API 0.2 instead. The game, `horizon-shader` and
+  the registry refuse a 0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`; the game draws without it.
+  [Moving a pack to 0.2](#shader-api-02-experimental) is described above; Golden Hour 2.0.0 is the moved example. The
+  0.1 reference is gone, and the templates of `horizon-shader new` are 0.2 packs. API 0.2 is unchanged.
+- 2026-11-14: API 0.2 (additions, experimental): `[motion]`: the post stage of a pack that sets it gets the motion
+  guide, `scene_motion` (binding 14), `fn motion_at(texel: vec2<i32>) -> MotionData` and the `MOTION_CAMERA`,
+  `MOTION_OBJECT`, `MOTION_NEW` and `MOTION_NO_HISTORY` kinds: how each pixel's surface moved since last frame, for
+  temporal passes. `horizon-shader check` takes it; the game refuses a pack with `[motion]` until it draws the guide.
+  A pack without the key is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
 - 2026-11-14: API 0.2 (experimental): `RAY_ENTITY` also holds the entities within the scene's reach that the camera
   doesn't draw (behind or beside it, or hidden behind terrain), so they cast traced shadows and show in reflections,
   and turning the camera doesn't change the layer. Block entities out of view are not in it yet.
@@ -271,6 +293,36 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   pixel. `trace` and `trace_any` keep reading solid terrain alone. The check refuses a pack's own `RAY_ENTITY` or post
   `output` by that name there, and a `displacement` or `vertex` that reaches the layer. Packs that don't name it are
   built from the same WGSL as before, a test holds.
+- 2026-11-13: API 0.2 (change, experimental): the game draws entities and block entities through the `[entity]`
+  stage (`EntityInput.kind` 0 and 1) instead of refusing a pack that has it, with the stage's shadow maps and coloured
+  lights, under either `[frame] blend`. Dropped and framed items, particles and the first-person hand keep Horizon's
+  lighting; the reference lists them, and says where `shade` is still 1 with vanilla's shade in `tint`. The stage's
+  list of names is held from now on, like the other stages'. No name or field was added. A pack without `[entity]` is
+  unchanged.
+- 2026-11-13: API 0.2 (additions, experimental, not run yet): `[[before_world]]` (#16011 item 4): compute passes
+  once a frame before the world draws, with the keys of a compute `[[post]]` entry, at most 4. Their prelude has the
+  frame, the samplers and the shadow maps. Their invocations count toward the 2^26 a frame with the compute
+  `[[post]]` entries'. The game refuses a pack with one until a later Horizon runs it.
+- 2026-11-13: API 0.2 (additions, experimental, not run yet): compute passes (#16011 item 4). `[[post]]`
+  entries with `compute = true` are dispatches in the chain, with `dispatch` (`[x, y, z]` cells or `"pixels"`),
+  `workgroup`, `reads` and `writes`, at most 8; an ordinary pass lists the kept resources it `reads`. A compute file
+  defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's workgroup size,
+  every invocation running and `in_bounds` false past the dispatch. Each pass's prelude declares only the resources it
+  lists, at group 3 from binding 64. `horizon-shader check` builds compute files as it builds post passes, refuses a
+  file that uses a resource its pass doesn't list, and refuses sampling or gathering an `r32float` or `rgba32float`
+  texture (`textureLoad` only). Compute work is capped at 2^25 invocations a dispatch and 2^26 a frame over every
+  compute pass, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160. Compute files don't get `trace` yet, and `[material]` can't read kept resources yet:
+  both come in later steps. The game refuses a pack with a compute pass until a later Horizon runs it. Packs without
+  them are built from the same WGSL as before, a test holds.
+- 2026-11-13: API 0.2 (additions, experimental, not run yet): kept resources (#16011 item 4). `[[resource]]`
+  declares a buffer (`buffer` bytes of an `element`: `u32`, `atomic<u32>`, `f32`, `vec4<u32>` or `vec4<f32>`) or a
+  texture (`format`: `rgba16float`, `r32float`, `rgba32float` or `rgba32uint`, the last read as `texture_2d<u32>` and
+  written by compute passes only, never an `output`; a fixed `size` or a `scale` of the render size) a
+  pack keeps between frames, `keep = "view"` or `"world"`, the latter fixed in size and with `[kept] reach`. A
+  `[[post]] output` may name a kept texture; an option may say what it `resets`. `horizon-shader check` takes them,
+  with their names, counts and memory checked (at most 8 resources, 32 MiB of buffers, 1 MiB of fixed textures, and
+  R-relative textures two each of the 4 post targets); the game refuses a pack that declares one until a later
+  Horizon runs them. Compute passes and the WGSL that reads the resources come next.
 - 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` the scene holds translucent terrain (water,
   stained glass, ice) in a second layer. Where `trace` is, the prelude gets
   `fn trace_layers(origin, direction, max_distance, layers) -> RayHit`, `fn trace_any_layers(...) -> bool` and the
@@ -280,6 +332,16 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   draws. The check refuses a pack's own function, constant or post `output` by the four names there, and a
   `displacement` or `vertex` that reaches the new functions, as `trace`'s. Packs without `[ray_tracing]` are built
   from the same WGSL as before, a test holds.
+- 2026-11-13: API 0.2 (**breaking**, experimental): the material stage keeps the engine's coverage unless the pack
+  declares it, with `[material] coverage`, `"engine"` (the default) or `"pack"`. Under `"engine"` solid and cutout
+  terrain's alpha test reads the texture's alpha, not the returned one, translucent terrain is cut on the texture's
+  alpha and blends by the returned alpha, and `horizon-shader check` refuses a `discard` that `material` can reach,
+  through its helpers too. A 0.2 material that cuts its own holes sets `coverage = "pack"`, which keeps the old
+  behaviour. API 0.1 is unchanged, and refuses the key.
+- 2026-11-13: API 0.2 (fix, experimental): `MaterialInput.tangent.xyz` now points where `uv.x` grows, as the
+  reference says; it pointed the other way, so a normal map turned into world axes by the reference's rule had both
+  in-plane components negated. `w` is unchanged. A 0.2 pack that negated the tangent to make up for it must stop.
+  API 0.1 keeps the old direction: its WGSL is frozen.
 - 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` `RayHit` gains `emission`, `fluid`,
   `translucent` (false for every hit: the scene holds no translucent terrain yet) and `tangent`, as `MaterialInput` has
   them, and `horizon_sprite`, Horizon's own. Where `trace` is, the prelude gets `hit_normal_map(hit)` and
@@ -291,16 +353,6 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   built from the same WGSL as before, a test holds. `[ray_tracing]` needs a `[[post]]` pass or a `[material]` stage.
   `horizon-shader check` builds such a material stage both ways and refuses a pack whose `displacement` or `vertex`
   (both run in vertex shaders) reaches `trace` or `trace_any`.
-- 2026-11-13: API 0.2 (change, experimental): the game draws entities and block entities through the `[entity]`
-  stage (`EntityInput.kind` 0 and 1) instead of refusing a pack that has it, with the stage's shadow maps and coloured
-  lights, under either `[frame] blend`. Dropped and framed items, particles and the first-person hand keep Horizon's
-  lighting; the reference lists them, and says where `shade` is still 1 with vanilla's shade in `tint`. The stage's
-  list of names is held from now on, like the other stages'. No name or field was added. A pack without `[entity]` is
-  unchanged.
-- 2026-11-13: API 0.1 (removed): no build serves it any more. `horizon-shader`, the game and the registry refuse a
-  0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`, and the registry lists 0.2 packs. The 0.1 reference
-  is gone, the templates of `horizon-shader new` are 0.2 packs, and the example pack Golden Hour is its 0.2 port
-  (2.0.0). API 0.2 is unchanged.
 - 2026-11-12: API 0.2 (additions, experimental): `[ray_tracing]`: the post stage of a pack that sets it gets
   `fn trace(origin, direction, max_distance) -> RayHit` and `fn trace_any(...) -> bool`, which read the terrain around
   the camera where the game traces rays (`HORIZON_RAY_TRACING=1` on a GPU with ray queries) and miss where it doesn't,

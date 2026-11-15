@@ -385,14 +385,16 @@ impl Goal for RandomSitting {
         MOVE
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        // checkExtraStartConditions: not leashed, no controlling passenger
-        // (a player's or a mob's, a husk on its back), and room for the pose
-        // it would take (`Camel.canCamelChangePose`).
+        // `CamelAi.RandomSitting` checkExtraStartConditions: not leashed, no
+        // controlling passenger (a driver on a saddled camel, or a mob on its
+        // back: `Camel.hasControllingPassenger`), and room for the pose it
+        // would take (`Camel.canCamelChangePose`). A player on an unsaddled
+        // camel is only a passenger, so it kneels under them.
         !m.fluids.in_water
             && pose_time(m) >= 400
             && m.extra.leash.is_none()
             && m.on_ground
-            && m.rider.is_none()
+            && !super::equine::controlled(m)
             && !super::riders::mob_controlled(m, cx.w)
             && can_change_pose(m, cx.w)
             && m.random.next_int_bound(4).unwrap_or(1) == 0
@@ -541,6 +543,10 @@ pub fn anim(
 }
 
 #[cfg(test)]
+#[path = "camel_husk_tests.rs"]
+mod camel_husk_tests;
+
+#[cfg(test)]
 mod camel_pose_tests;
 
 #[cfg(test)]
@@ -601,7 +607,7 @@ mod tests {
             m.on_ground = true;
             let mut started = false;
             with_test_world(&seen, |w, _| {
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,
@@ -797,7 +803,7 @@ mod tests {
         };
         let partner = b.seen(None);
         let mut events = Vec::new();
-        let mut lr = horizon_core::random::LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let ran = with_test_world(&[partner], |w, _| {
             let mut cx = Cx {
                 w,
@@ -869,7 +875,7 @@ mod tests {
                 let mut blocked = sitting_camel(1, 0.5);
                 let mut open = sitting_camel(2, 5.5);
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w,
                     lr: &mut lr,
