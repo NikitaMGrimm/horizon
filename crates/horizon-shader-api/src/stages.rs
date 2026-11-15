@@ -31,9 +31,9 @@ pub enum StageKind {
     /// particles), before the alpha test, the glint and fog. Checked, not yet drawn.
     Entity,
     /// 0.2: a dispatch in the post chain (`[[post]] compute = true`), which reads what a post
-    /// pass does. Checked, not yet run; not in `ALL`, since each pass's entry is its own.
+    /// pass does. Not in `ALL`, since each pass's entry is its own.
     Compute,
-    /// 0.2: a dispatch before the world draws (`[[before_world]]`). Checked, not yet run.
+    /// 0.2: a dispatch before the world draws (`[[before_world]]`).
     BeforeWorld,
 }
 
