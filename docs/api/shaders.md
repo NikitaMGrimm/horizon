@@ -196,6 +196,9 @@ uses the no-pack frame. What it changes from 0.1:
   returns. BT.2020 holds colours outside sRGB, which HDR displays show. It needs `blend = "linear"`. `Frame` says
   which in `primaries`, with that space's luminance weights in `luminance`, after `black_level`. `"bt2020"` passes
   the check, but the game doesn't serve it yet.
+- **`[motion]`** (no keys, needs `[[post]]`): every post pass gets `fn motion_at(texel: vec2<i32>) -> MotionData`, how
+  each pixel's surface moved since last frame, for temporal passes. The check takes it, but **the game doesn't draw
+  it yet** and refuses a pack that has it.
 - **`[material] coverage`**: `"engine"` (the default) or `"pack"`, whose alpha decides which points of terrain are
   drawn. Under `"engine"` solid and cutout terrain keep Horizon's alpha test on the texture's alpha and ignore the
   returned alpha, translucent terrain is cut on the texture's alpha too and takes the returned alpha as its opacity,
@@ -220,12 +223,14 @@ blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
 
 [ray_tracing]              # optional, needs [[post]] or [material], no keys: the post stage gets `trace` and `trace_any`, the material stage where it calls them
+[motion]                   # optional, needs [[post]]: the post stage's motion guide (not drawn yet)
 ```
 
 0.1 is unchanged: the same prelude, entries and reference, and a 0.1 pack that names `[tonemap]`, `[entity]`,
-`[frame]` or `[ray_tracing]` is refused. The example's port is `crates/horizon-shader-api/packs/golden_hour_0_2`, a
-test pack of the SDK, and `packs/traced_shadows` and `packs/traced_water` beside it are the smallest packs that trace
-rays, from a post pass and from the material stage ([the guide](../shaders.md#ray-tracing)).
+`[frame]`, `[ray_tracing]` or `[motion]` is refused. The example's port is
+`crates/horizon-shader-api/packs/golden_hour_0_2`, a test pack of the SDK, and `packs/traced_shadows` and
+`packs/traced_water` beside it are the smallest packs that trace rays, from a post pass and from the material stage
+([the guide](../shaders.md#ray-tracing)).
 
 ## Testing a pack frame by frame
 
@@ -259,6 +264,11 @@ draws them itself (the material stage covers terrain only). The first-person han
 
 ## Changelog
 
+- 2026-11-14: API 0.2 (additions, experimental): `[motion]`: the post stage of a pack that sets it gets the motion
+  guide, `scene_motion` (binding 14), `fn motion_at(texel: vec2<i32>) -> MotionData` and the `MOTION_CAMERA`,
+  `MOTION_OBJECT`, `MOTION_NEW` and `MOTION_NO_HISTORY` kinds: how each pixel's surface moved since last frame, for
+  temporal passes. `horizon-shader check` takes it; the game refuses a pack with `[motion]` until it draws the guide.
+  A pack without the key is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
 - 2026-11-13: API 0.2 (additions, experimental, not run yet): `[[before_world]]` (#16011 item 4): compute passes
   once a frame before the world draws, with the keys of a compute `[[post]]` entry, at most 4. Their prelude has the
   frame, the samplers and the shadow maps. Their invocations count toward the 2^26 a frame with the compute
