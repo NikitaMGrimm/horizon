@@ -3016,9 +3016,9 @@ mod arrow_color_tests {
                 effect: None,
             };
             let mut p = Projectile::new(kind, Vec3::new(0.5, 64.0, 0.5), None);
-            let mut arrow = crate::arrows::ArrowState::new(horizon_core::random::EntityRandom::own(
-                LegacyRandom::new(0),
-            ));
+            let mut arrow = crate::arrows::ArrowState::new(
+                horizon_core::random::EntityRandom::own(LegacyRandom::new(0)),
+            );
             arrow.set_item(stack);
             p.arrow = Some(Box::new(arrow));
             p.arrow_effect_color()
