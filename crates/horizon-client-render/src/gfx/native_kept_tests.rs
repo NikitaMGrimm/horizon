@@ -967,7 +967,8 @@ fn a_pack_s_own_frames_run_its_before_world_pass() {
 /// A `[[before_world]]` pass writes this frame's version of an R-relative kept texture (adding
 /// to `_previous`), after the frame's swap, and the post pass shows it in the same frame. Its
 /// `"pixels"` dispatch and `input.size` are R (blue: R's width / 16), and it reads the frame:
-/// `frame.headroom` (1) in green. Run with `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for
+/// `frame.headroom` (1) in green. It uses every other binding the stage has (the samplers and
+/// the shadow maps), adding nothing, so a group without one is refused. Run with `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for
 /// each backend.
 #[test]
 fn a_before_world_pass_writes_a_kept_texture_a_post_pass_shows() {
@@ -981,7 +982,13 @@ fn a_before_world_pass_writes_a_kept_texture_a_post_pass_shows() {
             "fn compute(input: ComputeInput) {\n    if input.in_bounds {\n        \
              let last = textureLoad(img_previous, input.cell.xy, 0).r;\n        \
              let wide = f32(input.size.x) / 16.0;\n        \
-             let here = vec4<f32>(last + 0.25, frame.headroom * 0.5, wide, 1.0);\n        \
+             let p = vec2<f32>(0.5);\n        \
+             let maps = textureDimensions(shadow_map).x + textureDimensions(shadow_map_translucent).x;\n        \
+             let lit = textureSampleCompareLevel(shadow_map, shadow_sampler, p, 0.5);\n        \
+             let tints = textureSampleLevel(shadow_color, linear_sampler, p, 0.0).r\n            \
+             + textureSampleLevel(shadow_color, nearest_sampler, p, 0.0).r;\n        \
+             let none = (f32(maps) + lit + tints) * 0.0;\n        \
+             let here = vec4<f32>(last + 0.25, frame.headroom * 0.5, wide + none, 1.0);\n        \
              textureStore(img, input.cell.xy, here);\n    }\n}\n",
         ),
         (
@@ -996,6 +1003,56 @@ fn a_before_world_pass_writes_a_kept_texture_a_post_pass_shows() {
         ([2, 1], [4, 4], [0.25, 0.5, 0.25]),
     ];
     computes(manifest, &files, &frames);
+}
+
+/// A `[[before_world]]` pass and a compute `[[post]]` pass in one pack, each adding one to its
+/// own element of a kept buffer, shown in red and green: the frame starts before the world, and
+/// the chain's compute pass still runs once in it. Run with `WGPU_BACKEND=vulkan` and
+/// `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn before_world_and_compute_post_passes_both_run_once_a_frame() {
+    let manifest = "[[resource]]\nname = \"sum\"\nbuffer = 16\nelement = \"u32\"\nkeep = \"view\"\n\
+                    [[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\n\
+                    workgroup = [1, 1, 1]\nwrites = [\"sum\"]\n\
+                    [[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = [1, 1, 1]\n\
+                    workgroup = [1, 1, 1]\nwrites = [\"sum\"]\n\
+                    [[post]]\nfile = \"l.wgsl\"\nreads = [\"sum\"]\n";
+    let files = [
+        (
+            "w.wgsl",
+            "fn compute(input: ComputeInput) { sum[0] = sum[0] + 1u; }\n",
+        ),
+        (
+            "c.wgsl",
+            "fn compute(input: ComputeInput) { sum[1] = sum[1] + 1u; }\n",
+        ),
+        (
+            "l.wgsl",
+            "fn post(input: PostInput) -> vec4<f32> {\n    \
+             return vec4<f32>(f32(sum[0]) * 0.25, f32(sum[1]) * 0.125, 0.0, 1.0);\n}\n",
+        ),
+    ];
+    let frames = [
+        ([1, 1], [4, 4], [0.25, 0.125, 0.0]),
+        ([1, 1], [4, 4], [0.5, 0.25, 0.0]),
+    ];
+    computes(manifest, &files, &frames);
+}
+
+/// A pack with kept resources and a `[[before_world]]` pass but no `[[post]]` pass (a 0.2 pack
+/// still has its decode and tone map) builds, and its frames run it without a validation
+/// error, the screen the world's picture (black). Run with `WGPU_BACKEND=vulkan` and
+/// `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn a_before_world_pass_runs_without_a_post_chain() {
+    let manifest = "[[resource]]\nname = \"sum\"\nbuffer = 16\nelement = \"u32\"\nkeep = \"view\"\n\
+                    [[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\n\
+                    workgroup = [1, 1, 1]\nwrites = [\"sum\"]\n";
+    let files = [(
+        "w.wgsl",
+        "fn compute(input: ComputeInput) { sum[0] = sum[0] + 1u; }\n",
+    )];
+    computes(manifest, &files, &[([1, 1], [4, 4], [0.0, 0.0, 0.0])]);
 }
 
 /// The cap on compute work a frame is the API's, checked when the pack loads

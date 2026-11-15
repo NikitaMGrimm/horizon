@@ -1093,10 +1093,10 @@ fn post_pipeline(
 }
 
 impl NativePost {
-    /// Pipelines for `stages` (the pack's `[[post]]` entries in order, the compute ones run by
-    /// the kept store) with the option values `constants`, drawing onto a screen of `format`;
-    /// under 0.2 the last onto `picture`, and `tonemap` (else Horizon's) onto the screen. Errors
-    /// name the pass wgpu refused.
+    /// Pipelines for `stages` (`[[post]]`'s entries in order, then `[[before_world]]`'s; the kept
+    /// store runs the compute ones) with the option values `constants`, drawing onto a screen of
+    /// `format`; under 0.2 the last onto `picture`, and `tonemap` (else Horizon's) onto the
+    /// screen. Errors name the pass wgpu refused.
     pub fn new(
         device: &wgpu::Device,
         stages: Vec<CheckedStage>,
