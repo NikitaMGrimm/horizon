@@ -490,7 +490,7 @@ impl NativeMaterial {
         let writes_surface = horizon_shader_api::stages::calls_set_surface(&stage.source);
         let line = (frame.api, frame.linear);
         let build = |source: &str, group: &wgpu::BindGroupLayout| {
-            let flags = (fog, coverage, vertex, writes_surface);
+            let flags = (fog, vertex, writes_surface, coverage);
             let terrain = (shape, displaced, constants);
             Self::pipelines(device, terrain, (stage, source), group, flags, line)
         };
@@ -526,7 +526,7 @@ impl NativeMaterial {
     }
 
     /// One set of a material stage's terrain pipelines, from its `source`, with `frame_group` as
-    /// their group 3; `(fog, coverage, vertex, writes_surface)` as `NativeMaterial::new` has them.
+    /// their group 3; `(fog, vertex, writes_surface, coverage)` as `NativeMaterial::new` has them.
     fn pipelines(
         device: &wgpu::Device,
         (shape, displaced, constants): (
@@ -536,7 +536,7 @@ impl NativeMaterial {
         ),
         (stage, source): (&CheckedStage, &str),
         frame_group: &wgpu::BindGroupLayout,
-        (fog, coverage, vertex, writes_surface): (bool, horizon_shader_api::Coverage, bool, bool),
+        (fog, vertex, writes_surface, coverage): (bool, bool, bool, horizon_shader_api::Coverage),
         line: (horizon_shader_api::Api, bool),
     ) -> Result<MaterialPipelines, String> {
         let module = module(
