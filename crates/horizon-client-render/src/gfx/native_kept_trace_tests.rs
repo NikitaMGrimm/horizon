@@ -151,6 +151,8 @@ impl Scene {
             tlas: &self.tlas,
             solid_instances: 1,
             store: &self.store,
+            translucent_instances: 1,
+            entities: None,
             generation: self.generation,
             camera: [0.0; 3],
             distance: 64.0,
