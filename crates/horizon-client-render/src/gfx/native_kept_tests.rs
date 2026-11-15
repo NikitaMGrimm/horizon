@@ -70,7 +70,7 @@ fn each_shape_is_made_with_its_size_and_usages_and_fit_remakes_the_scaled_ones()
     let kept = every_shape();
     let mut store = KeptStore::new(&device, &kept, [101, 60]);
     let buffers = [(64, None); 5];
-    let textures = |half| [(0, Some([3, 2])), (0, Some(half))].repeat(3);
+    let textures = |half| [(0, Some([3, 2])), (0, Some(half))].repeat(Format::ALL.len());
     assert_eq!(
         sizes(&store),
         [&buffers[..], &textures([51, 30])[..]].concat()
