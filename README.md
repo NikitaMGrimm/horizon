@@ -1,7 +1,9 @@
-<h1 align="center"><img src="docs/media/icon-256.png" alt="" width="40" align="absmiddle">&nbsp;Horizon</h1>
+<p align="center">
+  <img src="docs/media/banner.webp" alt="Horizon: the game you know, rebuilt in Rust" width="100%">
+</p>
 
 <p align="center">
-  Minecraft: Java Edition 26.3, rewritten from scratch in Rust.<br>
+  <b>Minecraft: Java Edition 26.3, rewritten from scratch in Rust.</b><br>
   It opens your worlds, generates the same terrain and plays by the same rules, without Java.
 </p>
 
@@ -49,14 +51,12 @@ Horizon is built in the open, and pull requests are welcome: [build guide](docs/
 
 <table align="center">
   <tr>
-    <td align="center" width="90"><a href="https://github.com/kacpherek"><img src="https://github.com/kacpherek.png?size=160" width="72" alt="Kacper"><br><b>Kacper</b></a></td>
-    <td align="center" width="90"><a href="https://github.com/Online5277"><img src="https://github.com/Online5277.png?size=160" width="72" alt="Cosmic"><br><b>Cosmic</b></a></td>
-    <td align="center" width="90"><a href="https://github.com/levzzz5154"><img src="https://github.com/levzzz5154.png?size=160" width="72" alt="levzzz"><br><b>levzzz</b></a></td>
-  </tr>
-  <tr>
-    <td align="center" width="90"><a href="https://github.com/rdbtCVS"><img src="https://github.com/rdbtCVS.png?size=160" width="72" alt="rdbt"><br><b>rdbt</b></a></td>
-    <td align="center" width="90"><a href="https://github.com/dezer-x"><img src="https://github.com/dezer-x.png?size=160" width="72" alt="Anthony S"><br><b>Anthony S</b></a></td>
-    <td align="center" width="90"><a href="https://github.com/ludovic111"><img src="https://github.com/ludovic111.png?size=160" width="72" alt="Ludovic Marie"><br><b>Ludovic Marie</b></a><br><sub>Founder</sub></td>
+    <td align="center" width="140"><a href="https://github.com/kacpherek"><img src="https://github.com/kacpherek.png?size=160" width="80" alt="Kacper"><br><b>Kacper</b></a></td>
+    <td align="center" width="140"><a href="https://github.com/Online5277"><img src="https://github.com/Online5277.png?size=160" width="80" alt="Cosmic"><br><b>Cosmic</b></a></td>
+    <td align="center" width="140"><a href="https://github.com/levzzz5154"><img src="https://github.com/levzzz5154.png?size=160" width="80" alt="levzzz"><br><b>levzzz</b></a></td>
+    <td align="center" width="140"><a href="https://github.com/rdbtCVS"><img src="https://github.com/rdbtCVS.png?size=160" width="80" alt="rdbt"><br><b>rdbt</b></a></td>
+    <td align="center" width="140"><a href="https://github.com/dezer-x"><img src="https://github.com/dezer-x.png?size=160" width="80" alt="Anthony S"><br><b>Anthony S</b></a></td>
+    <td align="center" width="140"><a href="https://github.com/ludovic111"><img src="https://github.com/ludovic111.png?size=160" width="80" alt="Ludovic Marie"><br><b>Ludovic Marie</b></a><br><sub>Founder</sub></td>
   </tr>
 </table>
 
