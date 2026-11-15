@@ -321,7 +321,7 @@ impl NativePack {
         let (mut post, others): (Vec<_>, Vec<_>) = report
             .stages
             .into_iter()
-            .partition(|s| s.kind == StageKind::Post);
+            .partition(|s| matches!(s.kind, StageKind::Post | StageKind::Compute));
         let sky = others
             .iter()
             .find(|s| s.kind == StageKind::Sky)

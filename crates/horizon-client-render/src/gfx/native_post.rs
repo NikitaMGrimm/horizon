@@ -1127,7 +1127,7 @@ impl NativePost {
             .extend((0..targets.len() as u32).map(|j| {
                 texture_entry(horizon_shader_api::stages::POST_TARGET_BINDING + j, float)
             }));
-        let kept = kept::chain(device, manifest, &stages, &entries)?;
+        let (stages, kept) = kept::chain(device, manifest, stages, &entries, constants)?;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Native shader pack post"),
             entries: &entries,
@@ -1374,7 +1374,7 @@ impl NativePost {
             .and_then(|d| d.scene.as_ref())
             .map_or(world.0, |s| &s.1);
         let group = |previous: &wgpu::TextureView, pass: Option<usize>, parity| {
-            let writes = pass.map(|i| self.plan[i].writes);
+            let writes = pass.and_then(|i| self.plan.get(i)).map(|p| p.writes);
             let mut entries = vec![
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1460,9 +1460,9 @@ impl NativePost {
         // One set a parity of the kept textures' versions.
         let mut groups = Vec::new();
         for parity in 0..1 + usize::from(self.kept.is_some()) {
-            groups.extend((0..self.passes.len()).map(|i| {
+            groups.extend(kept::order(&self.kept, self.passes.len()).map(|(i, at)| {
                 // The chain's picture so far: the world's before its first pass.
-                let previous = match (&self.targets, self.plan[i].reads) {
+                let previous = match (&self.targets, self.plan[at].reads) {
                     (Some((_, t)), Some(slot)) => &t[slot],
                     _ => scene,
                 };
@@ -1526,6 +1526,7 @@ impl NativePost {
             _ => screen,
         };
         for (i, ((label, pipeline), group)) in self.passes.iter().zip(groups).enumerate() {
+            kept::dispatch(&self.kept, encoder, groups, i, size);
             let view = match (self.plan[i].writes, &self.targets, &self.named) {
                 (Writes::Chain(slot), Some((_, t)), _) => &t[slot],
                 (Writes::Target(j), _, Some((_, n))) => &n[j],
