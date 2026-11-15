@@ -701,3 +701,113 @@ fn shader_api_0_1_has_none_of_it() {
         "[[before_world]]\nfile = \"b.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n";
     assert!(old(before).contains("[[before_world]] is shader API 0.2"));
 }
+
+/// #16011 item 4's caps on compute work: 2^25 invocations a dispatch and 2^26 a frame over
+/// every compute pass, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160 rounded
+/// up to them.
+#[test]
+fn compute_work_is_capped_per_dispatch_and_per_frame() {
+    use horizon_shader_api::kept::invocations;
+    let entry = |dispatch: &str, workgroup: &str| {
+        format!(
+            "[[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = {dispatch}\n\
+             workgroup = {workgroup}\n"
+        )
+    };
+    let counted = |dispatch: &str, workgroup: &str| {
+        let m = parse(&entry(dispatch, workgroup)).unwrap();
+        invocations(&m.post[0])
+    };
+    // 3840×2160 in 8×8 workgroups fills them; in 7×7 the edges round up to 549×309 of them.
+    assert_eq!(counted("\"pixels\"", "[8, 8, 1]"), 8_294_400);
+    assert_eq!(counted("\"pixels\"", "[7, 7, 1]"), 549 * 309 * 49);
+    // A partly filled workgroup counts in full.
+    assert_eq!(counted("[100, 1, 1]", "[64, 1, 1]"), 128);
+    // 2^25 a dispatch: 8192×4096 cells take it.
+    parse(&entry("[8192, 4096, 1]", "[256, 1, 1]")).unwrap();
+    refused(
+        &entry("[8192, 4097, 1]", "[256, 1, 1]"),
+        "c.wgsl: 33562624 invocations (whole workgroups, \"pixels\" counted at 3840×2160); a \
+         dispatch may run 33554432",
+    );
+    refused(
+        &entry("[8193, 4096, 1]", "[256, 1, 1]"),
+        "c.wgsl: 34603008 invocations",
+    );
+    // 2^26 a frame: seven pixel dispatches and 9,048,064 cells take it, a workgroup more doesn't.
+    let pixels = entry("\"pixels\"", "[8, 8, 1]").repeat(7);
+    let with = |cells: u32| {
+        format!(
+            "{pixels}{}",
+            entry(&format!("[{cells}, 1, 1]"), "[256, 1, 1]")
+        )
+    };
+    parse(&with(9_048_064)).unwrap();
+    refused(
+        &with(9_048_065),
+        "the compute passes run 67109120 invocations a frame (whole workgroups, \"pixels\" \
+         counted at 3840×2160); a pack may run 67108864",
+    );
+}
+
+/// An `rgba32uint` kept texture: written by a compute pass as storage, read as
+/// `texture_2d<u32>` with `textureLoad`, `_previous` too.
+#[test]
+fn an_rgba32uint_texture_is_written_by_compute_and_loaded_as_u32() {
+    let manifest = format!(
+        "{}[[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = [4, 4, 1]\n\
+         workgroup = [4, 4, 1]\nwrites = [\"ints\"]\n\
+         [[post]]\nfile = \"last.wgsl\"\nreads = [\"ints\", \"ints_previous\"]\n",
+        resource("ints", "format = \"rgba32uint\"\nsize = [4, 4]")
+    );
+    let write = "fn compute(input: ComputeInput) {\n    \
+                 if input.in_bounds { textureStore(ints, input.cell.xy, vec4<u32>(input.cell.x)); }\n}\n";
+    let read = "fn post(input: PostInput) -> vec4<f32> {\n    \
+                let p = vec2<i32>(input.pixel);\n    \
+                let n = textureLoad(ints, p, 0).x + textureLoad(ints_previous, p, 0).x;\n    \
+                return input.color * f32(n);\n}\n";
+    let p = pack(&manifest, &[("c.wgsl", write), ("last.wgsl", read)]);
+    check(&p).unwrap();
+    let prelude = |kind, file| {
+        let c = compose(&p, kind, file);
+        c.text[c.parts[0].1.clone()].to_owned()
+    };
+    let written = "@group(3) @binding(64) var ints: texture_storage_2d<rgba32uint, write>;";
+    assert!(prelude(StageKind::Compute, "c.wgsl").contains(written));
+    let last = prelude(StageKind::Post, "last.wgsl");
+    assert!(last.contains("@group(3) @binding(64) var ints: texture_2d<u32>;"));
+    assert!(last.contains("@group(3) @binding(65) var ints_previous: texture_2d<u32>;"));
+}
+
+/// `[[before_world]]` dispatches are capped as compute `[[post]]` ones are, and count toward the
+/// same 2^26 invocations a frame.
+#[test]
+fn before_world_work_shares_the_frame_cap() {
+    let entry = |list: &str, dispatch: &str| {
+        let compute = if list == "post" {
+            "compute = true\n"
+        } else {
+            ""
+        };
+        format!(
+            "[[{list}]]\nfile = \"c.wgsl\"\n{compute}dispatch = {dispatch}\nworkgroup = [8, 8, 1]\n"
+        )
+    };
+    // 2^25 a dispatch holds for them too.
+    refused(
+        &entry("before_world", "[8192, 4104, 1]"),
+        "c.wgsl: 33619968 invocations",
+    );
+    // One 2^25 dispatch in each list: exactly 2^26 a frame fits; a workgroup more in either
+    // list alone fits too, but not with the other list.
+    let full = "[8192, 4096, 1]";
+    let before = entry("before_world", full);
+    let post = format!("{}{}", entry("post", full), entry("post", "[8, 8, 1]"));
+    parse(&before).unwrap();
+    parse(&post).unwrap();
+    parse(&format!("{before}{}", entry("post", full))).unwrap();
+    refused(
+        &format!("{before}{post}"),
+        "the compute passes run 67108928 invocations a frame",
+    );
+}
