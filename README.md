@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/banner.webp" alt="Horizon: the game you know, rebuilt in Rust" width="100%">
+  <img src="docs/media/readme/banner-title.webp" alt="Horizon: the game you know, rebuilt in Rust" width="100%">
 </p>
 
 <p align="center">
@@ -8,7 +8,8 @@
 </p>
 
 <p align="center">
-  <a href="https://playhorizon.dev/download"><img src="docs/media/readme/download-button.png" alt="Download the Horizon launcher for Windows, macOS and Linux" width="400"></a>
+  <a href="https://playhorizon.dev/download"><img src="docs/media/readme/download-button.png" alt="Download the Horizon launcher for Windows, macOS and Linux" width="400"></a><br>
+  <sub>You need your own copy of Minecraft: Java Edition.</sub>
 </p>
 
 <p align="center">
@@ -27,25 +28,21 @@
 </p>
 
 <p align="center">
-  <sub>Against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast on a Ryzen 7 9800X3D with an RTX 5080: the title screen in about 3 seconds instead of 11, and 31 to 38 percent more frames per second. Other computers are on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
+  <sub>Against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast on a Ryzen 7 9800X3D with an RTX 5080. More computers on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
 </p>
 
-## What you get
+<h2 align="center">What you get</h2>
 
 - **Vanilla Minecraft:** survival, creative and hardcore in every dimension, with the same terrain, mobs, villagers and redstone. Your saves open as they are.
 - **Multiplayer:** vanilla and Horizon servers, LAN, and invite codes for playing your world with friends. You can [host a server](https://playhorizon.dev/docs/hosting) too.
 - **Mods:** Horizon's own mod system, with mods like zoom and a minimap, and shader packs. Browse the [catalogue](https://playhorizon.dev/mods) or [make a mod](https://playhorizon.dev/docs/make-a-mod).
 - **Beyond vanilla:** terrain up to 1,024 chunks away, HDR, controller support, graphics presets and dynamic lights.
 
-## What you need
+<h2 align="center">What you need</h2>
 
 - **Your own copy of Minecraft: Java Edition.** Horizon ships no Minecraft files. It builds them from the game you bought, so install version 26.3 and start it once.
 - **Windows, macOS or Linux:** Windows on x64 or ARM64, macOS 12 or later, Linux on x86-64.
 - **Mods made for Horizon:** Forge, NeoForge, Fabric and Quilt mods do not run in it.
-
-## Build and contribute
-
-Horizon is built in the open, and pull requests are welcome: [build guide](docs/native-client.md#run-from-a-checkout) · [contributing](CONTRIBUTING.md) · [governance](GOVERNANCE.md).
 
 <h2 align="center">Made by the Horizon Team</h2>
 
@@ -65,6 +62,13 @@ Horizon is built in the open, and pull requests are welcome: [build guide](docs/
   <a href="https://github.com/horizon-rust/horizon/graphs/contributors"><img src="https://contrib.rocks/image?repo=horizon-rust/horizon&max=72&columns=12" alt="Everyone who has contributed to Horizon"></a>
 </p>
 
-<sub>Horizon is released under the [MIT licence](LICENSE) for the project's original work; dependencies keep their own licences, see the [notices](THIRD_PARTY_NOTICES.md). Founded by [Ludovic Marie](https://lu4ovic.com) and built by the Horizon Team and [its contributors](https://github.com/horizon-rust/horizon/graphs/contributors). You can support it on [GitHub Sponsors](https://github.com/sponsors/ludovic111).</sub>
+<p align="center">
+  <a href="docs/native-client.md#run-from-a-checkout"><b>Build guide</b></a> ·
+  <a href="CONTRIBUTING.md"><b>Contributing</b></a> ·
+  <a href="GOVERNANCE.md"><b>Governance</b></a> ·
+  <a href="https://github.com/sponsors/ludovic111"><b>Sponsor</b></a>
+</p>
+
+<sub>Horizon is released under the [MIT licence](LICENSE) for the project's original work; dependencies keep their own licences, see the [notices](THIRD_PARTY_NOTICES.md).</sub>
 
 <sub>NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT. Minecraft is a trademark of Mojang Synergies AB; its code and assets belong to Mojang and Microsoft under the [Minecraft EULA](https://www.minecraft.net/en-us/eula).</sub>
