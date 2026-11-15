@@ -801,9 +801,9 @@ pub fn max_health(m: &Mob) -> f32 {
 }
 /// `LivingEntity.onAttributeUpdated(MAX_HEALTH)` after a Health Boost
 /// change: the cached maximum follows the attribute model again, and Health
-/// above it is lowered (nothing is healed). Wolves write their maximum
-/// straight into the cache (`tame::set_tame`), outside the model, so they
-/// keep theirs.
+/// above it is lowered (nothing is healed). Wolves keep the maximum their
+/// taming left (`tame::set_tame`), as they did before their base was an
+/// attribute base.
 pub fn health_boost_changed(m: &mut Mob) {
     if m.species() == Species::Wolf {
         return;
