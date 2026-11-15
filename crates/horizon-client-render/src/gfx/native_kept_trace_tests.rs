@@ -185,39 +185,55 @@ fn pack(
     pack
 }
 
+/// The renderer's world (colour and depth) and screen, 4×4, kept across frames as the
+/// renderer keeps them: the chain's groups hold the world's views.
+struct World {
+    color: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    screen: wgpu::Texture,
+}
+
+impl World {
+    fn new(device: &wgpu::Device) -> Self {
+        let target = |format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        use wgpu::TextureUsages as T;
+        let usage = T::RENDER_ATTACHMENT | T::TEXTURE_BINDING;
+        let view = |t: wgpu::Texture| t.create_view(&Default::default());
+        Self {
+            color: view(target(wgpu::TextureFormat::Rgba8Unorm, usage)),
+            depth: view(target(wgpu::TextureFormat::Depth32Float, usage)),
+            screen: target(
+                wgpu::TextureFormat::Rgba8Unorm,
+                T::RENDER_ATTACHMENT | T::COPY_SRC,
+            ),
+        }
+    }
+}
+
 /// Frame `n` of `pack` as the renderer draws it, with `scene` or without: its inputs, its
-/// `[[before_world]]` passes, then its chain over a 4×4 world onto the screen; the screen's
-/// first pixel.
+/// `[[before_world]]` passes, then its chain over `world` onto its screen; the screen's first
+/// pixel.
 fn frame(
-    (device, queue): (&wgpu::Device, &wgpu::Queue),
+    (device, queue, world): (&wgpu::Device, &wgpu::Queue, &World),
     pack: &mut NativePack,
     n: u32,
     scene: Option<&Traced<'_>>,
 ) -> [u8; 4] {
-    let target = |format, usage| {
-        device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d {
-                width: 4,
-                height: 4,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage,
-            view_formats: &[],
-        })
-    };
-    use wgpu::TextureUsages as T;
-    let usage = T::RENDER_ATTACHMENT | T::TEXTURE_BINDING;
-    let color = target(wgpu::TextureFormat::Rgba8Unorm, usage).create_view(&Default::default());
-    let depth = target(wgpu::TextureFormat::Depth32Float, usage).create_view(&Default::default());
-    let screen = target(
-        wgpu::TextureFormat::Rgba8Unorm,
-        T::RENDER_ATTACHMENT | T::COPY_SRC,
-    );
     let hud = crate::hud::HudBatch::new([4, 4]);
     let mut inputs = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
     inputs.pack.frame_timing = Some(crate::gfx::pack_uniforms::FrameTiming::nth(n, 50.0));
@@ -230,8 +246,9 @@ fn frame(
     );
     let mut encoder = device.create_command_encoder(&Default::default());
     pack.before_world(device, &mut encoder, scene);
-    let world = (&color, &depth, &pack.frame.surface_view);
+    let screen = &world.screen;
     let view = screen.create_view(&Default::default());
+    let world = (&world.color, &world.depth, &pack.frame.surface_view);
     pack.post.run(
         device,
         &mut encoder,
@@ -242,7 +259,7 @@ fn frame(
         None,
         scene,
     );
-    let buffer = crate::gfx::copy_frame(device, &mut encoder, &screen, [4, 4]);
+    let buffer = crate::gfx::copy_frame(device, &mut encoder, screen, [4, 4]);
     queue.submit([encoder.finish()]);
     (buffer.slice(..)).map_async(wgpu::MapMode::Read, |r| r.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
@@ -286,6 +303,7 @@ fn traces(manifest: &str, files: &[(&str, &str)], shown: impl Fn(Option<f32>) ->
         Scene::new(&device, &queue, 4.0, 1),
         Scene::new(&device, &queue, 6.0, 2),
     );
+    let world = World::new(&device);
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut pack = pack(&device, &queue, &first, manifest, files);
     let (near, far) = (first.traced(), second.traced());
@@ -299,7 +317,7 @@ fn traces(manifest: &str, files: &[(&str, &str)], shown: impl Fn(Option<f32>) ->
     .into_iter()
     .enumerate()
     {
-        let got = frame((&device, &queue), &mut pack, n as u32 + 1, scene);
+        let got = frame((&device, &queue, &world), &mut pack, n as u32 + 1, scene);
         assert!(shows(got, want), "frame {n}: {got:?}, {want:?} expected");
     }
     let error = pollster::block_on(scope.pop());
@@ -349,6 +367,7 @@ fn a_kept_post_pass_reads_its_previous_and_traces() {
         return;
     };
     let scene = Scene::new(&device, &queue, 4.0, 1);
+    let world = World::new(&device);
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut pack = pack(
         &device,
@@ -364,25 +383,30 @@ fn a_kept_post_pass_reads_its_previous_and_traces() {
         (None, [0.75, 0.0, 0.0]),
     ];
     for (n, (scene, want)) in frames.into_iter().enumerate() {
-        let got = frame((&device, &queue), &mut pack, n as u32 + 1, scene);
+        let got = frame((&device, &queue, &world), &mut pack, n as u32 + 1, scene);
         assert!(shows(got, want), "frame {n}: {got:?}, {want:?} expected");
     }
     let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
 }
 
-/// What a pack makes, counted with `Instance::generate_report`: a `[ray_tracing]` pack
-/// without kept resources makes what it made before them (the chain's layout and one with the
-/// scene, its passes' pipelines twice; a group a pass and the tonemap's on the first frame with
-/// the scene, none on the next), and one that keeps resources and traces from a compute pass
-/// a layout a pass, with the scene for the passes that trace, and its groups a parity once.
+/// What a pack makes, counted with `Instance::generate_report`, built and then over five
+/// frames: three with a scene, two with another (a TLAS regrown). A `[ray_tracing]` pack without
+/// kept resources makes what it made before them: the frame's layout, the chain's and the one
+/// with the scene; its passes' pipelines twice, the decode's and the tonemap's; its groups (a
+/// pass's and the tonemap's) on the first frame, again on the second, whose history is no longer
+/// blank, and again for the other scene. One that keeps resources and traces from a
+/// `[[before_world]]` pass and a compute pass makes a layout a pass, each again with the scene,
+/// and its groups for both parities once, then once for the other scene. Nothing else, ever.
 #[test]
 fn a_traced_pack_makes_its_layouts_and_groups_once() {
     let Some((instance, device, queue)) = ray_device() else {
         return;
     };
     let scene = Scene::new(&device, &queue, 4.0, 1);
-    let traced = scene.traced();
+    let other = Scene::new(&device, &queue, 6.0, 2);
+    let (traced, regrown) = (scene.traced(), other.traced());
+    let world = World::new(&device);
     let count = || {
         let hub = instance.generate_report()?.hub;
         let counts = [
@@ -393,20 +417,38 @@ fn a_traced_pack_makes_its_layouts_and_groups_once() {
         ];
         Some(counts.map(|c| c.num_allocated))
     };
-    let made = |manifest: &str, files: &[(&str, &str)]| {
-        let before = count()?;
+    // The counts are of live objects: every frame's groups are held to the end, so a group
+    // remade counts as made rather than netting to nothing.
+    let mut held = Vec::new();
+    let mut made = |manifest: &str, files: &[(&str, &str)]| {
+        let mut counts = vec![count()?];
         let mut pack = pack(&device, &queue, &scene, manifest, files);
-        let built = count()?;
-        frame((&device, &queue), &mut pack, 1, Some(&traced));
-        let first = count()?;
-        frame((&device, &queue), &mut pack, 2, Some(&traced));
-        let second = count()?;
-        let delta = |a: [usize; 4], b: [usize; 4]| [0, 1, 2, 3].map(|i| b[i] - a[i]);
-        Some([
-            delta(before, built),
-            delta(built, first),
-            delta(first, second),
-        ])
+        counts.push(count()?);
+        let frames = [&traced, &traced, &traced, &regrown, &regrown];
+        for (n, scene) in frames.into_iter().enumerate() {
+            frame(
+                (&device, &queue, &world),
+                &mut pack,
+                n as u32 + 1,
+                Some(scene),
+            );
+            let chain = pack
+                .post
+                .groups
+                .iter()
+                .flat_map(|(_, _, g)| g.iter().cloned());
+            let worlds = pack.post.kept.iter().flat_map(|k| k.worlds.iter().cloned());
+            held.extend(chain.chain(worlds));
+            counts.push(count()?);
+        }
+        let delta = |(a, b): (&[usize; 4], &[usize; 4])| [0, 1, 2, 3].map(|i| b[i] - a[i]);
+        Some(
+            counts
+                .iter()
+                .zip(&counts[1..])
+                .map(delta)
+                .collect::<Vec<_>>(),
+        )
     };
     let post = "fn post(input: PostInput) -> vec4<f32> {\n    \
                 return vec4<f32>(trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 8.0).distance);\n}\n";
@@ -417,14 +459,125 @@ fn a_traced_pack_makes_its_layouts_and_groups_once() {
     };
     eprintln!("traced chain: {plain:?}");
     let manifest = format!(
-        "{HIT}[[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = [1, 1, 1]\n\
+        "{HIT}[[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
+         writes = [\"hit\"]\n[[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = [1, 1, 1]\n\
          workgroup = [1, 1, 1]\nwrites = [\"hit\"]\n[[post]]\nfile = \"l.wgsl\"\nreads = [\"hit\"]\n"
     );
-    let kept = made(&manifest, &[("c.wgsl", TRACES), ("l.wgsl", SHOW)]).unwrap();
-    // The frame's layouts and the chain's, then the one with the scene; the passes' pipelines
-    // twice, the decode's and the tonemap's. A group a pass and the tonemap's on the first frame.
-    assert_eq!(plain, [[3, 1, 6, 0], [0, 3, 0, 0], [0, 0, 0, 0]]);
-    // The frame's and the chain's, a kept layout a pass (the compute one, the last), each again
-    // with the scene; the compute pass's pipeline twice. Its groups once for each parity.
-    assert_eq!(kept, [[6, 1, 4, 2], [0, 6, 0, 0], [0, 0, 0, 0]]);
+    let files = [("w.wgsl", TRACES), ("c.wgsl", TRACES), ("l.wgsl", SHOW)];
+    let kept = made(&manifest, &files).unwrap();
+    assert_eq!(
+        plain,
+        [
+            [3, 1, 6, 0],
+            [0, 3, 0, 0],
+            [0, 3, 0, 0],
+            [0, 0, 0, 0],
+            [0, 3, 0, 0],
+            [0, 0, 0, 0]
+        ]
+    );
+    // The frame's and the chain's layouts, a kept layout a pass (before-world, compute, post),
+    // each again with the scene; the post pass's pipeline twice, the decode's and the tonemap's;
+    // the two compute passes' pipelines twice. Groups: the chain's three for each parity and the
+    // before-world pass's for each parity.
+    assert_eq!(
+        kept,
+        [
+            [8, 1, 4, 4],
+            [0, 8, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 8, 0, 0],
+            [0, 0, 0, 0]
+        ]
+    );
+}
+
+/// A pack whose only tracer is a `[[before_world]]` pass (no `[[post]]` at all) builds that
+/// pass against the scene and runs with and without one, with no validation error.
+#[test]
+fn a_pack_that_traces_only_before_the_world_runs() {
+    let Some((_, device, queue)) = ray_device() else {
+        return;
+    };
+    let scene = Scene::new(&device, &queue, 4.0, 1);
+    let manifest = format!(
+        "{HIT}[[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
+         writes = [\"hit\"]\n"
+    );
+    let world = World::new(&device);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut pack = pack(&device, &queue, &scene, &manifest, &[("w.wgsl", TRACES)]);
+    let trace = pack.post.trace.as_ref().expect("the scene's join");
+    assert!(trace.computes.iter().any(Option::is_some));
+    let traced = scene.traced();
+    for (n, scene) in [Some(&traced), Some(&traced), None].into_iter().enumerate() {
+        frame((&device, &queue, &world), &mut pack, n as u32 + 1, scene);
+    }
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
+}
+
+/// A pack at `MAX_RESOURCES`, half buffers and half textures, whose compute pass writes every
+/// one and traces, and whose post pass reads every one and traces: its layouts, with the
+/// scene's bindings beside the kept ones, fit the device's limits and draw without a
+/// validation error.
+#[test]
+fn a_pack_with_every_kept_resource_traces() {
+    let Some((_, device, queue)) = ray_device() else {
+        return;
+    };
+    let scene = Scene::new(&device, &queue, 4.0, 1);
+    let max = horizon_shader_api::kept::MAX_RESOURCES;
+    let mut manifest = String::from("[ray_tracing]\n");
+    let names: Vec<String> = (0..max).map(|i| format!("r{i}")).collect();
+    for (i, name) in names.iter().enumerate() {
+        manifest += &if i % 2 == 0 {
+            format!(
+                "[[resource]]\nname = \"{name}\"\nbuffer = 16\nelement = \"f32\"\nkeep = \"view\"\n"
+            )
+        } else {
+            format!(
+                "[[resource]]\nname = \"{name}\"\nformat = \"rgba16float\"\nsize = [1, 1]\nkeep = \"view\"\n"
+            )
+        };
+    }
+    let list = names
+        .iter()
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    manifest += &format!(
+        "[[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
+         writes = [{list}]\n[[post]]\nfile = \"l.wgsl\"\nreads = [{list}]\n"
+    );
+    let d = "trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0).distance";
+    let mut compute = format!("fn compute(input: ComputeInput) {{\n    let d = {d};\n");
+    let mut post = format!("fn post(input: PostInput) -> vec4<f32> {{\n    var d = {d};\n");
+    for (i, name) in names.iter().enumerate() {
+        if i % 2 == 0 {
+            compute += &format!("    {name}[0] = d;\n");
+            post += &format!("    d += {name}[0];\n");
+        } else {
+            compute += &format!("    textureStore({name}, vec2<i32>(0), vec4<f32>(d));\n");
+            post += &format!("    d += textureLoad({name}, vec2<i32>(0), 0).x;\n");
+        }
+    }
+    compute += "}\n";
+    post += "    return vec4<f32>(d / 64.0, 0.0, 0.0, 1.0);\n}\n";
+    let world = World::new(&device);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut pack = pack(
+        &device,
+        &queue,
+        &scene,
+        &manifest,
+        &[("c.wgsl", &compute), ("l.wgsl", &post)],
+    );
+    let traced = scene.traced();
+    // Four into each of the eight, and four traced here: 36 / 64 of red.
+    let got = frame((&device, &queue, &world), &mut pack, 1, Some(&traced));
+    assert!(shows(got, [36.0 / 64.0, 0.0, 0.0]), "{got:?}");
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
 }
