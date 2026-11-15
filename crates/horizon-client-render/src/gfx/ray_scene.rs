@@ -62,6 +62,24 @@ impl Renderer {
         }
     }
 
+    /// Runs `pack` from now on (none: no Horizon pack). The scene follows it: a pack that
+    /// declares `[ray_tracing]` keeps the scene there is, or gets one built from the sections
+    /// resident now; another pack, or none, drops it (`ray_query::wanted`: with
+    /// `HORIZON_RAY_TRACING=1` every pack keeps one). Called before the pack's first frame, so
+    /// the scene is there when it gathers what it traces.
+    pub(in crate::gfx) fn replace_native(
+        &mut self,
+        pack: Option<crate::gfx::native_pack::NativePack>,
+    ) {
+        let traces = pack.as_ref().is_some_and(|p| p.traces);
+        follow(
+            &mut self.ray_scene,
+            &self.device,
+            super::wanted(super::switch(), traces),
+        );
+        self.native = pack;
+    }
+
     /// Every section is gone (a new world, a new dimension).
     pub(in crate::gfx) fn ray_clear(&mut self) {
         if let Some(rt) = &mut self.ray_scene {
@@ -84,7 +102,7 @@ impl Renderer {
         if entities && !self.entity_buffer.usage().contains(ENTITY_INPUT) {
             // The layer just came on: a buffer with its usages, given this frame's vertices again,
             // since the old one can't be copied from. They are the batch's alone: nothing is posed
-            // on the GPU under a native pack (`skins_entities`).
+            // on the GPU while the layer is on (`skins_entities`).
             self.entity_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Entity vertices"),
                 size: self.entity_buffer.size(),
@@ -329,6 +347,9 @@ pub(in crate::gfx) struct RayScene {
     full_logged: bool,
     /// How many TLAS and stores were made: a bind group made at another count holds an old one.
     generation: u64,
+    /// `Resident::removals` when the scene last dropped the sections no longer resident:
+    /// gfx.rs releases sections (unloaded columns, far terrain's fade-out) without `ray_mark`.
+    removals: u64,
     /// The TLAS's instances of both terrain layers: the entity layer's instance comes after.
     translucent_instances: u32,
     /// The entity layer, while the native pack's rays read it.
@@ -392,9 +413,18 @@ impl RayScene {
             slots,
             full_logged: false,
             generation: 0,
+            removals: 0,
             translucent_instances: 0,
             entities: None,
         })
+    }
+
+    /// The scene a renderer starts with: one only when `HORIZON_RAY_TRACING=1` asks for it with
+    /// any pack or none; otherwise the pack that loads brings it (`Renderer::replace_native`).
+    pub(in crate::gfx) fn forced(device: &wgpu::Device) -> Option<Self> {
+        super::wanted(super::switch(), false)
+            .then(|| Self::new(device))
+            .flatten()
     }
 
     /// What a trace from `camera` reads, once this world's first TLAS is built: before that
@@ -501,6 +531,10 @@ impl RayScene {
         // doesn't build the same ones over and over.
         let keep = self.reach + 2;
         let mut changed = self.compact(queue);
+        if self.removals != sections.removals() {
+            self.removals = sections.removals();
+            changed |= drop_released(&mut self.blas, &mut self.slots, |k| sections.contains(k));
+        }
         if self.anchor != Some(column) {
             changed |= leave(&mut self.blas, &mut self.slots, column, keep);
             for (key, s, _) in sections.iter() {
@@ -639,6 +673,32 @@ impl RayScene {
     }
 }
 
+/// `scene` for a pack that `wants` one: the one there is, or a new one; none otherwise.
+fn follow(scene: &mut Option<RayScene>, device: &wgpu::Device, wants: bool) {
+    if !wants {
+        *scene = None;
+    } else if scene.is_none() {
+        *scene = RayScene::new(device);
+    }
+}
+
+/// Drops the BLAS and slot of every part whose section is not `resident`; whether any went.
+fn drop_released<B>(
+    blas: &mut FxHashMap<Part, B>,
+    slots: &mut Slots,
+    resident: impl Fn(SectionKey) -> bool,
+) -> bool {
+    let before = blas.len();
+    blas.retain(|&part, _| {
+        let kept = resident(part.0);
+        if !kept {
+            slots.free(part);
+        }
+        kept
+    });
+    blas.len() != before
+}
+
 /// Drops from `blas` both layers of the sections past `keep` chunks of column `column`, and
 /// frees their slots. Whether any went.
 fn leave<T>(
@@ -686,11 +746,11 @@ struct Build<'a> {
 /// `rt_unpack.wgsl`'s `RtJob`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct RtJob {
-    base: u32,
-    quads: u32,
-    out: u32,
-    pad: u32,
+pub(in crate::gfx) struct RtJob {
+    pub base: u32,
+    pub quads: u32,
+    pub out: u32,
+    pub pad: u32,
 }
 
 /// The store, and the pass that writes sections' solid quads into it as vertices: BLAS builds
@@ -703,20 +763,8 @@ struct Unpacker {
 
 impl Unpacker {
     fn new(device: &wgpu::Device, capacity: u64) -> Self {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Ray tracing: unpack sections"),
-            source: wgpu::ShaderSource::Wgsl(unpack_shader().into()),
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Ray tracing: unpack sections"),
-            layout: None,
-            module: &module,
-            entry_point: Some("cs_rt_unpack"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
         Self {
-            pipeline,
+            pipeline: unpack_pipeline(device),
             store: store_buffer(device, capacity),
         }
     }
@@ -767,17 +815,10 @@ impl Unpacker {
         if pages.is_empty() {
             return;
         }
-        let empty = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.pipeline.get_bind_group_layout(0),
-            entries: &[],
-        });
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Ray tracing: unpack sections"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &empty, &[]);
         for page in pages {
             let jobs: Vec<RtJob> = builds
                 .iter()
@@ -789,42 +830,86 @@ impl Unpacker {
                     pad: 0,
                 })
                 .collect();
-            let jobs_buffer = wgpu::util::DeviceExt::create_buffer_init(
+            unpack_page(
                 device,
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Ray tracing: unpack jobs"),
-                    contents: bytemuck::cast_slice(&jobs),
-                    usage: wgpu::BufferUsages::STORAGE,
-                },
+                &mut pass,
+                &self.pipeline,
+                arena.buffer(page),
+                &jobs,
+                &self.store,
             );
-            let arena_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.pipeline.get_bind_group_layout(1),
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 19,
-                    resource: arena.buffer(page).as_entire_binding(),
-                }],
-            });
-            let out_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.pipeline.get_bind_group_layout(2),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: jobs_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: self.store.as_entire_binding(),
-                    },
-                ],
-            });
-            let most = jobs.iter().map(|j| j.quads * 4).max().unwrap_or(0);
-            pass.set_bind_group(1, &arena_group, &[]);
-            pass.set_bind_group(2, &out_group, &[]);
-            pass.dispatch_workgroups(most.div_ceil(64), jobs.len() as u32, 1);
         }
     }
+}
+
+/// The unpacking pipeline (`rt_unpack.wgsl`); `[displacement]` writes its quads with it too
+/// (gfx/displace.rs).
+pub(in crate::gfx) fn unpack_pipeline(device: &wgpu::Device) -> wgpu::ComputePipeline {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        // No colon: DXC (DirectX 12) takes the label for a file name and fails to read it.
+        label: Some("Unpack sections"),
+        source: wgpu::ShaderSource::Wgsl(unpack_shader().into()),
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Ray tracing: unpack sections"),
+        layout: None,
+        module: &module,
+        entry_point: Some("cs_rt_unpack"),
+        compilation_options: Default::default(),
+        cache: None,
+    })
+}
+
+/// Writes `jobs`' solid quads, in the arena page `page`, out as vertices into `out`, in `pass`.
+pub(in crate::gfx) fn unpack_page(
+    device: &wgpu::Device,
+    pass: &mut wgpu::ComputePass<'_>,
+    pipeline: &wgpu::ComputePipeline,
+    page: &wgpu::Buffer,
+    jobs: &[RtJob],
+    out: &wgpu::Buffer,
+) {
+    let empty = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[],
+    });
+    let jobs_buffer = wgpu::util::DeviceExt::create_buffer_init(
+        device,
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("Ray tracing: unpack jobs"),
+            contents: bytemuck::cast_slice(jobs),
+            usage: wgpu::BufferUsages::STORAGE,
+        },
+    );
+    let arena_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(1),
+        entries: &[wgpu::BindGroupEntry {
+            binding: 19,
+            resource: page.as_entire_binding(),
+        }],
+    });
+    let out_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(2),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: jobs_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: out.as_entire_binding(),
+            },
+        ],
+    });
+    let most = jobs.iter().map(|j| j.quads * 4).max().unwrap_or(0);
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, &empty, &[]);
+    pass.set_bind_group(1, &arena_group, &[]);
+    pass.set_bind_group(2, &out_group, &[]);
+    pass.dispatch_workgroups(most.div_ceil(64), jobs.len() as u32, 1);
 }
 
 /// terrain.wgsl with the unpacking entry point after it, which reads sections as its solid
@@ -1072,6 +1157,23 @@ mod tests {
     }
 
     #[test]
+    fn sections_no_longer_resident_leave_the_scene_and_the_store() {
+        let mut slots = Slots::new(64, 64);
+        let mut blas = FxHashMap::default();
+        for key in [A, B, C] {
+            slots.alloc(key, 8);
+            blas.insert(key, ());
+        }
+        // B's column was unloaded without a new mesh.
+        assert!(drop_released(&mut blas, &mut slots, |k| k != B.0));
+        assert_eq!(blas.len(), 2);
+        assert!(!blas.contains_key(&B));
+        assert_eq!(slots.first(B), None);
+        assert_eq!(slots.alloc(B, 8), Some(8), "its slot is free again");
+        assert!(!drop_released(&mut blas, &mut slots, |_| true));
+    }
+
+    #[test]
     fn a_section_meshed_again_leaves_its_old_slot() {
         let mut slots = Slots::new(64, 64);
         slots.alloc(A, 8);
@@ -1213,5 +1315,47 @@ mod tests {
         assert!(RayScene::new(&device).is_none());
         assert!(super::super::blas_input(&device).is_empty());
         assert!(super::super::arena_input(&device).is_empty());
+    }
+
+    /// Spec #16011 item 5: the scene follows the pack that loads. A pack with `[ray_tracing]`
+    /// gets one and keeps it across its reloads; another pack drops it, and the next tracing one
+    /// starts afresh from the sections resident then. `HORIZON_RAY_TRACING=1` keeps one without.
+    #[test]
+    fn the_scene_follows_a_pack_that_traces() {
+        use super::super::{Switch, experimental, pick, wanted};
+        let instance = crate::gfx::test_gpu::instance();
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            return;
+        };
+        let features = pick(true, adapter.features());
+        let desc = wgpu::DeviceDescriptor {
+            required_features: features,
+            required_limits: adapter.limits(),
+            experimental_features: experimental(features),
+            ..Default::default()
+        };
+        let Ok((device, _)) = pollster::block_on(adapter.request_device(&desc)) else {
+            return;
+        };
+        if features.is_empty() {
+            return;
+        }
+        let mut scene = None;
+        follow(&mut scene, &device, wanted(Switch::Pack, false));
+        assert!(scene.is_none());
+        follow(&mut scene, &device, wanted(Switch::Pack, true));
+        scene.as_mut().unwrap().mark(A.0);
+        follow(&mut scene, &device, wanted(Switch::Pack, true));
+        // A marked section waits in both layers, the solid one and the translucent one.
+        assert_eq!(scene.as_ref().map(|s| s.dirty.len()), Some(2));
+        follow(&mut scene, &device, wanted(Switch::Pack, false));
+        assert!(scene.is_none());
+        follow(&mut scene, &device, wanted(Switch::Pack, true));
+        let fresh = scene.as_ref().unwrap();
+        assert!(fresh.dirty.is_empty() && fresh.anchor.is_none());
+        follow(&mut scene, &device, wanted(Switch::Off, true));
+        assert!(scene.is_none());
+        follow(&mut scene, &device, wanted(Switch::On, false));
+        assert!(scene.is_some());
     }
 }

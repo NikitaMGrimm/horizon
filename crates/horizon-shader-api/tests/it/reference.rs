@@ -62,6 +62,10 @@ fn vanilla(kind: StageKind) -> &'static str {
             "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n"
         }
         StageKind::Entity => VANILLA_ENTITY,
+        StageKind::Compute | StageKind::BeforeWorld => {
+            "fn compute(input: ComputeInput) {}
+"
+        }
     }
 }
 
@@ -118,11 +122,11 @@ fn every_stage_compiles_under_ray_tracing() {
 const PINNED_TRACED_MATERIAL: [(Tracing, &str); 2] = [
     (
         Tracing::Stub,
-        "509a036742047c228933bcac041d2946358e6841b6a9aea843aebc47e65cb3b3",
+        "ed31d1755a1383dc0d6e1dfc70d9d3831180f4baf4094cd3e2ad7c7407651311",
     ),
     (
         Tracing::Scene,
-        "a4ee696804159c443dc44bba26523689ab58cce84ff91892384dcbe266c6b3e2",
+        "9ec02b2d7ad21f591dbbbb5facdf0b802726b9d36bdda0b31d9d87083948f2ff",
     ),
 ];
 
@@ -136,7 +140,7 @@ fn the_traced_material_prelude_is_unchanged() {
 
 /// The SHA-256 of the prelude and entries of each stage for a pack without `[ray_tracing]`, as
 /// they were before the key: a pack that doesn't ask for the scene is built from the same WGSL.
-const PINNED_UNTRACED: [(StageKind, &str, &str); 6] = [
+const PINNED_0_2: [(StageKind, &str, &str); 6] = [
     (
         StageKind::Sky,
         "13320fd37a8b7de9011742b88709c820d7f89b2709e35313bd8e667c27eaf233",
@@ -149,7 +153,7 @@ const PINNED_UNTRACED: [(StageKind, &str, &str); 6] = [
     ),
     (
         StageKind::Material,
-        "da65020d1ae6698b966784fdc46b9a9f3d3863b0d270939931240ca56114f5a4",
+        "44421906ba871e4bde6a5e89e659a376dd97e2b4debb82c8fae56fba280b3be3",
         "6716c28ae0e699d15695da89c0848ae9d242c0e146b8487aff463ccc19bff4d2",
     ),
     (
@@ -171,7 +175,7 @@ const PINNED_UNTRACED: [(StageKind, &str, &str); 6] = [
 
 #[test]
 fn the_wgsl_of_a_pack_without_ray_tracing_is_unchanged() {
-    for (kind, prelude, entries) in PINNED_UNTRACED {
+    for (kind, prelude, entries) in PINNED_0_2 {
         let have = (
             sha256_hex(kind.prelude().as_bytes()),
             sha256_hex(kind.entries().as_bytes()),
@@ -189,16 +193,22 @@ fn the_wgsl_of_a_pack_without_ray_tracing_is_unchanged() {
     );
 }
 
-/// The `Frame` struct the sky prelude declares (for a pack with `[ray_tracing]` or without), as
-/// (name, offset) and its span.
-fn frame_layout(ray_tracing: bool) -> (Vec<(String, usize)>, usize) {
+/// The `Frame` struct the sky prelude declares (for a pack with `[ray_tracing]` or
+/// without; with `kept`, as one with `[[resource]]` has it), as (name, offset) and its span.
+fn frame_layout(ray_tracing: bool, kept: bool) -> (Vec<(String, usize)>, usize) {
     let tracing = if ray_tracing {
         Tracing::Stub
     } else {
         Tracing::None
     };
-    let prelude = StageKind::Sky.prelude_traced(tracing);
-    let text = format!("{prelude}{}", vanilla(StageKind::Sky));
+    // The prelude is the pack's (`tests/names.rs` has a kept one's): the struct alone here.
+    let text = match kept {
+        true => Frame::declared(ray_tracing, true).wgsl(),
+        false => {
+            let prelude = StageKind::Sky.prelude_traced(tracing);
+            format!("{prelude}{}", vanilla(StageKind::Sky))
+        }
+    };
     let module = validate(&text);
     let (_, ty) = module
         .types
@@ -223,15 +233,26 @@ fn the_frame_s_wgsl_layout_is_the_uploaded_struct_s() {
         .zip(Frame::OFFSETS)
         .map(|(f, &o)| (f.name.to_owned(), o))
         .collect();
-    let (wgsl, span) = frame_layout(true);
-    assert_eq!(span, std::mem::size_of::<Frame>());
+    let size = std::mem::size_of::<Frame>();
+    let (wgsl, span) = frame_layout(true, true);
+    assert_eq!(span, size);
     assert_eq!(wgsl, rust);
     // Without `[ray_tracing]` the scene's two fields are a gap: the others stay where they are.
-    let (wgsl, span) = frame_layout(false);
-    assert_eq!(span, std::mem::size_of::<Frame>());
+    let (wgsl, span) = frame_layout(false, true);
+    assert_eq!(span, size);
     let mut untraced = rust.clone();
     untraced.drain(Frame::RAY_FIELDS);
     assert_eq!(wgsl, untraced);
+    // Without `[[resource]]` the struct ends before the epochs, a prefix of the same buffer.
+    let unkept = Frame::KEPT_FIELDS.len();
+    let (wgsl, span) = frame_layout(true, false);
+    assert_eq!(
+        (span, wgsl),
+        (size - 16, rust[..rust.len() - unkept].to_vec())
+    );
+    let (wgsl, span) = frame_layout(false, false);
+    let untraced = &untraced[..untraced.len() - unkept];
+    assert_eq!((span, wgsl), (size - 16, untraced.to_vec()));
 }
 
 #[test]
