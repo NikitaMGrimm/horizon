@@ -39,16 +39,25 @@ NODE_PATH="$d/node_modules" node -e 'const {chromium}=require("playwright");(asy
 
 ## The README banner
 
-`docs/media/banner.webp` (1600x600) is the website's hero, a screenshot of playhorizon.dev in its
+`docs/media/banner.webp` (1600x340) is the top of the website's hero, a screenshot of playhorizon.dev in its
 dark theme. The navbar, the hero's buttons, its version line and its lede are hidden first, so the
 banner carries no launcher version and no harness count (the README's prose owns the count), and
-nothing in it goes stale. The crop starts 56 px above the kicker and ends at the hero's bottom
-edge. With Playwright, from the repository's root:
+nothing in it goes stale. The crop starts 46 px above the kicker and ends under the headline,
+so the README's download button stays near the top. With Playwright, from the repository's root:
 
 ```sh
 d=$(mktemp -d) && npm install --prefix "$d" playwright && npx --prefix "$d" playwright install chromium
-NODE_PATH="$d/node_modules" node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();const p=await b.newPage({viewport:{width:1600,height:1000}});await p.goto("https://playhorizon.dev/",{waitUntil:"networkidle"});await p.click(".theme-toggle");await p.waitForTimeout(1200);await p.evaluate(()=>{for(const s of ["header",".hero-actions",".download-meta",".lede"]){const e=document.querySelector(s);if(e)e.style.display="none"}});await p.waitForTimeout(400);await p.screenshot({path:"docs/media/banner.webp",clip:{x:0,y:136,width:1600,height:600}});await b.close()})()'
+NODE_PATH="$d/node_modules" node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();const p=await b.newPage({viewport:{width:1600,height:1000}});await p.goto("https://playhorizon.dev/",{waitUntil:"networkidle"});await p.click(".theme-toggle");await p.waitForTimeout(1200);await p.evaluate(()=>{for(const s of ["header",".hero-actions",".download-meta",".lede"]){const e=document.querySelector(s);if(e)e.style.display="none"}});await p.waitForTimeout(400);await p.screenshot({path:"docs/media/banner.webp",clip:{x:0,y:146,width:1600,height:340}});await b.close()})()'
 ```
+
+## The README screenshots
+
+`docs/media/readme/hero-lookout.webp` and `hero-nether.webp` (1600x900) are frames of a real three-player
+session: a host with its world open to LAN and two guests, all started with `horizon-ctl launch --offscreen`
+at 1920x1080 on a 125 % display and reduced to 1600x900. The world's seed is `4815162342`; the far terrain
+distance is 384 chunks and the render distance 32. The lookout at `311 125 603` in the Overworld was built
+for the picture (it faces the village at yaw 22, pitch 16); the Nether frame is taken from a strider at
+`38 32 74`, yaw 152. Players are in survival with the HUD on, as a player's own screenshot would be.
 
 ## Drawn in code
 

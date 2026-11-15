@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/horizon-rust/horizon/stargazers"><img src="https://img.shields.io/github/stars/horizon-rust/horizon?style=flat&color=F0795A" alt="GitHub stars"></a>
-  <a href="https://discord.gg/playhorizon"><img src="https://img.shields.io/discord/1559227979002028052?label=Discord&logo=discord&logoColor=white&color=5865F2" alt="Discord"></a>
+  <a href="https://discord.gg/playhorizon"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/horizon-rust/horizon/graphs/contributors"><img src="https://img.shields.io/github/contributors/horizon-rust/horizon?color=2EA44F" alt="Contributors"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-blue" alt="MIT licence"></a>
 </p>
@@ -22,31 +22,30 @@
   <a href="https://playhorizon.dev"><b>Website</b></a> ·
   <a href="https://playhorizon.dev/docs/"><b>Docs</b></a> ·
   <a href="https://playhorizon.dev/docs/install"><b>Install guide</b></a> ·
-  <a href="https://discord.gg/playhorizon"><b>Discord</b></a> ·
-  <a href="ROADMAP.md"><b>Roadmap</b></a>
+  <a href="https://discord.gg/playhorizon"><b>Discord</b></a>
 </p>
 
 <p align="center">
-  <img src="docs/media/readme/valley.webp" alt="A river valley with a plains village, savanna hills and a cherry grove, seen from above with a long view distance" width="100%">
+  <img src="docs/media/readme/hero-lookout.webp" alt="A player's view from a wooden lookout over a meadow village: a friend in iron armour stands at the edge, another rides a horse below, and cherry groves, snowy peaks and an ocean run to the horizon" width="100%">
 </p>
 
-<p align="center">
-  <img src="docs/media/readme/panel-worlds.webp" alt="Your worlds, same rules: survival, creative and hardcore, and your saves open as they are" width="49%">
-  <img src="docs/media/readme/panel-together.webp" alt="Play together: vanilla and Horizon servers, LAN, or a code from a friend" width="49%">
-</p>
+<table align="center">
+  <tr>
+    <td width="50%" valign="top"><b>See farther</b><br><sub>Terrain up to 1,024 chunks away, HDR and controllers.</sub></td>
+    <td width="50%" valign="top"><b>Play together</b><br><sub>Vanilla and Horizon servers, LAN, or a code from a friend.</sub></td>
+  </tr>
+  <tr>
+    <td valign="top"><b>Your worlds</b><br><sub>Survival, creative and hardcore, and your saves open as they are.</sub></td>
+    <td valign="top"><b>Same terrain</b><br><sub>Vanilla world generation in every dimension.</sub></td>
+  </tr>
+  <tr>
+    <td valign="top"><b>Same mobs</b><br><sub>Attributes, spawn rules and mob AI match vanilla.</sub></td>
+    <td valign="top"><b>Same rules</b><br><sub>Villagers and redstone work as they do in vanilla.</sub></td>
+  </tr>
+</table>
 
 <p align="center">
-  <img src="docs/media/readme/panel-farther.webp" alt="See farther: terrain up to 1,024 chunks away, HDR and controllers" width="49%">
-  <img src="docs/media/readme/panel-dimensions.webp" alt="Every dimension: vanilla world generation, mobs, villagers and redstone" width="49%">
-</p>
-
-<p align="center">
-  <img src="docs/media/readme/panel-terrain.webp" alt="Same terrain: vanilla world generation, here a savanna village from above" width="49%">
-  <img src="docs/media/readme/panel-mobs.webp" alt="Same mobs: attributes, spawn rules and mob AI match vanilla, here a baby piglin" width="49%">
-</p>
-
-<p align="center">
-  <b>On the roadmap:</b> play in your browser · Android and iOS with mods · splitscreen · <a href="ROADMAP.md">see the roadmap</a>
+  <img src="docs/media/readme/hero-nether.webp" alt="A player's view from a strider on a lava sea in the Nether, behind a friend riding another strider toward a lavafall and a crimson forest" width="100%">
 </p>
 
 <p align="center">
