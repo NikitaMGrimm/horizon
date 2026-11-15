@@ -437,7 +437,7 @@ Limits: 8 resources, 4 `[[before_world]]` entries, 8 compute
 `[[post]]` entries; 32 MiB of buffers and 1024 KiB of fixed-size textures, both versions counted; each R-relative
 kept texture takes two of the post targets `output`s share; a workgroup of up to [256, 256, 64] and
 256 invocations; 33554432 invocations a dispatch and 67108864 a frame over every
-compute pass, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160 (R isn't known at load).
+compute pass, `[[before_world]]` and `[[post]]` together, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160 (R isn't known at load).
 
 ## tonemap
 

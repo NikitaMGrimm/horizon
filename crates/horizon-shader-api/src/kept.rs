@@ -312,7 +312,8 @@ pub fn invocations(s: &Stage) -> u64 {
         .product()
 }
 
-/// The frame's compute entries `computes`, together within `MAX_FRAME_INVOCATIONS`.
+/// The frame's compute entries `computes` (`[[before_world]]` and compute `[[post]]`), together
+/// within `MAX_FRAME_INVOCATIONS`.
 fn frame_invocations<'a>(computes: impl Iterator<Item = &'a Stage>) -> Result<(), String> {
     let total: u64 = computes.map(invocations).sum();
     if total > MAX_FRAME_INVOCATIONS {
@@ -444,7 +445,7 @@ fn post_entries(post: &[Stage]) -> Result<(), String> {
         }
         compute_shape(p)?;
     }
-    frame_invocations(post.iter().filter(|p| p.compute))
+    Ok(())
 }
 
 /// Every rule of the keys above but the targets `check_post_targets` counts.
@@ -540,6 +541,7 @@ pub(crate) fn check(
         compute_shape(s)?;
     }
     post_entries(post)?;
+    frame_invocations(before_world.iter().chain(post.iter().filter(|p| p.compute)))?;
     for s in before_world.iter().chain(post) {
         access(s, &resources)?;
     }

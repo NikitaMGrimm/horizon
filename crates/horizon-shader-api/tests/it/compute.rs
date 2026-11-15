@@ -739,3 +739,36 @@ fn an_rgba32uint_texture_is_written_by_compute_and_loaded_as_u32() {
     assert!(last.contains("@group(3) @binding(64) var ints: texture_2d<u32>;"));
     assert!(last.contains("@group(3) @binding(65) var ints_previous: texture_2d<u32>;"));
 }
+
+/// `[[before_world]]` dispatches are capped as compute `[[post]]` ones are, and count toward the
+/// same 2^26 invocations a frame.
+#[test]
+fn before_world_work_shares_the_frame_cap() {
+    let entry = |list: &str, dispatch: &str| {
+        let compute = if list == "post" {
+            "compute = true\n"
+        } else {
+            ""
+        };
+        format!(
+            "[[{list}]]\nfile = \"c.wgsl\"\n{compute}dispatch = {dispatch}\nworkgroup = [8, 8, 1]\n"
+        )
+    };
+    // 2^25 a dispatch holds for them too.
+    refused(
+        &entry("before_world", "[8192, 4104, 1]"),
+        "c.wgsl: 33619968 invocations",
+    );
+    // One 2^25 dispatch in each list: exactly 2^26 a frame fits; a workgroup more in either
+    // list alone fits too, but not with the other list.
+    let full = "[8192, 4096, 1]";
+    let before = entry("before_world", full);
+    let post = format!("{}{}", entry("post", full), entry("post", "[8, 8, 1]"));
+    parse(&before).unwrap();
+    parse(&post).unwrap();
+    parse(&format!("{before}{}", entry("post", full))).unwrap();
+    refused(
+        &format!("{before}{post}"),
+        "the compute passes run 67108928 invocations a frame",
+    );
+}
