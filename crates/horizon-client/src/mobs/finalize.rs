@@ -535,8 +535,6 @@ pub fn base_value_with(m: &Mob, a: Attr, default: impl FnOnce() -> Option<f64>) 
 /// - `movement_speed`: Zombie and Piglin.setBaby (the load calls it even for an
 ///   adult), `Enderman.setTarget` (the load ends in `readPersistentAngerSaveData`,
 ///   which calls it), and the first tick of any mob (`LivingEntity.removeFrost`).
-/// - `max_health`: `Wolf.applyTamingSideEffects`, through `setTame(false, true)`
-///   when the load finds no owner (a wolf that is tamed in game makes it too).
 /// - `attack_damage`: `Rabbit.setVariant`, and a baby Goat or Hoglin, whose load's
 ///   `setAge` crosses the baby boundary (`ageBoundaryReached`).
 pub fn made_at_load(m: &Mob) -> Vec<Attr> {
@@ -544,9 +542,6 @@ pub fn made_at_load(m: &Mob) -> Vec<Attr> {
     let mut made = Vec::new();
     if super::doors::is_zombie(s) || matches!(s, Species::Piglin | Species::Enderman) || m.age > 0 {
         made.push(Attr::MovementSpeed);
-    }
-    if s == Species::Wolf {
-        made.push(Attr::MaxHealth);
     }
     if s == Species::Rabbit || (matches!(s, Species::Goat | Species::Hoglin) && m.is_baby()) {
         made.push(Attr::AttackDamage);
@@ -556,11 +551,6 @@ pub fn made_at_load(m: &Mob) -> Vec<Attr> {
 /// The base of an instance `made_at_load` lists, as `AttributeMap.pack` writes it.
 pub fn made_base(m: &Mob, a: Attr) -> f64 {
     match (m.species(), a) {
-        // `Wolf.applyTamingSideEffects` sets 40 for a tame wolf and 8 for the others;
-        // `attrs.max_health` is the value (modifiers included), never the base.
-        (Species::Wolf, Attr::MaxHealth) => {
-            base_value_with(m, a, || Some(super::tame::wolf_health_base(m.extra.tame)))
-        }
         (s @ (Species::Goat | Species::Hoglin), Attr::AttackDamage) => {
             base_value_with(m, a, || age_attack_damage(s, m.is_baby()))
         }
