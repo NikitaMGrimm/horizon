@@ -211,6 +211,12 @@ fn not_drawn(m: &Manifest, switch: bool) -> Option<String> {
     if m.entity.is_some() {
         return Some("the [entity] stage isn't drawn yet: leave it out".into());
     }
+    if m.motion.is_some() {
+        return Some(
+            "[motion] needs a later Horizon: this one checks the motion guide but doesn't draw it"
+                .into(),
+        );
+    }
     if m.computes() {
         return Some(
             "[[resource]] and compute [[post]] entries need a later Horizon: \
@@ -371,6 +377,8 @@ mod tests {
             );
             let why = not_drawn(&manifest("0.2", "[entity]\nfile = \"e.wgsl\"\n"), switch);
             assert!(why.unwrap().contains("[entity] stage isn't drawn yet"));
+            let why = not_drawn(&manifest("0.2", "[motion]\n"), switch).unwrap();
+            assert!(why.contains("[motion] needs a later Horizon"), "{why}");
             let kept =
                 "[[resource]]\nname = \"cache\"\nbuffer = 64\nelement = \"u32\"\nkeep = \"view\"\n";
             let why = not_drawn(&manifest("0.2", kept), switch).unwrap();
