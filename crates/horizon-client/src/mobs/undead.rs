@@ -605,6 +605,7 @@ fn convert(m: &mut Mob, kind: &'static str, cx: &mut Cx) {
         from: Box::new(m.clone()),
         kind,
         params: super::conversion::Params::KEEP_ALL,
+        after: super::conversion::After::None,
     });
     m.removed = true;
 }
@@ -1306,7 +1307,9 @@ mod conversion_tests {
             Mob::new(2, Arc::new(types.types[kind].clone()), at, yaw)
         };
         match event {
-            MobEvent::Convert { from, kind, params } => {
+            MobEvent::Convert {
+                from, kind, params, ..
+            } => {
                 let mut m = new(kind, from.position, from.yaw);
                 crate::mobs::conversion::single(from, &mut m, *params);
                 Some(m)
@@ -1443,7 +1446,7 @@ mod creative_target_tests {
             let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
             m.ai.target = Some(Who::Player);
             m.extra.anger = 300;
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             for _ in 0..40 {
                 let mut events = Vec::new();
                 m.tick(&w, &mut lr, &mut events);
@@ -1669,7 +1672,7 @@ mod wither_arrow_tests {
             let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
             m.extra.anger = 300;
             m.extra.angry_at = Some(Who::Mob(99));
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             for _ in 0..40 {
                 let mut events = Vec::new();
                 m.tick(&w, &mut lr, &mut events);

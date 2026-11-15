@@ -623,7 +623,7 @@ impl Mob {
         if let Some(v) = self.ai.seen_cache.iter().find(|(k, _)| *k == who) {
             return v.1;
         }
-        let Some(t) = w.target_info(who) else {
+        let Some(t) = w.target_info(who).filter(|_| !super::ravager::blind(self)) else {
             return false;
         };
         let eye = Vec3::new(self.position.x, self.eye_y(), self.position.z);
@@ -2155,8 +2155,8 @@ impl Goal for Breed {
         if tamable && !m.extra.tame {
             return false;
         }
-        // AbstractHorse.canMate is false and Mule keeps it: mules never breed.
-        if species == Species::Mule {
+        // Mule keeps AbstractHorse.canMate; CamelHusk.canMate and canFallInLove are false.
+        if matches!(species, Species::Mule | Species::CamelHusk) {
             return false;
         }
         // TurtleBreedGoal.canUse: not while carrying an egg.
@@ -2934,7 +2934,7 @@ mod eat_block_tests {
         with_built_test_world_rules(&[], griefing, true, build, |w, types| {
             let kind = Arc::new(types.types["minecraft:sheep"].clone());
             let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            let mut random = LegacyRandom::new(0);
+            let mut random = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             for _ in 0..6000 {
                 crate::mobs::ai::tick(&mut m, w, &mut random, &mut events);

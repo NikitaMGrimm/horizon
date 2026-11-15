@@ -11,7 +11,7 @@ use super::{
     },
 };
 use horizon_core::geometry::{Vec3, trig::Mth};
-use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_core::random::{LegacyRandom, LevelRandom, RandomSource};
 use std::f32::consts::PI;
 
 /// `PiglinAi.ADMIRE_DURATION`.
@@ -24,6 +24,17 @@ const CONVERSION: i32 = 300;
 /// `PiglinAi.CELEBRATION_TIME`: how long the `CELEBRATE_LOCATION` and
 /// `DANCING` memories last.
 const CELEBRATION: i32 = 300;
+
+/// `ZombifiedPiglin.populateDefaultEquipmentSlots`: a golden sword, or one
+/// time in 20 a golden spear, off `random` (`Pig.thunderHit` passes the pig's
+/// own, `this.getRandom()`).
+pub fn default_equipment(random: &mut impl RandomSource) -> &'static str {
+    if random.next_int_bound(20).unwrap_or(1) == 0 {
+        "minecraft:golden_spear"
+    } else {
+        "minecraft:golden_sword"
+    }
+}
 
 /// `Piglin.holdInOffHand`: equip the item being admired, dropped when the
 /// piglin is killed; anything but the barter item keeps the piglin from
@@ -1872,7 +1883,7 @@ pub fn client_converting(m: &mut Mob, nether: bool) {
 pub fn ai_step(
     m: &mut Mob,
     w: &MobWorld,
-    level_random: &mut LegacyRandom,
+    level_random: &mut LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     if m.extra.anim_ticks > 0 {
@@ -1970,11 +1981,12 @@ pub fn ai_step(
             }
             // `Hoglin.finishConversion` is `ConversionParams.single(this, true,
             // false)`, `AbstractPiglin.finishConversion` `(this, true, true)`;
-            // both leave the new mob nauseous (the game adds it).
+            // both leave the new mob nauseous.
             events.push(MobEvent::Convert {
                 from: Box::new(m.clone()),
                 kind,
                 params,
+                after: super::conversion::After::Nausea,
             });
             m.removed = true;
         }
@@ -2455,6 +2467,7 @@ mod hurt_broadcast_tests {
 mod crossbow_tests {
     use super::*;
     use crate::mobs::sensor_scan_tests::kind;
+    use crate::mobs::world::level_random;
     use horizon_core::geometry::Vec3;
     use std::sync::Arc;
 
@@ -2498,7 +2511,7 @@ mod crossbow_tests {
             &mut m,
             &death,
             &mut RandomSequences::default(),
-            &mut LegacyRandom::new(7),
+            &mut level_random(7),
         );
         assert!(
             drops.iter().any(
@@ -2571,7 +2584,7 @@ mod crossbow_tests {
 #[cfg(test)]
 mod conversion_tests {
     use super::*;
-    use crate::mobs::world::with_test_world;
+    use crate::mobs::world::{level_random, with_test_world};
 
     #[test]
     fn converting_piglin_drops_its_inventory_before_conversion() {
@@ -2602,7 +2615,7 @@ mod conversion_tests {
             m.extra.using_item = 60;
             m.extra.counter2 = CONVERSION + 1;
             let mut events = Vec::new();
-            ai_step(&mut m, w, &mut LegacyRandom::new(0), &mut events);
+            ai_step(&mut m, w, &mut level_random(0), &mut events);
             let relevant: Vec<_> = events
                 .iter()
                 .filter(|e| {
@@ -2617,6 +2630,16 @@ mod conversion_tests {
             assert!(
                 matches!(relevant.as_slice(), [MobEvent::DropItem { .. }, MobEvent::DropStack { stack: a, at: p, .. }, MobEvent::DropStack { stack: b, .. }, MobEvent::Convert { from, .. }] if *a == stacks[0] && *b == stacks[1] && *p == at && from.extra.inventory.is_empty())
             );
+            // `AbstractPiglin.finishConversion` leaves the new mob nauseous:
+            // the step rides on the event, not on the new mob's type.
+            let after = relevant
+                .iter()
+                .find_map(|e| match e {
+                    MobEvent::Convert { after, .. } => Some(*after),
+                    _ => None,
+                })
+                .expect("the piglin converts");
+            assert_eq!(after, super::super::conversion::After::Nausea);
             assert!(m.extra.inventory.is_empty());
         });
         // Without the vanilla data there is nothing to check.
@@ -2638,7 +2661,7 @@ mod conversion_tests {
             m.extra.off_hand = Some("minecraft:gold_ingot".into());
             m.extra.using_item = 60;
             m.extra.counter2 = CONVERSION + 1;
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = level_random(0);
             let mut events = Vec::new();
             ai_step(&mut m, w, &mut lr, &mut events);
             assert!(
