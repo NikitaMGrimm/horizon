@@ -567,9 +567,7 @@ impl super::super::native_pack::NativePack {
     /// The pack's `[[before_world]]` passes (`NativePost::before_world`), in `encoder` after its
     /// shadow passes, which they read, and before the world draws.
     pub fn before_world(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
-        if let Some(post) = &mut self.post {
-            post.before_world(device, encoder);
-        }
+        self.post.before_world(device, encoder);
     }
 }
 
