@@ -875,7 +875,7 @@ fn a_material_stage_that_doesn_t_trace_is_built_as_before() {
     let composed = horizon_shader_api::compose(&pack, StageKind::Material, "material.wgsl");
     assert_eq!(
         horizon_shader_api::package::sha256_hex(composed.text.as_bytes()),
-        "074077b43e296353e4caeabcbb7680da839b4a7f4d83bfe0384462c7596eab1b"
+        "a8df6b5822f7cb911604859061d438ea45924677ff146376e249e7f2e38768d3"
     );
     // Without the key `trace` is the pack's own name, in the material stage too.
     let own = "fn trace(c: vec4<f32>) -> vec4<f32> { return c; }\n\
@@ -944,4 +944,60 @@ fn a_ray_from_a_vertex_shader_is_refused() {
     let plain = "fn vertex(input: VertexInput) -> vec3<f32> { return input.position; }\n";
     let keys = format!("{keys}[displacement]\n");
     traced_material(&both, &keys, &[("vertex.wgsl", plain)]).unwrap();
+}
+
+/// A 0.2 material pack: `[material]` with `keys`, its `material.wgsl` and a shared `helpers.wgsl`.
+fn coverage_pack(
+    keys: &str,
+    material: &str,
+    helpers: &str,
+) -> Result<horizon_shader_api::Report, Vec<Problem>> {
+    let manifest = format!(
+        "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+         shared = [\"helpers.wgsl\"]\n[material]\nfile = \"material.wgsl\"\n{keys}"
+    );
+    let files = [
+        (MANIFEST, manifest.as_str()),
+        ("helpers.wgsl", helpers),
+        ("material.wgsl", material),
+    ]
+    .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+    .into();
+    check(&Pack::from_files(files).unwrap())
+}
+
+#[test]
+fn a_discard_reachable_from_material_needs_pack_coverage() {
+    let direct = "fn material(input: MaterialInput) -> Surface {\n    \
+                  if input.albedo.a < 0.3 {\n        discard;\n    }\n    \
+                  return Surface(input.albedo);\n}\n";
+    // Through a shared helper, two calls deep, inside a loop.
+    let helpers = "fn cut(a: f32) {\n    for (var i = 0; i < 2; i++) {\n        \
+                   if a < 0.3 {\n            discard;\n        }\n    }\n}\n\
+                   fn holes(a: f32) -> f32 {\n    cut(a);\n    return a;\n}\n";
+    let through = "fn material(input: MaterialInput) -> Surface {\n    \
+                   return Surface(vec4(input.albedo.rgb, holes(input.albedo.a)));\n}\n";
+    let refused = |keys: &str, material: &str, helpers: &str| {
+        let p = coverage_pack(keys, material, helpers).expect_err("should fail");
+        let p: Vec<_> = p
+            .into_iter()
+            .filter(|p| p.message.contains("`discard` reachable from `material`"))
+            .collect();
+        assert_eq!(p.len(), 1, "{p:#?}");
+        assert!(p[0].message.contains("coverage = \"pack\""), "{p:#?}");
+        (p[0].file.clone(), p[0].line)
+    };
+    let none = "fn unused() {}\n";
+    assert_eq!(refused("", direct, none), ("material.wgsl".into(), 3));
+    assert_eq!(refused("", through, helpers), ("helpers.wgsl".into(), 4));
+    let engine = "coverage = \"engine\"\n";
+    assert_eq!(
+        refused(engine, through, helpers),
+        ("helpers.wgsl".into(), 4)
+    );
+    let own = "coverage = \"pack\"\n";
+    coverage_pack(own, direct, none).unwrap();
+    coverage_pack(own, through, helpers).unwrap();
+    // A helper with a discard that `material` never calls cuts no hole.
+    coverage_pack("", MATERIAL, helpers).unwrap();
 }
