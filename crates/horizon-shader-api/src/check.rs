@@ -280,7 +280,19 @@ fn check_entry(
     if kind == StageKind::Material {
         own.text += crate::stages::PBR_STUB;
     }
-    let module = parse(&own).map_err(|p| undeclared(p, &pack.manifest, kind))?;
+    let module = parse(&own).map_err(|mut problems| {
+        // A motion guide name the pack didn't ask for: say how to ask.
+        let names = ["`scene_motion`", "`motion_at`", "`MotionData`", "`MOTION_"];
+        for p in problems
+            .iter_mut()
+            .filter(|_| pack.manifest.motion.is_none())
+        {
+            if kind == StageKind::Post && names.iter().any(|n| p.message.contains(n)) {
+                p.message += "; the motion guide's names need `[motion]` in the manifest";
+            }
+        }
+        undeclared(problems, &pack.manifest, kind)
+    })?;
     own.text.truncate(entries.1.start);
     let mut problems = signature(&module, kind, file);
     if kind == StageKind::Material && pack.manifest.displacement.is_some() {
@@ -747,6 +759,7 @@ fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
             COMPUTE_INPUT.name,
             "SurfaceData",
             RAY_HIT.name,
+            "MotionData",
         ])
         .collect();
     let arenas = module

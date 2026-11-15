@@ -163,6 +163,9 @@ pub struct Manifest {
     /// 0.2: the scene the post and material stages' `trace` reads, if the pack asks for it;
     /// needs `[[post]]` or `[material]`.
     pub ray_tracing: Option<RayTracing>,
+    /// 0.2: the motion guide the post stage's `motion_at` reads, if the pack asks for it;
+    /// needs `[[post]]`.
+    pub motion: Option<Motion>,
     /// 0.2: kept resources and compute passes. Checked, not yet run.
     pub kept: crate::kept::Kept,
 }
@@ -174,6 +177,12 @@ pub struct Manifest {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RayTracing {}
+
+/// `[motion]` (0.2): the pack's post passes get `scene_motion`, `motion_at`, `MotionData` and
+/// the `MOTION_` kinds, how each pixel's surface moved since last frame. No keys yet.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Motion {}
 
 /// `[displacement]`: within `distance` of the camera, the faces of solid terrain whose
 /// resource pack textures have LabPBR heights are drawn as a grid of `cells` by `cells`, each
@@ -569,6 +578,7 @@ struct Raw {
     shadow: Option<Shadow>,
     displacement: Option<RawDisplacement>,
     ray_tracing: Option<RayTracing>,
+    motion: Option<Motion>,
     kept: Option<crate::kept::RawKept>,
     #[serde(default)]
     resource: Vec<crate::kept::RawResource>,
@@ -607,8 +617,9 @@ struct RawBudget {
 }
 
 /// Whether `name` is taken from a pack's own WGSL names: by the post prelude's resources or, under
-/// `[ray_tracing]`, by its functions, or as a word WGSL reserves.
-pub(crate) fn taken(name: &str, ray_tracing: bool) -> bool {
+/// `[ray_tracing]`, by its functions, or, under `[motion]`, by the motion guide's `scene_motion`
+/// and `motion_at`, or as a word WGSL reserves.
+pub(crate) fn taken(name: &str, ray_tracing: bool, motion: bool) -> bool {
     // The post prelude's functions `[ray_tracing]` brings.
     let traced = [
         "trace",
@@ -621,6 +632,7 @@ pub(crate) fn taken(name: &str, ray_tracing: bool) -> bool {
         "hit_specular_map",
         "block_pbr_maps",
     ];
+    let guide = ["scene_motion", "motion_at"];
     let reserved = [
         "frame",
         "scene_color",
@@ -637,6 +649,7 @@ pub(crate) fn taken(name: &str, ray_tracing: bool) -> bool {
     ];
     reserved.contains(&name)
         || (ray_tracing && traced.contains(&name))
+        || (motion && guide.contains(&name))
         || naga::keywords::wgsl::RESERVED.contains(&name)
 }
 
@@ -653,12 +666,13 @@ pub(crate) fn target_name(name: &str) -> bool {
 
 /// `[[post]] scale` and `output`: scales from `POST_SCALES`, below 1 only with an output,
 /// the last pass drawing the picture itself, outputs named as WGSL names no other resource
-/// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'), each at one scale,
-/// `MAX_POST_TARGETS` at most with the R-relative kept textures, two each. An output naming a
+/// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'; under `[motion]`, nor the
+/// guide's `scene_motion` and `motion_at`), each at one scale, `MAX_POST_TARGETS` at most with the R-relative kept textures, two each. An output naming a
 /// kept texture writes it (`kept::kept_targets`).
 fn check_post_targets(
     post: &[Stage],
     ray_tracing: bool,
+    motion: bool,
     kept: &[crate::kept::Resource],
 ) -> Result<(), String> {
     let kept_targets = crate::kept::kept_targets(post, kept)?;
@@ -686,7 +700,7 @@ fn check_post_targets(
         if kept.iter().any(|r| r.name == *name) {
             continue;
         }
-        if !target_name(name) || taken(name, ray_tracing) {
+        if !target_name(name) || taken(name, ray_tracing, motion) {
             return Err(format!(
                 "{}: output {name:?} is not a free WGSL name ([a-z][a-z0-9_]*, at most 32)",
                 p.file
@@ -738,6 +752,11 @@ impl Manifest {
                 (raw.entity.is_some(), "[entity]"),
                 (raw.frame.is_some(), "[frame]"),
                 (raw.ray_tracing.is_some(), "[ray_tracing]"),
+                (raw.motion.is_some(), "[motion]"),
+                (
+                    raw.material.as_ref().is_some_and(|m| m.coverage.is_some()),
+                    "[material] coverage",
+                ),
                 (raw.kept.is_some(), "[kept]"),
                 (!raw.resource.is_empty(), "[[resource]]"),
                 (!raw.before_world.is_empty(), "[[before_world]]"),
@@ -745,10 +764,6 @@ impl Manifest {
                 (
                     raw.options.iter().any(|o| o.resets.is_some()),
                     "an option's `resets`",
-                ),
-                (
-                    raw.material.as_ref().is_some_and(|m| m.coverage.is_some()),
-                    "[material] coverage",
                 ),
             ] {
                 if present {
@@ -878,20 +893,27 @@ impl Manifest {
             .filter_map(|o| Some((o.id.clone(), o.resets.clone()?)))
             .collect();
         let traced = raw.ray_tracing.is_some();
+        let moving = raw.motion.is_some();
         let kept = crate::kept::check(
             raw.kept,
             raw.resource,
             raw.before_world,
             &raw.post,
             traced,
+            moving,
             resets,
         )
         .map_err(err)?;
-        check_post_targets(&raw.post, traced, &kept.resources).map_err(err)?;
+        check_post_targets(&raw.post, traced, moving, &kept.resources).map_err(err)?;
         if raw.ray_tracing.is_some() && raw.post.is_empty() && raw.material.is_none() {
             return Err(err(
                 "[ray_tracing] needs a [[post]] pass or a [material] stage: `trace` is theirs"
                     .into(),
+            ));
+        }
+        if raw.motion.is_some() && raw.post.is_empty() {
+            return Err(err(
+                "[motion] needs a [[post]] pass: the motion guide is the post stage's".into(),
             ));
         }
         let passes = raw.post.iter().filter(|p| !p.compute).count();
@@ -1261,6 +1283,7 @@ impl Manifest {
             shadow: raw.shadow,
             displacement,
             ray_tracing: raw.ray_tracing,
+            motion: raw.motion,
             kept,
         })
     }
