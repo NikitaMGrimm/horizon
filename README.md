@@ -45,7 +45,6 @@
 
 - **Your own copy of Minecraft: Java Edition.** Horizon ships no Minecraft files. It builds them from the game you bought, so install version 26.3 and start it once.
 - **Windows, macOS or Linux:** Windows on x64 or ARM64, macOS 12 or later, Linux on x86-64.
-- **Mods made for Horizon:** Forge, NeoForge, Fabric and Quilt mods do not run in it.
 
 <h2 align="center">Made by the Horizon Team</h2>
 
