@@ -575,7 +575,7 @@ impl Game<'_> {
             _ => 0,
         }
     }
-    /// `ArmorStand.interactAt` for the stand under the crosshair, or for the
+    /// `ArmorStand.interact` for the stand under the crosshair, or for the
     /// stand a guest's interact packet named (its client's click point).
     pub(super) fn interact_armor_stand(&mut self, target: Option<InteractTarget>) -> bool {
         let Some((i, d, point)) = (match target {
@@ -632,7 +632,7 @@ impl Game<'_> {
         let slot = match &held {
             Some(h) => {
                 let slot = self.equipment_slot(h);
-                // ArmorStand.interactAt: a disabled slot, or a hand without
+                // ArmorStand.interact: a disabled slot, or a hand without
                 // arms, is FAIL.
                 if a.is_disabled(slot) {
                     return true;
@@ -1316,7 +1316,7 @@ impl Game<'_> {
             .raw
             .get(&id)
             .is_some_and(|tag| horizon_client::entity_nbt::flag(tag, "Invulnerable"));
-        // Entity.isInvulnerableTo: the flag, then EnchantmentHelper.isImmuneToDamage.
+        // Entity.isInvulnerableToBase: the flag, then EnchantmentHelper.isImmuneToDamage.
         let a = &self.armor_stands[i];
         if (invulnerable && !creative)
             || a.invisible
@@ -1487,7 +1487,7 @@ impl Game<'_> {
             let dragon = a.equipment[5]
                 .as_ref()
                 .is_some_and(|i| &*i.item == "minecraft:dragon_head");
-            if !self.standing_entity_in_view(
+            let Some(sight) = self.standing_entity_sight(
                 camera,
                 super::entity_culling::at(a.previous),
                 super::entity_culling::at(a.position),
@@ -1496,10 +1496,10 @@ impl Game<'_> {
                 height,
                 range,
                 if dragon { 0.5 } else { 0.0 },
-            ) {
+            ) else {
                 continue;
-            }
-            let culling = self.entity_cull_decision(a, alpha);
+            };
+            let culling = self.sighted_decision(sight, || self.entity_cull_decision(a, alpha));
             if culling.hides_entity() {
                 continue;
             }
@@ -1539,8 +1539,10 @@ impl Game<'_> {
                 self.armor_stand_vertices(a, base, packed, None, out);
                 None
             };
-            if !self.entity_glowing(a.id) {
-                self.cull_skinned(out, entity_start, skinned);
+            if culling.rays_only() {
+                self.ray_only(out, entity_start);
+            } else if !self.entity_glowing(a.id) {
+                self.culled_for_rays(|| self.cull_skinned(out, entity_start, skinned));
             }
         }
     }
