@@ -630,7 +630,7 @@ impl EntityLayer {
                 vertices: self.vertices.as_entire_buffer_binding(),
                 atlas: &self.atlas,
                 sampler: &self.sampler,
-                bases: [0, 0],
+                bases: [0; 3],
             }),
             ..scene.traced()
         }
