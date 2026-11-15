@@ -206,7 +206,11 @@ keeps drawing. What a pack works with:
   drawn. Under `"engine"` solid and cutout terrain keep Horizon's alpha test on the texture's alpha and ignore the
   returned alpha, translucent terrain is cut on the texture's alpha too and takes the returned alpha as its opacity,
   and the check refuses a `discard` reachable from `material`. Under `"pack"` the returned alpha drives the alpha
-  test and the stage may `discard`, as in 0.1.
+  test and the stage may `discard`.
+- **`[entity] coverage`**: the same for the entity stage. Under `"engine"` (the default) an entity keeps Horizon's
+  coverage: the texture's alpha times the layer's opacity is cut below 0.1 and blends, the returned alpha is ignored,
+  and the check refuses a `discard` reachable from `entity`. Under `"pack"` the returned alpha is cut and blends, and
+  the stage may `discard`. Dissolve masks and culling are Horizon's under either.
 
 ```toml
 [tonemap]                  # optional: the pack's own tone curve
@@ -218,6 +222,7 @@ coverage = "engine"        # optional: engine (default) or pack, when the materi
 
 [entity]                   # optional: the colour of entities and block entities (items and particles later)
 file = "entity.wgsl"
+coverage = "engine"        # optional: engine (default) or pack, when the stage cuts or fades entities itself
 
 [frame]
 blend = "gamma"            # optional: gamma (default) or linear
@@ -266,6 +271,11 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-14: API 0.2 (**breaking**, experimental): the entity stage keeps the engine's coverage unless the pack
+  declares it, with `[entity] coverage`, `"engine"` (the default) or `"pack"`. Under `"engine"` the texture's alpha
+  times the layer's opacity is cut and blends, not the returned alpha, and `horizon-shader check` refuses a `discard`
+  that `entity` can reach. An entity stage that cuts or fades entities itself sets `coverage = "pack"`, which keeps
+  the old behaviour.
 - 2026-11-14: API 0.2 (experimental): `RAY_ENTITY` also holds the block entities at rest that the block entity cache
   keeps (on in every graphics preset: closed chests, shulker boxes, bells, decorated pots, banners), in view or not,
   so they cast traced shadows and show in reflections as the mobs do. A hit on one is an entity hit like any other.
@@ -273,6 +283,17 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   the registry refuse a 0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`; the game draws without it.
   [Moving a pack to 0.2](#shader-api-02-experimental) is described above; Golden Hour 2.0.0 is the moved example. The
   0.1 reference is gone, and the templates of `horizon-shader new` are 0.2 packs. API 0.2 is unchanged.
+- 2026-11-15: API 0.2 (additions, experimental): fixed-size kept textures (`[[resource]]` with a `size`) may take
+  32 MiB together, both versions counted, as much as kept buffers; it was 1 MiB, one 256×256 `rgba16float` texture.
+  A camera-centred trail or height map, a light cache or a lookup table can now be a texture rather than a buffer
+  indexed by hand: a 1024×1024 `rgba16float` one takes 16 MiB. The device still refuses a side longer than its
+  largest texture when the pack loads. Every pack the old budget took passes; no WGSL name changes, so every pack
+  builds from the same WGSL as before.
+- 2026-11-15: API 0.2 (additions, experimental): post targets are counted by memory. `[[post]] output`s and
+  R-relative kept textures together may take 6 render-size `rgba16float` textures, an `output` its `scale`² (1, 0.25
+  or 0.0625), an R-relative kept texture 2 as before, with at most 16 `output`s; it was 4 targets, an `output` 1. Two
+  kept histories now leave room for a half- and quarter-size bloom pyramid and a full-size target. Every pack the
+  count of 4 took passes; no WGSL name changes, so every pack builds from the same WGSL as before.
 - 2026-11-14: API 0.2 (additions, experimental): `[motion]`: the post stage of a pack that sets it gets the motion
   guide, `scene_motion` (binding 14), `fn motion_at(texel: vec2<i32>) -> MotionData` and the `MOTION_CAMERA`,
   `MOTION_OBJECT`, `MOTION_NEW` and `MOTION_NO_HISTORY` kinds: how each pixel's surface moved since last frame, for

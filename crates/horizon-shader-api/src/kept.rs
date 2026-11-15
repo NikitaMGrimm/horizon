@@ -12,8 +12,9 @@ pub const MAX_BEFORE_WORLD: usize = 4;
 pub const MAX_COMPUTE_POST: usize = 8;
 /// The bytes of every buffer of a pack together, per view.
 pub const MAX_BUFFER_BYTES: u64 = 32 << 20;
-/// The bytes of every fixed-size kept texture of a pack together, both versions counted.
-pub const MAX_FIXED_TEXTURE_BYTES: u64 = 1 << 20;
+/// The bytes of every fixed-size kept texture of a pack together, both versions counted: as
+/// much as its buffers, so a trail, a cache or a lookup table can be a texture, not a buffer.
+pub const MAX_FIXED_TEXTURE_BYTES: u64 = 32 << 20;
 /// A workgroup's largest size along each axis, and its invocations: wgpu's default limits,
 /// which every device with compute has.
 pub const MAX_WORKGROUP: [u32; 3] = [256, 256, 64];
@@ -597,10 +598,13 @@ pub(crate) fn check(
     })
 }
 
-/// The 4 post targets: an `output` naming a kept texture writes it, at its own size (no
-/// `scale`), never its `_previous` nor an `rgba32uint` one, which only a compute pass writes;
-/// each R-relative kept texture takes two.
-pub(crate) fn kept_targets(post: &[Stage], resources: &[Resource]) -> Result<usize, String> {
+/// The kept textures of the post target budget, by name: an `output` naming a kept texture
+/// writes it, at its own size (no `scale`), never its `_previous` nor an `rgba32uint` one, which
+/// only a compute pass writes; each R-relative kept texture counts.
+pub(crate) fn kept_targets<'a>(
+    post: &[Stage],
+    resources: &'a [Resource],
+) -> Result<Vec<&'a str>, String> {
     for p in post {
         let Some(output) = &p.output else { continue };
         if let Some(r) = resources.iter().find(|r| r.name == *output)
@@ -632,9 +636,9 @@ pub(crate) fn kept_targets(post: &[Stage], resources: &[Resource]) -> Result<usi
             ));
         }
     }
-    let scaled = resources
+    Ok(resources
         .iter()
         .filter(|r| matches!(r.shape, Shape::Scaled { .. }))
-        .count();
-    Ok(2 * scaled)
+        .map(|r| r.name.as_str())
+        .collect())
 }
