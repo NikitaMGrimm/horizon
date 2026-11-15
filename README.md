@@ -1,12 +1,8 @@
-<p align="center">
-  <img src="docs/media/icon-256.png" alt="" width="96">
-</p>
-
-<h1 align="center">Horizon</h1>
+<h1 align="center"><img src="docs/media/icon-256.png" alt="" width="40" align="absmiddle">&nbsp;Horizon</h1>
 
 <p align="center">
   Minecraft: Java Edition 26.3, rewritten from scratch in Rust.<br>
-  A new game program, not a mod: it opens your worlds, generates the same terrain and plays by the same rules.
+  It opens your worlds, generates the same terrain and plays by the same rules, without Java.
 </p>
 
 <p align="center">
@@ -24,31 +20,26 @@
   <img src="docs/media/readme/hero-lookout.webp" alt="A player's view from a wooden lookout over a village: a friend in diamond armour sneaks at the edge while a creeper flashes white behind her, another friend rides a horse between the houses below, and forest, snowy peaks and the sea run to the horizon" width="100%">
 </p>
 
-<table align="center">
-  <tr>
-    <td align="center"><b>3.5×</b><br><sub>faster start</sub></td>
-    <td align="center"><b>up to +38 %</b><br><sub>frames per second</sub></td>
-    <td align="center"><b>1,024 chunks</b><br><sub>of far terrain</sub></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="docs/media/readme/signs.webp" alt="Three wooden signs: 3.5x faster start than modded Java, 38 percent more FPS than Java with Sodium, and a mod API to port your mods to Rust" width="100%">
+</p>
 
 <p align="center">
-  <sub>Start and frame rate against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast, on a Ryzen 7 9800X3D with an RTX 5080. Other computers are on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
+  <sub>Against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast on a Ryzen 7 9800X3D with an RTX 5080: the title screen in about 3 seconds instead of 11, and 31 to 38 percent more frames per second. Other computers are on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
 </p>
 
 ## What you get
 
-- **The game you know.** Survival, creative and hardcore in every dimension, with vanilla's terrain, mobs, villagers and redstone. Your saves open as they are.
-- **Far terrain.** The world stays in view far past the render distance.
-- **Friends.** Join vanilla and Horizon servers, open your world to LAN, or send a friend an invite code. The server runs without Java.
-- **Mods.** Horizon has its own mod system, with zoom, a minimap and shader packs in the [catalogue](https://playhorizon.dev/mods). You can [make your own](https://playhorizon.dev/docs/make-a-mod).
-- **HDR and controllers.** Both are in the settings, with no mod to install.
+- **Vanilla Minecraft:** survival, creative and hardcore in every dimension, with the same terrain, mobs, villagers and redstone. Your saves open as they are.
+- **Multiplayer:** vanilla and Horizon servers, LAN, and invite codes for playing your world with friends. You can [host a server](https://playhorizon.dev/docs/hosting) too.
+- **Mods:** Horizon's own mod system, with mods like zoom and a minimap, and shader packs. Browse the [catalogue](https://playhorizon.dev/mods) or [make a mod](https://playhorizon.dev/docs/make-a-mod).
+- **Beyond vanilla:** terrain up to 1,024 chunks away, HDR, controller support, graphics presets and dynamic lights.
 
 ## What you need
 
-- A Microsoft account that owns Minecraft: Java Edition, and version 26.3 started once. Horizon builds its files from your copy and contains no Minecraft code or assets.
-- Windows (x64 or ARM64), macOS 12 or later, or Linux (x86-64).
-- Mods made for Horizon. Forge, NeoForge, Fabric and Quilt mods do not run in it.
+- **Your own copy of Minecraft: Java Edition.** Horizon ships no Minecraft files. It builds them from the game you bought, so install version 26.3 and start it once.
+- **Windows, macOS or Linux:** Windows on x64 or ARM64, macOS 12 or later, Linux on x86-64.
+- **Mods made for Horizon:** Forge, NeoForge, Fabric and Quilt mods do not run in it.
 
 ## Build and contribute
 
@@ -56,23 +47,18 @@ Horizon is built in the open, and pull requests are welcome: [build guide](docs/
 
 <h2 align="center">Made by the Horizon Team</h2>
 
-<p align="center">
-  <a href="https://github.com/kacpherek"><img src="https://github.com/kacpherek.png?size=160" width="13%" alt="Kacper"></a>
-  <a href="https://github.com/Online5277"><img src="https://github.com/Online5277.png?size=160" width="13%" alt="Cosmic"></a>
-  <a href="https://github.com/levzzz5154"><img src="https://github.com/levzzz5154.png?size=160" width="13%" alt="levzzz"></a>
-  <a href="https://github.com/rdbtCVS"><img src="https://github.com/rdbtCVS.png?size=160" width="13%" alt="rdbt"></a>
-  <a href="https://github.com/dezer-x"><img src="https://github.com/dezer-x.png?size=160" width="13%" alt="Anthony S"></a>
-  <a href="https://github.com/ludovic111"><img src="https://github.com/ludovic111.png?size=160" width="13%" alt="Ludovic Marie"></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/kacpherek"><b>Kacper</b></a> ·
-  <a href="https://github.com/Online5277"><b>Cosmic</b></a> ·
-  <a href="https://github.com/levzzz5154"><b>levzzz</b></a> ·
-  <a href="https://github.com/rdbtCVS"><b>rdbt</b></a> ·
-  <a href="https://github.com/dezer-x"><b>Anthony S</b></a> ·
-  <a href="https://github.com/ludovic111"><b>Ludovic Marie</b></a>, founder
-</p>
+<table align="center">
+  <tr>
+    <td align="center" width="90"><a href="https://github.com/kacpherek"><img src="https://github.com/kacpherek.png?size=160" width="72" alt="Kacper"><br><b>Kacper</b></a></td>
+    <td align="center" width="90"><a href="https://github.com/Online5277"><img src="https://github.com/Online5277.png?size=160" width="72" alt="Cosmic"><br><b>Cosmic</b></a></td>
+    <td align="center" width="90"><a href="https://github.com/levzzz5154"><img src="https://github.com/levzzz5154.png?size=160" width="72" alt="levzzz"><br><b>levzzz</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="90"><a href="https://github.com/rdbtCVS"><img src="https://github.com/rdbtCVS.png?size=160" width="72" alt="rdbt"><br><b>rdbt</b></a></td>
+    <td align="center" width="90"><a href="https://github.com/dezer-x"><img src="https://github.com/dezer-x.png?size=160" width="72" alt="Anthony S"><br><b>Anthony S</b></a></td>
+    <td align="center" width="90"><a href="https://github.com/ludovic111"><img src="https://github.com/ludovic111.png?size=160" width="72" alt="Ludovic Marie"><br><b>Ludovic Marie</b></a><br><sub>Founder</sub></td>
+  </tr>
+</table>
 
 <p align="center">
   <sub>and everyone who has contributed</sub><br><br>
