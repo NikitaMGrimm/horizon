@@ -131,11 +131,11 @@ fn every_0_2_stage_compiles_under_ray_tracing() {
 const PINNED_TRACED_MATERIAL: [(Tracing, &str); 2] = [
     (
         Tracing::Stub,
-        "817e028296f2e7b9d66a58dcfcc79ad133b9510869141f2cc952756685e4dce5",
+        "ed31d1755a1383dc0d6e1dfc70d9d3831180f4baf4094cd3e2ad7c7407651311",
     ),
     (
         Tracing::Scene,
-        "4ae18c72f7dd9a0b2809d5f16793a457780f3e12eca3687f15df5250ae265221",
+        "9ec02b2d7ad21f591dbbbb5facdf0b802726b9d36bdda0b31d9d87083948f2ff",
     ),
 ];
 

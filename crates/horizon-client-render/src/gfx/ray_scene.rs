@@ -1084,9 +1084,10 @@ mod tests {
         follow(&mut scene, &device, wanted(Switch::Pack, false));
         assert!(scene.is_none());
         follow(&mut scene, &device, wanted(Switch::Pack, true));
-        scene.as_mut().unwrap().mark(A);
+        scene.as_mut().unwrap().mark(A.0);
         follow(&mut scene, &device, wanted(Switch::Pack, true));
-        assert_eq!(scene.as_ref().map(|s| s.dirty.len()), Some(1));
+        // A marked section waits in both layers, the solid one and the translucent one.
+        assert_eq!(scene.as_ref().map(|s| s.dirty.len()), Some(2));
         follow(&mut scene, &device, wanted(Switch::Pack, false));
         assert!(scene.is_none());
         follow(&mut scene, &device, wanted(Switch::Pack, true));
