@@ -4,7 +4,7 @@
 //! (`Struct::wgsl`), and so is the reference (docs/api/shaders-reference-0.2.md).
 
 /// One field of a WGSL struct, for the prelude and the reference.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Field {
     pub name: &'static str,
     pub ty: &'static str,
@@ -219,7 +219,13 @@ uniform! {
         black_level: f32,
         /// The primaries of this pack's colours (`[frame] primaries`): 0 BT.709, 1 BT.2020.
         primaries: u32,
-        @pad luminance_gap: [u32; 2],
+        /// 1 while `trace` and `trace_any` read this frame's scene, else 0 (a GPU without ray
+        /// queries, ray tracing off, no world): every ray then misses. Only a pack with
+        /// `[ray_tracing]` has this field.
+        has_ray_tracing: u32,
+        /// How far from the camera along x and along z, in blocks, the scene is sure to reach;
+        /// 0 while `has_ray_tracing` is 0. Only a pack with `[ray_tracing]` has this field.
+        ray_distance: f32,
         /// The weights that give a colour's luminance in those primaries, `dot(c, frame.luminance)`:
         /// (0.2126, 0.7152, 0.0722) for BT.709, (0.2627, 0.6780, 0.0593) for BT.2020.
         luminance: [f32; 3],
@@ -229,7 +235,59 @@ uniform! {
         /// `lightmap` holds, so a pack that lets a light source shine whatever light falls on
         /// it scales its shading up to this, and the light source dims with the rest of the world.
         full_light: [f32; 3],
-        @pad padding: u32,
+        /// Changes when the pack's `keep = "view"` resources are cleared, to zeros (`reset_reasons`
+        /// says why), and is never 0. Only a pack with `[[resource]]` has this field.
+        view_epoch: u32,
+        /// The same for its `keep = "world"` resources. `view_epoch` changes with it: what
+        /// clears the world's clears the view's too. Only a pack with `[[resource]]` has this field.
+        world_epoch: u32,
+        /// Why an epoch changed this frame: the prelude's `REASON_*` bits ("Kept resources"); 0
+        /// when neither did. Only a pack with `[[resource]]` has this field.
+        reset_reasons: u32,
+        @pad padding: [u32; 2],
+    }
+}
+
+impl Frame {
+    /// Where `has_ray_tracing` and `ray_distance` are among the fields: in what was a gap of
+    /// the layout before `luminance`, so no other field moves with or without them.
+    pub const RAY_FIELDS: std::ops::Range<usize> = 55..57;
+
+    /// Where `view_epoch`, `world_epoch` and `reset_reasons` are among the fields: the last,
+    /// so a pack without `[[resource]]` declares a prefix and no other field moves.
+    pub const KEPT_FIELDS: std::ops::Range<usize> = 59..62;
+
+    /// The fields without `RAY_FIELDS`: what a pack without `[ray_tracing]` declares, less
+    /// `KEPT_FIELDS` without `[[resource]]`.
+    const UNTRACED: [Field; 60] = {
+        let all = Self::WGSL.fields;
+        let mut out = [all[0]; 60];
+        let (mut from, mut to) = (0, 0);
+        while from < all.len() {
+            if from < Self::RAY_FIELDS.start || from >= Self::RAY_FIELDS.end {
+                out[to] = all[from];
+                to += 1;
+            }
+            from += 1;
+        }
+        out
+    };
+
+    /// `Frame` as the prelude declares it, for a pack that asks for the scene
+    /// (`[ray_tracing]`) or not, and that keeps resources (`[[resource]]`) or not.
+    pub fn declared(ray_tracing: bool, kept: bool) -> Struct {
+        let fields: &'static [Field] = match ray_tracing {
+            false => &Self::UNTRACED,
+            true => Self::WGSL.fields,
+        };
+        let fields = match kept {
+            false => &fields[..fields.len() - Self::KEPT_FIELDS.len()],
+            true => fields,
+        };
+        Struct {
+            fields,
+            ..Self::WGSL
+        }
     }
 }
 
@@ -248,6 +306,18 @@ pub const POST_INPUT: Struct = Struct {
         pixel: "vec2<f32>" = "The pixel's centre, in pixels from the top left of what the pass draws (the world's size; the window's for the last pass).",
         color: "vec4<f32>" = "The previous pass's colour here (the world's picture for the first pass).",
         depth: "f32" = "The world's depth here, reversed: 0 is the sky.",
+    },
+};
+
+/// A compute pass's input: one invocation of its dispatch.
+pub const COMPUTE_INPUT: Struct = Struct {
+    name: "ComputeInput",
+    doc: "One invocation of a dispatch, for `fn compute(input: ComputeInput)`.",
+    fields: fields! {
+        cell: "vec3<u32>" = "The invocation's cell: where it is in the whole dispatch.",
+        local: "u32" = "Its index in its workgroup, from 0 to the workgroup's invocations less 1.",
+        size: "vec3<u32>" = "The dispatch's cells: its `dispatch`, or the render size and 1 for `\"pixels\"`.",
+        in_bounds: "bool" = "Whether `cell` is within `size`. Every invocation of every workgroup runs: one beyond `size` touches no resource, but still reaches every `workgroupBarrier()`.",
     },
 };
 
@@ -282,9 +352,10 @@ pub const MATERIAL_INPUT: Struct = Struct {
 pub const SURFACE: Struct = Struct {
     name: "Surface",
     doc: "What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; \
-          Horizon then applies the alpha test (cutout and translucent) and fog.",
+          Horizon then applies the alpha test (cutout and translucent; on the texture's alpha \
+          unless `[material] coverage = \"pack\"`) and fog.",
     fields: fields! {
-        color: "vec4<f32>" = "The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter than white); alpha its coverage.",
+        color: "vec4<f32>" = "The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter than white); alpha translucent terrain's opacity, and what the alpha test reads under `[material] coverage = \"pack\"`.",
     },
 };
 
@@ -363,6 +434,28 @@ pub const WEATHER_INPUT: Struct = Struct {
     },
 };
 
+/// What `trace` and `trace_layers` return (`[ray_tracing]`): the nearest surface along a ray.
+pub const RAY_HIT: Struct = Struct {
+    name: "RayHit",
+    doc: "The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss `distance` is negative and every other field is 0 (`translucent` false).",
+    fields: fields! {
+        distance: "f32" = "How far along the ray the surface is, in blocks; negative on a miss.",
+        position: "vec3<f32>" = "The point, camera-relative, in blocks (as `view_position`).",
+        normal: "vec3<f32>" = "The face's normal, a unit vector in world axes, turned toward the ray's origin.",
+        uv: "vec2<f32>" = "The texture coordinate inside the block's sprite (as `MaterialInput.uv`).",
+        albedo: "vec4<f32>" = "The block texture's colour at the point, at full size (mip level 0), linear light; alpha the texture's.",
+        tint: "vec4<f32>" = "The vertex colour: biome tint, face shade and ambient occlusion, linear light; alpha 1.",
+        light: "vec2<f32>" = "Block and sky light, 0..1, smoothed over the face.",
+        material: "u32" = "The `[[materials]]` id of the surface's sprite (0 when no entry names it).",
+        tags: "u32" = "The pack's sprite tags the surface's sprite has: bit i for the manifest's i-th `[[tags]]`.",
+        emission: "f32" = "How strongly the block itself shines, 0..1, by its kind of light: a redstone torch or a candle 7/15, a torch or lava 14/15, glowstone 1; 0 for most blocks (as `MaterialInput.emission`).",
+        fluid: "u32" = "0 not a fluid, 1 water, 2 lava (as `MaterialInput.fluid`). Water is in the `RAY_TRANSLUCENT` layer, lava in `RAY_SOLID`.",
+        translucent: "bool" = "A surface of the translucent pass (water, stained glass, ice), as `MaterialInput.translucent`: a hit in the `RAY_TRANSLUCENT` layer, so false for every hit of `trace`.",
+        tangent: "vec4<f32>" = "The surface's tangent, as `MaterialInput.tangent`: xyz the unit direction in world axes along which `uv.x` grows, w the sign (1 or -1) that makes `cross(normal, tangent.xyz) * tangent.w` the direction `uv.y` grows along (down the texture). It follows `normal`, which faces the ray's origin. With `normal` it turns `hit_normal_map`'s normals into world axes.",
+        horizon_sprite: "u32" = "Horizon's own: where the hit's sprite is kept, for `hit_normal_map` and `hit_specular_map`. Not for packs to read; it changes with the renderer.",
+    },
+};
+
 /// The tonemap stage's input: one pixel of the window.
 pub const TONEMAP_INPUT: Struct = Struct {
     name: "TonemapInput",
@@ -381,15 +474,35 @@ mod tests {
     #[test]
     fn frame_fields_carry_their_docs() {
         let wgsl = Frame::WGSL;
-        assert_eq!(wgsl.fields.len(), 57);
+        assert_eq!(wgsl.fields.len(), 62);
         assert!(wgsl.fields.iter().all(|f| !f.doc.trim().is_empty()));
-        // `luminance` and `full_light`, the last two, are `vec3`s, each on the next 16 bytes.
+        // `luminance` and `full_light` are `vec3`s, each on the next 16 bytes, the epochs after
+        // them to the end of the next 16.
+        let size = std::mem::size_of::<Frame>();
+        assert_eq!(size, 6 * 64 + 15 * 16 + 8 * 16 + 5 * 16);
         assert_eq!(
-            std::mem::size_of::<Frame>(),
-            6 * 64 + 15 * 16 + 8 * 16 + 4 * 16
+            Frame::OFFSETS[57..],
+            [size - 48, size - 32, size - 20, size - 16, size - 12]
         );
-        assert_eq!(Frame::OFFSETS[55], std::mem::size_of::<Frame>() - 32);
-        assert_eq!(Frame::OFFSETS[56], std::mem::size_of::<Frame>() - 16);
+        // The scene's two fields are only a `[ray_tracing]` pack's, the epochs only a
+        // `[[resource]]` pack's.
+        let names = |s: Struct| s.fields.iter().map(|f| f.name).collect::<Vec<_>>();
+        let traced = names(Frame::declared(true, false));
+        assert_eq!(
+            traced[Frame::RAY_FIELDS],
+            ["has_ray_tracing", "ray_distance"]
+        );
+        assert_eq!(traced.last(), Some(&"full_light"));
+        let untraced = names(Frame::declared(false, false));
+        assert_eq!(untraced.len(), 57);
+        assert!(!untraced.iter().any(|n| n.contains("ray")));
+        assert_eq!(untraced.last(), Some(&"full_light"));
+        let epochs = ["view_epoch", "world_epoch", "reset_reasons"];
+        for ray_tracing in [false, true] {
+            let kept = names(Frame::declared(ray_tracing, true));
+            assert_eq!(kept[kept.len() - 3..], epochs);
+        }
+        assert_eq!(names(Frame::WGSL)[Frame::KEPT_FIELDS], epochs);
         assert!(
             wgsl.wgsl()
                 .contains("    camera_position: vec3<f32>,\n    time: f32,\n")
