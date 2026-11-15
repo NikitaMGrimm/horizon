@@ -13,6 +13,8 @@
 //! The rest stays on the CPU path. Item models come too ([`SkinJob::item`]):
 //! their quads all face an axis, and their shading is baked into the colour.
 
+use horizon_shader_api::stages::RAY_ENTITY_QUAD;
+
 use super::native_entity::EntityRuns;
 use super::upload::Uploads;
 use crate::mesher::Vertex;
@@ -353,7 +355,9 @@ impl EntitySkin {
             (frame.jobs.iter().zip(bits))
                 .map(|(job, kind)| SkinJob {
                     dst: job.dst + base,
-                    overlay: job.overlay | kind,
+                    // As `EntityBatch::tag_kinds` marks the CPU copies: a quad with a kind is in
+                    // the ray scene's entity layer too.
+                    overlay: job.overlay | if kind == 0 { 0 } else { kind | RAY_ENTITY_QUAD },
                     ..*job
                 })
                 .chain(frame.outline_jobs.iter().map(|job| SkinJob {
@@ -910,8 +914,9 @@ mod tests {
         batch.update(&expand(&model, &frame), &[], &[], &[], false);
         let layers = |v: &[Vertex]| v.iter().map(|v| v.layer).collect::<Vec<_>>();
         let cpu = layers(&batch.combined);
-        assert_eq!(cpu[0] >> super::super::native_entity::KIND_SHIFT, 1);
-        assert_eq!(cpu[48] >> super::super::native_entity::KIND_SHIFT, 0);
+        let kind = |layer: u32| layer >> super::super::native_entity::KIND_SHIFT & 7;
+        assert_eq!(kind(cpu[0]), 1);
+        assert_eq!(kind(cpu[48]), 0);
 
         let outline_base = frame.vertices;
         let size = u64::from(outline_base + frame.outline_vertices) * 44;
