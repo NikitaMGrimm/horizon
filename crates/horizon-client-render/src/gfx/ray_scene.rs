@@ -51,6 +51,24 @@ impl Renderer {
         }
     }
 
+    /// Runs `pack` from now on (none: no Horizon pack). The scene follows it: a pack that
+    /// declares `[ray_tracing]` keeps the scene there is, or gets one built from the sections
+    /// resident now; another pack, or none, drops it (`ray_query::wanted`: with
+    /// `HORIZON_RAY_TRACING=1` every pack keeps one). Called before the pack's first frame, so
+    /// the scene is there when it gathers what it traces.
+    pub(in crate::gfx) fn replace_native(
+        &mut self,
+        pack: Option<crate::gfx::native_pack::NativePack>,
+    ) {
+        let traces = pack.as_ref().is_some_and(|p| p.traces);
+        follow(
+            &mut self.ray_scene,
+            &self.device,
+            super::wanted(super::switch(), traces),
+        );
+        self.native = pack;
+    }
+
     /// Every section is gone (a new world, a new dimension).
     pub(in crate::gfx) fn ray_clear(&mut self) {
         if let Some(rt) = &mut self.ray_scene {
@@ -191,6 +209,14 @@ impl RayScene {
             generation: 0,
             removals: 0,
         })
+    }
+
+    /// The scene a renderer starts with: one only when `HORIZON_RAY_TRACING=1` asks for it with
+    /// any pack or none; otherwise the pack that loads brings it (`Renderer::replace_native`).
+    pub(in crate::gfx) fn forced(device: &wgpu::Device) -> Option<Self> {
+        super::wanted(super::switch(), false)
+            .then(|| Self::new(device))
+            .flatten()
     }
 
     /// What a trace from `camera` reads, once this world's first TLAS is built: before that
@@ -391,6 +417,32 @@ impl RayScene {
     }
 }
 
+/// `scene` for a pack that `wants` one: the one there is, or a new one; none otherwise.
+fn follow(scene: &mut Option<RayScene>, device: &wgpu::Device, wants: bool) {
+    if !wants {
+        *scene = None;
+    } else if scene.is_none() {
+        *scene = RayScene::new(device);
+    }
+}
+
+/// Drops the BLAS and slot of every part whose section is not `resident`; whether any went.
+fn drop_released<B>(
+    blas: &mut FxHashMap<Part, B>,
+    slots: &mut Slots,
+    resident: impl Fn(SectionKey) -> bool,
+) -> bool {
+    let before = blas.len();
+    blas.retain(|&part, _| {
+        let kept = resident(part.0);
+        if !kept {
+            slots.free(part);
+        }
+        kept
+    });
+    blas.len() != before
+}
+
 /// Drops from `blas` both layers of the sections past `keep` chunks of column `column`, and
 /// frees their slots. Whether any went.
 fn leave<T>(
@@ -402,23 +454,6 @@ fn leave<T>(
     let before = blas.len();
     blas.retain(|part, _| {
         let kept = within(&part.0, column, keep);
-        if !kept {
-            slots.free(*part);
-        }
-        kept
-    });
-    blas.len() != before
-}
-
-/// Drops both layers' BLAS and slots of every section not `resident`; whether any went.
-fn drop_released<T>(
-    blas: &mut FxHashMap<Part, T>,
-    slots: &mut Slots,
-    resident: impl Fn(SectionKey) -> bool,
-) -> bool {
-    let before = blas.len();
-    blas.retain(|part, _| {
-        let kept = resident(part.0);
         if !kept {
             slots.free(*part);
         }
@@ -865,16 +900,14 @@ mod tests {
     fn sections_no_longer_resident_leave_the_scene_and_the_store() {
         let mut slots = Slots::new(64, 64);
         let mut blas = FxHashMap::default();
-        let b_clear: Part = (B.0, Layer::Translucent);
-        for key in [A, B, C, b_clear] {
+        for key in [A, B, C] {
             slots.alloc(key, 8);
             blas.insert(key, ());
         }
-        // B's column was unloaded without a new mesh: both its layers go.
+        // B's column was unloaded without a new mesh.
         assert!(drop_released(&mut blas, &mut slots, |k| k != B.0));
         assert_eq!(blas.len(), 2);
-        assert!(!blas.contains_key(&B) && !blas.contains_key(&b_clear));
-        assert_eq!(slots.first(b_clear), None);
+        assert!(!blas.contains_key(&B));
         assert_eq!(slots.first(B), None);
         assert_eq!(slots.alloc(B, 8), Some(8), "its slot is free again");
         assert!(!drop_released(&mut blas, &mut slots, |_| true));
@@ -1022,5 +1055,46 @@ mod tests {
         assert!(RayScene::new(&device).is_none());
         assert!(super::super::blas_input(&device).is_empty());
         assert!(super::super::arena_input(&device).is_empty());
+    }
+
+    /// Spec #16011 item 5: the scene follows the pack that loads. A pack with `[ray_tracing]`
+    /// gets one and keeps it across its reloads; another pack drops it, and the next tracing one
+    /// starts afresh from the sections resident then. `HORIZON_RAY_TRACING=1` keeps one without.
+    #[test]
+    fn the_scene_follows_a_pack_that_traces() {
+        use super::super::{Switch, experimental, pick, wanted};
+        let instance = crate::gfx::test_gpu::instance();
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            return;
+        };
+        let features = pick(true, adapter.features());
+        let desc = wgpu::DeviceDescriptor {
+            required_features: features,
+            required_limits: adapter.limits(),
+            experimental_features: experimental(features),
+            ..Default::default()
+        };
+        let Ok((device, _)) = pollster::block_on(adapter.request_device(&desc)) else {
+            return;
+        };
+        if features.is_empty() {
+            return;
+        }
+        let mut scene = None;
+        follow(&mut scene, &device, wanted(Switch::Pack, false));
+        assert!(scene.is_none());
+        follow(&mut scene, &device, wanted(Switch::Pack, true));
+        scene.as_mut().unwrap().mark(A);
+        follow(&mut scene, &device, wanted(Switch::Pack, true));
+        assert_eq!(scene.as_ref().map(|s| s.dirty.len()), Some(1));
+        follow(&mut scene, &device, wanted(Switch::Pack, false));
+        assert!(scene.is_none());
+        follow(&mut scene, &device, wanted(Switch::Pack, true));
+        let fresh = scene.as_ref().unwrap();
+        assert!(fresh.dirty.is_empty() && fresh.anchor.is_none());
+        follow(&mut scene, &device, wanted(Switch::Off, true));
+        assert!(scene.is_none());
+        follow(&mut scene, &device, wanted(Switch::On, false));
+        assert!(scene.is_some());
     }
 }
