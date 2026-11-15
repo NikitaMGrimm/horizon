@@ -113,8 +113,8 @@ struct Draw<'a> {
     pipelines: RefCell<HashMap<PipelineKey, wgpu::RenderPipeline>>,
 }
 /// Everything that changes a pipeline built by `Draw::render`: the entry point,
-/// the override constants, and the draw's own flags. The shader and layout only
-/// change in `pack_stage`, which empties the cache.
+/// the override constants, and the draw's own flags. The
+/// shader and layout only change in `material`, which empties the cache.
 #[derive(PartialEq, Eq, Hash)]
 struct PipelineKey {
     entry: String,
@@ -454,7 +454,7 @@ impl<'a> Draw<'a> {
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::bytes_of(globals),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let texture = |layers, data: &[u8]| {
             device.create_texture_with_data(

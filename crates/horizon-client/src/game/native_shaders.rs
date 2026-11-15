@@ -287,10 +287,21 @@ fn manifest_refused(path: &Path) -> Option<String> {
 }
 
 /// Why the game doesn't draw a pack the check may still pass: `[frame] primaries = "bt2020"`
-/// isn't served yet (#14584).
+/// isn't served yet (#14584), and neither are `[motion]` or compute entries.
 fn not_drawn(m: &Manifest) -> Option<&'static str> {
-    (m.primaries == Primaries::Bt2020).then_some(
-        "[frame] primaries = \"bt2020\" isn't served yet: leave it out, or set \"bt709\"",
+    if m.primaries == Primaries::Bt2020 {
+        return Some(
+            "[frame] primaries = \"bt2020\" isn't served yet: leave it out, or set \"bt709\"",
+        );
+    }
+    if m.motion.is_some() {
+        return Some(
+            "[motion] needs a later Horizon: this one checks the motion guide but doesn't draw it",
+        );
+    }
+    m.computes().then_some(
+        "[[resource]], [[before_world]] and compute [[post]] entries need a later Horizon: \
+         this one checks them but doesn't run them",
     )
 }
 
@@ -473,5 +484,11 @@ mod tests {
             why.contains("primaries = \"bt2020\" isn't served yet"),
             "{why}"
         );
+        let why = not_drawn(&manifest("[motion]\n")).unwrap();
+        assert!(why.contains("[motion] needs a later Horizon"), "{why}");
+        let kept =
+            "[[resource]]\nname = \"cache\"\nbuffer = 64\nelement = \"u32\"\nkeep = \"view\"\n";
+        let why = not_drawn(&manifest(kept)).unwrap();
+        assert!(why.contains("need a later Horizon"), "{why}");
     }
 }
