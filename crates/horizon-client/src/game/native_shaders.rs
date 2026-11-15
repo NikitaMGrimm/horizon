@@ -452,11 +452,11 @@ mod tests {
         );
         let why = not_drawn(&manifest("[entity]\nfile = \"e.wgsl\"\n"));
         assert!(why.unwrap().contains("[entity] stage isn't drawn yet"));
-        let why = not_drawn(&manifest("0.2", "[motion]\n")).unwrap();
+        let why = not_drawn(&manifest("[motion]\n")).unwrap();
         assert!(why.contains("[motion] needs a later Horizon"), "{why}");
         let kept =
             "[[resource]]\nname = \"cache\"\nbuffer = 64\nelement = \"u32\"\nkeep = \"view\"\n";
-        let why = not_drawn(&manifest("0.2", kept)).unwrap();
+        let why = not_drawn(&manifest(kept)).unwrap();
         assert!(why.contains("need a later Horizon"), "{why}");
     }
 }
