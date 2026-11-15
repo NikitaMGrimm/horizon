@@ -1,6 +1,7 @@
 //! One of Horizon's own shader packs while it runs (docs/shaders.md): the frame its stages
 //! read, its sky, material and post stages, and the timer of their passes.
 
+use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::{Report, StageKind};
 
 use super::displace::Displacement;
@@ -10,6 +11,7 @@ use super::native_shadow::{NativeShadow, ShadowGrid};
 use super::native_sky::NativeSky;
 use super::output::EffectiveOutput;
 use super::pack_timing::PassTiming;
+use super::surface_setup::ray_query::ray_scene::RayScene;
 use super::{Frame, SectionKey};
 use crate::fast_hash::FxHashMap;
 
@@ -33,6 +35,8 @@ pub struct NativePack {
     pub light_colors: Vec<horizon_shader_api::manifest::LightColor>,
     /// GPU time of each pass, while the renderer asks for it (`pack_timing.rs`).
     pub timing: Option<PassTiming>,
+    /// It declares `[ray_tracing]`: the renderer keeps a scene for it (`replace_native`).
+    pub traces: bool,
 }
 
 /// Whether the option `id` (a bool, or a number above 0) is on, or there is none to ask.
@@ -43,6 +47,29 @@ fn option_on(constants: &[(String, f64)], id: Option<&String>) -> bool {
             .find(|(k, _)| k == id)
             .is_none_or(|(_, v)| *v != 0.0)
     })
+}
+
+/// Whether a stage of the pack reads the world before translucent terrain (`opaque_depth`,
+/// `opaque_color`): only the material stage has them, for `material` and, under
+/// `[displacement]`, `displacement`, and whatever those call.
+fn reads_opaque(stages: &[CheckedStage]) -> bool {
+    let reads = |s: &CheckedStage, function: naga::Handle<naga::Function>| {
+        s.module
+            .global_variables
+            .iter()
+            .filter(|(_, g)| matches!(g.name.as_deref(), Some("opaque_depth" | "opaque_color")))
+            .any(|(global, _)| !s.info[function][global].is_empty())
+    };
+    stages
+        .iter()
+        .filter(|s| s.kind == StageKind::Material)
+        .any(|s| {
+            s.module
+                .functions
+                .iter()
+                .filter(|(_, f)| matches!(f.name.as_deref(), Some("material" | "displacement")))
+                .any(|(function, _)| reads(s, function))
+        })
 }
 
 /// `[displacement]`'s cells: the value of its `cells_option`, if any.
@@ -82,6 +109,22 @@ fn chosen_shadow(
 }
 
 impl NativePack {
+    /// Writes this frame's inputs (`NativeFrame::write`), and for a `[ray_tracing]` pack where
+    /// its post passes trace `scene` from, once it is built.
+    pub(in crate::gfx) fn write(
+        &mut self,
+        queue: &wgpu::Queue,
+        frame: &super::Frame,
+        size: [u32; 2],
+        display: super::output::DisplayValues,
+        scene: Option<&RayScene>,
+    ) {
+        let scene = scene.and_then(|s| s.traced(frame.camera));
+        let post = self.post.as_ref();
+        self.frame.ray_distance = post.and_then(|post| post.trace(queue, scene.as_ref()));
+        self.frame.write(queue, frame, size, display);
+    }
+
     /// The pack of the checked stages `report` with the option values `constants`, drawing
     /// onto the world's targets as `terrain` describes; the sky reads the terrain's group 0.
     /// Also returns its stages' labels, in the order they draw. Errors name the stage wgpu
@@ -194,7 +237,9 @@ impl NativePack {
             .find(|s| s.kind == StageKind::Material)
             .is_some_and(|s| s.reads("reflection"))
             && option_on(constants, option);
+        frame.reads_opaque = reads_opaque(&report.stages);
         let fog = report.material_fog;
+        let coverage = report.manifest.coverage;
         let keeps = |key: fn(&horizon_shader_api::Stage) -> Option<bool>| {
             report.sky.as_ref().and_then(key).unwrap_or(true)
         };
@@ -223,7 +268,7 @@ impl NativePack {
             .find(|s| s.kind == StageKind::Weather)
             .map(|s| s.label.clone());
         let has_vertex = report.stages.iter().any(|s| s.kind == StageKind::Vertex);
-        let (post, others): (Vec<_>, Vec<_>) = report
+        let (mut post, others): (Vec<_>, Vec<_>) = report
             .stages
             .into_iter()
             .partition(|s| s.kind == StageKind::Post);
@@ -249,6 +294,7 @@ impl NativePack {
                     stage,
                     constants,
                     fog,
+                    coverage,
                     has_vertex,
                     displaced.as_ref(),
                 )
@@ -256,12 +302,26 @@ impl NativePack {
             .transpose()?;
         // A 0.2 pack always has one: its decode and tonemap run without a chain too.
         let tonemap = others.iter().find(|s| s.kind == StageKind::Tonemap);
-        let post = (!post.is_empty() || api == horizon_shader_api::Api::V0_2)
+        // A `[ray_tracing]` pack's passes as the check built them against the scene.
+        let scenes: Vec<(String, naga::Module)> = post
+            .iter_mut()
+            .filter_map(|s| Some((s.label.clone(), s.scene.take()?)))
+            .collect();
+        let mut post = (!post.is_empty() || api == horizon_shader_api::Api::V0_2)
             .then(|| {
                 let manifest = &report.manifest;
                 NativePost::new(device, post, manifest, constants, format, &frame, tonemap)
             })
             .transpose()?;
+        if let Some(post) = post.as_mut().filter(|_| !scenes.is_empty()) {
+            let shape = super::native_post::trace::TraceShape {
+                sprites: terrain.sprite_views,
+                split: terrain.sprites[1] as u32,
+                tags: terrain.sprite_tags,
+                materials: terrain.sprite_materials,
+            };
+            post.trace_scene(device, scenes, constants, &shape);
+        }
         let mut labels: Vec<String> = sky.iter().map(|s| s.label.clone()).collect();
         labels.extend(
             others
@@ -276,6 +336,7 @@ impl NativePack {
         let pack = Self {
             particle_lights: report.manifest.particle_lights.clone(),
             light_colors: report.manifest.lights.clone(),
+            traces: report.manifest.ray_tracing.is_some(),
             frame,
             sky,
             material,
@@ -312,8 +373,9 @@ impl NativePack {
             lights,
             light_revision,
             sky_visible,
+            scene,
         } = start;
-        self.frame.write(queue, frame, size, output.display());
+        self.write(queue, frame, size, output.display(), scene);
         self.frame
             .block_light
             .update(queue, frame.camera, lights, light_revision);
@@ -385,6 +447,8 @@ pub struct FrameStart<'a> {
     pub light_revision: u64,
     /// The sky is open this frame.
     pub sky_visible: bool,
+    /// The ray scene, when the game traces rays (`NativePack::write`).
+    pub scene: Option<&'a RayScene>,
 }
 
 /// What the renderer hands the pack after the water mirror (`NativePack::prepare_world_targets`).
@@ -402,8 +466,55 @@ pub struct WorldTargets<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{NativePack, TerrainShape, chosen_shadow};
+    use super::{NativePack, TerrainShape, chosen_shadow, reads_opaque};
     use horizon_shader_api::manifest::{OptionKind, PackOption, Shadow};
+
+    /// The world before translucent terrain is copied only for a pack whose material, or the
+    /// functions it calls, or its `displacement`, reads `opaque_depth` or `opaque_color` (#16124).
+    #[test]
+    fn the_opaque_copies_are_made_only_for_a_pack_that_reads_them() {
+        use horizon_shader_api::{MANIFEST, Pack, check};
+        let reads = |material: &str, displacement: &str| {
+            let manifest = "schema = 1
+id = \"t\"
+name = \"T\"
+version = \"1\"
+                api = \"0.2\"
+[material]
+file = \"material.wgsl\"
+[displacement]
+";
+            let text = format!(
+                "fn material(input: MaterialInput) -> Surface {{
+    {material}
+}}
+                fn displacement(input: DisplacementInput) -> f32 {{
+    {displacement}
+}}
+                fn behind(t: vec2<i32>) -> vec4<f32> {{ return textureLoad(opaque_color, t, 0); }}
+"
+            );
+            let files = [(MANIFEST, manifest), ("material.wgsl", text.as_str())]
+                .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+                .into();
+            reads_opaque(&check(&Pack::from_files(files).unwrap()).unwrap().stages)
+        };
+        let plain = "return Surface(input.albedo);";
+        let flat = "return 0.0;";
+        assert!(!reads(plain, flat), "a helper nothing calls reads nothing");
+        assert!(reads(
+            "return Surface(input.albedo + behind(vec2<i32>(input.screen)));",
+            flat
+        ));
+        assert!(reads(
+            "return Surface(input.albedo * textureLoad(opaque_depth, vec2<i32>(0), 0));",
+            flat
+        ));
+        assert!(reads(
+            plain,
+            "return textureLoad(opaque_depth, vec2<i32>(input.uv), 0);"
+        ));
+    }
 
     /// A device with OpenGL's minimum 16 sampled textures per stage refuses a pack whose
     /// sky adds the terrain's 10 to the frame's 9: that is the pack's error to report, not
@@ -525,6 +636,7 @@ mod tests {
             globals,
             flat: None,
             sprites: [1.0, 2048.0],
+            sprite_views: &[],
             format: wgpu::TextureFormat::Rgba8Unorm,
             linear: false,
             sprite_tags: &[],
