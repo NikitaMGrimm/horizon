@@ -15,6 +15,8 @@ use super::Frame;
 
 pub(super) const INTERMEDIATE: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+#[path = "native_kept.rs"]
+mod kept;
 /// The scene the post passes of a pack with `[ray_tracing]` trace.
 #[path = "native_trace.rs"]
 pub(super) mod trace;
@@ -317,6 +319,8 @@ pub struct NativePost {
     /// size.
     scales: Vec<f32>,
     named: Option<([u32; 2], Vec<wgpu::TextureView>)>,
+    /// The pack's `[[resource]]`s, sized to the world (none without).
+    kept: Option<kept::KeptStore>,
     /// The screen's colour format, the world target's too.
     format: wgpu::TextureFormat,
     /// The decode, the picture and the tonemap.
@@ -1088,6 +1092,13 @@ impl NativePost {
             .extend((0..targets.len() as u32).map(|j| {
                 texture_entry(horizon_shader_api::stages::POST_TARGET_BINDING + j, float)
             }));
+        let resources = &manifest.kept.resources;
+        if let Some(why) = (!resources.is_empty())
+            .then(|| kept::refusal(&device.limits(), manifest, &stages, &entries))
+            .flatten()
+        {
+            return Err(why);
+        }
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Native shader pack post"),
             entries: &entries,
@@ -1170,6 +1181,8 @@ impl NativePost {
             scales: targets.iter().map(|t| t.1).collect(),
             named: None,
             plan,
+            kept: (!resources.is_empty())
+                .then(|| kept::KeptStore::new(device, &manifest.kept, [1, 1])),
             format,
             display,
         })
@@ -1206,6 +1219,9 @@ impl NativePost {
         history_reset: bool,
         scene: Option<&trace::Traced<'_>>,
     ) {
+        if let Some(kept) = &mut self.kept {
+            kept.fit(device, size);
+        }
         let d = &mut self.display;
         if d.scene.as_ref().is_none_or(|s| s.0 != size) {
             d.scene = Some((
