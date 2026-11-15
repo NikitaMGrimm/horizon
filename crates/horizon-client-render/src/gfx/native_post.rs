@@ -1135,7 +1135,7 @@ impl NativePost {
             }));
         let resources = &manifest.kept.resources;
         if let Some(why) = (!resources.is_empty())
-            .then(|| kept::refusal(&device.limits(), manifest, &stages, &entries))
+            .then(|| kept::unmet(device, manifest, &stages, &entries))
             .flatten()
         {
             return Err(why);

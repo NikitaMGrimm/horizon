@@ -471,7 +471,9 @@ fn a_rebuild_carries_the_epochs_and_options_reset_what_they_name() {
 
 /// #16011 item 4: a pack's kept resources are made at install (`replace_native`), not while it
 /// builds, so one that fails to build makes none; a reload destroys the old store before it
-/// makes the new one, and a carried store stays. Counted with `Instance::generate_report`.
+/// makes the new one, and a carried store stays; a pack whose kept formats the device can't make
+/// is refused while it builds, and the running store stays. Counted with
+/// `Instance::generate_report`.
 #[test]
 fn a_reload_never_holds_two_stores() {
     let instance = crate::gfx::test_gpu::instance();
@@ -497,7 +499,7 @@ fn a_reload_never_holds_two_stores() {
         None,
         (horizon_shader_api::Api::V0_2, false),
     );
-    let post = |resources: &str, colour: &str| {
+    let build = |resources: &str, colour: &str| {
         let pass = format!("fn post(input: PostInput) -> vec4<f32> {{ return {colour}; }}\n");
         let report = report(
             &format!("{resources}[[post]]\nfile = \"a.wgsl\"\n"),
@@ -508,8 +510,8 @@ fn a_reload_never_holds_two_stores() {
             .collect();
         let format = wgpu::TextureFormat::Rgba8Unorm;
         super::super::NativePost::new(&device, stages, &report.manifest, &[], format, &frame, None)
-            .unwrap()
     };
+    let post = |resources: &str, colour: &str| build(resources, colour).unwrap();
     let delta = |from: [usize; 2]| count().map(|c| [c[0] - from[0], c[1] - from[1]]);
     // Building one makes what building one without resources makes: nothing kept.
     let before = count().unwrap();
@@ -535,5 +537,19 @@ fn a_reload_never_holds_two_stores() {
     let built = count().unwrap();
     install(&device, Some(&mut third), Some(&mut second));
     assert_eq!(delta(built), Some([0, 0]));
+    assert_eq!(third.kept.as_ref().map(|k| k.held.len()), Some(2));
+    // A device that can't make `wide`'s r32float so (`PROBE_EXTRA` stands in for one): refused
+    // in the build, its error caught there, nothing left made, the running store whole.
+    PROBE_EXTRA.set(wgpu::TextureUsages::STORAGE_ATOMIC);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let built = count().unwrap();
+    let refused = build(BUFFERS, "input.color").err().unwrap();
+    PROBE_EXTRA.set(wgpu::TextureUsages::empty());
+    assert!(
+        refused.starts_with("wide: the device can't make an r32float texture to keep"),
+        "{refused}"
+    );
+    assert_eq!(delta(built), Some([0, 0]));
+    assert!(pollster::block_on(scope.pop()).is_none());
     assert_eq!(third.kept.as_ref().map(|k| k.held.len()), Some(2));
 }

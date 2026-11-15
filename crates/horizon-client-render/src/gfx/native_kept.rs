@@ -267,6 +267,73 @@ fn format(format: Format) -> wgpu::TextureFormat {
     }
 }
 
+/// The usages a kept texture is made with: written by compute passes, read by any pass,
+/// cleared by a render pass (`CLEAR_TEXTURE` is optional).
+const TEXTURE_USAGES: wgpu::TextureUsages = wgpu::TextureUsages::STORAGE_BINDING
+    .union(wgpu::TextureUsages::TEXTURE_BINDING)
+    .union(wgpu::TextureUsages::RENDER_ATTACHMENT);
+
+#[cfg(test)]
+thread_local! {
+    /// Usages the probe asks for besides `TEXTURE_USAGES`: a test's stand-in for a device
+    /// that can't make a format so.
+    pub(super) static PROBE_EXTRA: std::cell::Cell<wgpu::TextureUsages> =
+        const { std::cell::Cell::new(wgpu::TextureUsages::empty()) };
+}
+
+/// The first kept texture whose format the device can't make with `TEXTURE_USAGES` (OpenGL ES
+/// without `EXT_color_buffer_float` renders to no 32-bit float format), if any: a 1×1 texture
+/// of each format, made and dropped under an error scope of its own, while the pack builds, so
+/// the pack is refused and the running one keeps its store.
+fn unmade(device: &wgpu::Device, kept: &Kept) -> Option<String> {
+    #[cfg(not(test))]
+    let usage = TEXTURE_USAGES;
+    #[cfg(test)]
+    let usage = TEXTURE_USAGES | PROBE_EXTRA.get();
+    let mut seen = Vec::new();
+    for r in &kept.resources {
+        let Some(f) = r.format().filter(|f| !seen.contains(f)) else {
+            continue;
+        };
+        seen.push(f);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("Kept resource probe"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: format(f),
+                usage,
+                view_formats: &[],
+            })
+            .destroy();
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            return Some(format!(
+                "{}: the device can't make an {} texture to keep: {e}",
+                r.name,
+                f.wgsl()
+            ));
+        }
+    }
+    None
+}
+
+/// `refusal` for `device`, then whether it makes every kept texture's format (`unmade`).
+pub(super) fn unmet(
+    device: &wgpu::Device,
+    manifest: &Manifest,
+    stages: &[CheckedStage],
+    shared: &[wgpu::BindGroupLayoutEntry],
+) -> Option<String> {
+    refusal(&device.limits(), manifest, stages, shared).or_else(|| unmade(device, &manifest.kept))
+}
+
 fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held {
     let pair = |f, [width, height]: [u32; 2]| {
         [0, 1].map(|_| {
@@ -281,11 +348,7 @@ fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: format(f),
-                // Written by compute passes, read by any pass, cleared by a render pass
-                // (`CLEAR_TEXTURE` is optional).
-                usage: wgpu::TextureUsages::STORAGE_BINDING
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: TEXTURE_USAGES,
                 view_formats: &[],
             })
         })
