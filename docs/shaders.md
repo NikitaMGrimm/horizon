@@ -341,13 +341,13 @@ what a reflected ray hits.
 Shader API 0.2 has the keys for storage a pack keeps between frames and for compute passes: `[[resource]]` (buffers,
 and textures with this frame's and last frame's versions), `[kept] reach`, `[[before_world]]`, `[[post]]` entries
 with `compute = true`, and an option's `resets`. A compute file defines `fn compute(input: ComputeInput)`.
-`horizon-shader check` takes them now, but **they run in a later Horizon**: this game refuses a pack that declares a
-resource or a compute pass. The keys, their limits and the WGSL each pass sees are in the
+The game runs them, except beside `[ray_tracing]`: it refuses a pack that has both, as one that needs a later
+Horizon. The keys, their limits and the WGSL each pass sees are in the
 [reference](api/shaders-reference-0.2.md#kept-resources-and-compute-passes).
 
 Under `[ray_tracing]` a compute or `[[before_world]]` file that calls a trace function gets them, as a post pass does;
-a `[[before_world]]` pass traces this frame's scene. One part comes in a later step: `[material]` can't read kept
-resources.
+a `[[before_world]]` pass traces this frame's scene. Two parts come in later steps: the game running kept resources
+beside `[ray_tracing]`, and `[material]` reading kept resources.
 
 ## Options
 
