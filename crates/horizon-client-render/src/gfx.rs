@@ -1500,7 +1500,7 @@ pub struct Renderer {
     hdr_marker: Option<std::path::PathBuf>,
     /// The window's graphics driver (`hdr_start`); `None` offscreen.
     hdr_driver: Option<String>,
-    /// The HDR Lighting setting, kept for the HDR output made when HDR turns on.
+    /// Whether the Look setting is Horizon's, kept for the HDR output made when HDR turns on.
     hdr_lighting_setting: bool,
     /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
@@ -1605,6 +1605,8 @@ pub struct Renderer {
     pub fullbright: bool,
     /// The Improved transparency option (`GameRenderer.useImprovedTransparency`).
     pub improved_transparency: bool,
+    /// The last frame drew translucent blocks' cracks through its path (`translucent_cracks_transparent`).
+    cracks_transparent: bool,
     /// Its passes and targets, made when first drawn with.
     oit: Option<oit::Oit>,
     /// Advance animated block textures (Horizon setting; vanilla always does).
@@ -4952,6 +4954,7 @@ impl Renderer {
             screenshot_halvings: 0,
             gamma: 0.5,
             improved_transparency: false,
+            cracks_transparent: false,
             oit: None,
             fullbright: false,
             animated_textures: true,
@@ -6600,7 +6603,7 @@ impl Renderer {
             None => "HDR: not offered by this display".into(),
         }
     }
-    /// The HDR Lighting setting (`Hdr::look`).
+    /// Whether the Look setting is Horizon's (`Hdr::look`).
     pub fn set_hdr_lighting(&mut self, on: bool) {
         self.hdr_lighting_setting = on;
         if let Some(hdr) = &mut self.hdr {
@@ -6819,6 +6822,10 @@ impl Renderer {
             (_, Some(_)) => Some("native"),
             _ => None,
         }
+    }
+    /// The running Horizon pack's name, from its manifest.
+    pub fn native_pack_name(&self) -> Option<&str> {
+        self.native.as_ref().map(|pack| pack.name.as_str())
     }
     /// `screenshot-sequence`: waits (30 seconds at most) for the frame just drawn to finish on
     /// the GPU, and takes the centre depth a `shaders/` pack copied in it, which its next frame
@@ -8143,7 +8150,7 @@ impl Renderer {
         let displaced = self
             .native
             .as_ref()
-            .is_some_and(|n| n.displacement.is_some());
+            .is_some_and(native_pack::NativePack::displaces);
         let mut gpu_frame = self.gpu_culling.is_some()
             && !frame.title
             && !pack_terrain
@@ -8404,31 +8411,25 @@ impl Renderer {
                 bytemuck::cast_slice(&self.origins),
             );
         }
-        // `[displacement]`: the solid quads of the sections it reaches, nearest first.
-        if let Some(d) = self.native.as_mut().and_then(|n| n.displacement.as_mut()) {
-            let near: smallvec::SmallVec<[displace::Near<'_>; displace::MAX_SECTIONS]> =
-                if frame.title {
-                    smallvec::SmallVec::new()
-                } else {
-                    visible
-                        .iter()
-                        .filter(|v| {
-                            let o = glam::Vec3::from(v.origin);
-                            let closest = glam::Vec3::ZERO.clamp(o, o + 16.0);
-                            closest.length() < d.distance
-                        })
-                        .filter_map(|v| {
-                            let s = self.sections.get(v.slot);
-                            (s.solid > 0).then(|| displace::Near {
-                                buffer: self.arena.buffer(s.page),
-                                base: s.solid_base(),
-                                quads: s.solid,
-                                origin: v.origin,
-                            })
-                        })
-                        .collect()
-                };
-            d.prepare(&self.device, &self.queue, &mut encoder, &near, view_proj);
+        // `[displacement]`: the visible sections' solid quads, nearest first, for its grid to
+        // take those it reaches.
+        if let Some(n) = &mut self.native {
+            let sections = visible.iter().filter(|_| !frame.title).filter_map(|v| {
+                let s = self.sections.get(v.slot);
+                (s.solid > 0).then(|| displace::Near {
+                    buffer: self.arena.buffer(s.page),
+                    base: s.solid_base(),
+                    quads: s.solid,
+                    origin: v.origin,
+                })
+            });
+            n.prepare_displacement(native_material::DisplacementPrepare {
+                device: &self.device,
+                queue: &self.queue,
+                encoder: &mut encoder,
+                sections,
+                view_proj,
+            });
         }
         // Solid sections front to back, then translucent ones back to front,
         // as one list of indirect draws over the section arena.
@@ -9013,12 +9014,8 @@ impl Renderer {
         }
         // GameRenderer.useImprovedTransparency. A shader pack keeps its own
         // path.
-        let oit_on = self.improved_transparency
-            && !frame.title
-            && !warp_on
-            && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
-            && self.native.is_none()
-            && oit::supported(&self.device);
+        let oit_on = !frame.title && !warp_on && self.improved_transparency_runs();
+        self.cracks_transparent = oit_on && !hdr_gain;
         let [
             entity_quads,
             text_quads,
@@ -9526,18 +9523,7 @@ impl Renderer {
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         // One of Horizon's own packs reads the same world target.
         let native_post = !frame.title && self.native.is_some();
-        if let Some(timer) = Self::pass_timer(&mut self.pack_post, &mut self.native)
-            && timer.is_some() != self.pass_timing
-        {
-            *timer = self
-                .pass_timing
-                .then(|| pack_timing::PassTiming::new(&self.device, &self.queue))
-                .flatten();
-        }
-        if let Some(Some(t)) = Self::pass_timer(&mut self.pack_post, &mut self.native) {
-            t.gap = self.pass_timing_gap;
-            t.keep_frames(self.keep_timed_frames);
-        }
+        self.set_up_pack_timing();
         let pack_reads_world = pack_post || native_post;
         laps.lap("r_uploads");
         self.ray_prepare(&mut encoder, camera, frame.title);
@@ -9737,6 +9723,7 @@ impl Renderer {
                 timing: self.own_timing.as_mut(),
                 lists,
             });
+            native.before_world(&self.device, &mut encoder);
         }
         if native_sky_pass && let Some(native) = &mut self.native {
             native.draw_sky_pass(native_sky::SkyPass {
@@ -10382,13 +10369,11 @@ impl Renderer {
                 .native
                 .as_ref()
                 .filter(|_| !frame.title && !pack_draws_terrain && !warp_on)
-                && let Some(d) = &n.displacement
-                && let Some(pipeline) = material.and_then(|m| m.displaced)
+                && let Some(grid) = material.and_then(|m| n.displaced_grid(m))
             {
                 pass.stage(self.own_timing.as_mut(), "displacement");
                 pass.set_bind_group(0, &self.group, &[]);
-                pack_frame(&mut pass);
-                d.draw(&mut pass, &d.view, pipeline);
+                grid.draw(&mut pass);
             }
             if surface.is_some() {
                 drop(pass);
@@ -10518,8 +10503,8 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            // Cracks multiply the existing light; scalar OIT coverage cannot carry that factor.
-            if crumbling_quads > 0 && (!oit_on || hdr_gain) {
+            // A solid block's crack is classic whatever the setting (`DESTROY_TYPES`, solid phase).
+            if crumbling_quads > 0 {
                 pass.stage(self.own_timing.as_mut(), "block breaking");
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -10617,16 +10602,27 @@ impl Renderer {
             // One of Horizon's own packs reads the world before translucent terrain
             // (`opaque_depth`, `opaque_color`): the pass ends, the targets are copied, and a
             // pass that loads both carries on.
-            if material.is_some_and(|m| m.reads_opaque)
+            // A material pack's translucent terrain drawn per section (no flat draws) gets a
+            // pass of its own too, copies or not. Drawn on in the solid world's pass, a pack
+            // with `[displacement]` under HDR output lost the Vulkan device (an NVIDIA GPU
+            // fault, cause not found); a pass of its own avoids it.
+            let reads_opaque = material.is_some_and(|m| m.reads_opaque);
+            let per_section = material.is_some()
+                && !pack_draws_water
+                && oit.is_none()
+                && !(flat_frame && self.flat.is_some());
+            if (reads_opaque || per_section)
                 && let Some(native) = &self.native
             {
                 drop(pass);
-                native.copy_opaque(native_material::OpaqueCopy {
-                    device: &self.device,
-                    encoder: &mut encoder,
-                    depth: world_depth.texture(),
-                    color: scaled.as_ref().map(|(c, _)| c),
-                });
+                if reads_opaque {
+                    native.copy_opaque(native_material::OpaqueCopy {
+                        device: &self.device,
+                        encoder: &mut encoder,
+                        depth: world_depth.texture(),
+                        color: scaled.as_ref().map(|(c, _)| c),
+                    });
+                }
                 pass = world_pass_after_culling(
                     &mut encoder,
                     world_view,
@@ -10694,12 +10690,6 @@ impl Renderer {
                         };
                         quads(pass, &f.text[s], text_quads, entity_quads);
                         if !hdr_gain {
-                            quads(
-                                pass,
-                                &f.crumbling[s],
-                                crumbling_quads,
-                                entity_quads + text_quads,
-                            );
                             quads(
                                 pass,
                                 &f.crumbling[s],
@@ -10895,6 +10885,7 @@ impl Renderer {
                 pass.stage(self.own_timing.as_mut(), "block outline");
                 self.draw_outline(&mut pass, outline_edges as u32, frame.outline_high_contrast);
             }
+            // Cracks multiply the existing light; scalar OIT coverage cannot carry that factor.
             if translucent_crumbling_quads > 0 && (!oit_on || hdr_gain) {
                 pass.stage(self.own_timing.as_mut(), "block breaking");
                 pass.set_pipeline(&self.crumbling_pipeline);
@@ -11094,17 +11085,14 @@ impl Renderer {
             && native_post
             && let Some(native) = &mut self.native
         {
-            let history_reset = native.frame.take_history_reset();
-            native.post.run(
-                &self.device,
-                &mut encoder,
-                (color, depth, &native.frame.surface_view),
-                &view_target,
-                self.world_post.size().unwrap_or([1, 1]),
-                history_reset,
-                native.timing.as_mut(),
-                self.ray_scene.as_ref().map(|s| (s, frame.camera)),
-            );
+            native.run_post(native_pack::WorldPost {
+                device: &self.device,
+                encoder: &mut encoder,
+                world: (color, depth),
+                screen: &view_target,
+                size: self.world_post.size().unwrap_or([1, 1]),
+                scene: self.ray_scene.as_ref().map(|s| (s, frame.camera)),
+            });
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
             let camera = frame_gen::Camera {
                 jittered,
@@ -11347,9 +11335,7 @@ impl Renderer {
             timer.submitted(&self.queue);
             timer.collect(&self.device, &mut self.gpu_times);
         }
-        if let Some(Some(timer)) = Self::pass_timer(&mut self.pack_post, &mut self.native) {
-            timer.submitted(&self.queue);
-        }
+        self.pack_timing_submitted();
         if let Some(timer) = &mut self.own_timing {
             timer.submitted(&self.queue);
         }
@@ -11552,7 +11538,7 @@ impl Renderer {
         }
         // The layered frame's light eases into the peak, before the camera overlays draw on it,
         // unless a 0.2 pack's own `[tonemap]` did.
-        let pack_tonemap = self.native.as_ref().is_some_and(|n| n.post.tonemaps());
+        let pack_tonemap = self.native.as_ref().is_some_and(|n| n.tonemaps());
         if horizon_tone_curve(layered, !frame.title, pack_tonemap)
             && let Some(hdr) = &self.hdr
         {
