@@ -8319,7 +8319,7 @@ impl Renderer {
         let displaced = self
             .native
             .as_ref()
-            .is_some_and(|n| n.displacement.is_some());
+            .is_some_and(native_pack::NativePack::displaces);
         let mut gpu_frame = self.gpu_culling.is_some()
             && !frame.title
             && !pack_terrain
@@ -8581,31 +8581,25 @@ impl Renderer {
                 bytemuck::cast_slice(&self.origins),
             );
         }
-        // `[displacement]`: the solid quads of the sections it reaches, nearest first.
-        if let Some(d) = self.native.as_mut().and_then(|n| n.displacement.as_mut()) {
-            let near: smallvec::SmallVec<[displace::Near<'_>; displace::MAX_SECTIONS]> =
-                if frame.title {
-                    smallvec::SmallVec::new()
-                } else {
-                    visible
-                        .iter()
-                        .filter(|v| {
-                            let o = glam::Vec3::from(v.origin);
-                            let closest = glam::Vec3::ZERO.clamp(o, o + 16.0);
-                            closest.length() < d.distance
-                        })
-                        .filter_map(|v| {
-                            let s = self.sections.get(v.slot);
-                            (s.solid > 0).then(|| displace::Near {
-                                buffer: self.arena.buffer(s.page),
-                                base: s.solid_base(),
-                                quads: s.solid,
-                                origin: v.origin,
-                            })
-                        })
-                        .collect()
-                };
-            d.prepare(&self.device, &self.queue, &mut encoder, &near, view_proj);
+        // `[displacement]`: the visible sections' solid quads, nearest first, for its grid to
+        // take those it reaches.
+        if let Some(n) = &mut self.native {
+            let sections = visible.iter().filter(|_| !frame.title).filter_map(|v| {
+                let s = self.sections.get(v.slot);
+                (s.solid > 0).then(|| displace::Near {
+                    buffer: self.arena.buffer(s.page),
+                    base: s.solid_base(),
+                    quads: s.solid,
+                    origin: v.origin,
+                })
+            });
+            n.prepare_displacement(native_material::DisplacementPrepare {
+                device: &self.device,
+                queue: &self.queue,
+                encoder: &mut encoder,
+                sections,
+                view_proj,
+            });
         }
         // Solid sections front to back, then translucent ones back to front,
         // as one list of indirect draws over the section arena.
@@ -10559,13 +10553,11 @@ impl Renderer {
                 .native
                 .as_ref()
                 .filter(|_| !frame.title && !pack_draws_terrain && !warp_on)
-                && let Some(d) = &n.displacement
-                && let Some(pipeline) = material.and_then(|m| m.displaced)
+                && let Some(grid) = material.and_then(|m| n.displaced_grid(m))
             {
                 pass.stage(self.own_timing.as_mut(), "displacement");
                 pass.set_bind_group(0, &self.group, &[]);
-                pack_frame(&mut pass);
-                d.draw(&mut pass, &d.view, pipeline);
+                grid.draw(&mut pass);
             }
             if surface.is_some() {
                 drop(pass);
