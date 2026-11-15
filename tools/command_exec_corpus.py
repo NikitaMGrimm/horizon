@@ -7288,6 +7288,7 @@ def loaded_health_above_max():
                 ('iron_golem', 'Health:500.0f'),
                 ('slime', 'Size:3,Health:100.0f'),
                 ('magma_cube', 'Health:2.5f'),
+                ('sulfur_cube', 'Health:100.0f'),
                 ('slime', 'Size:1,Health:20.0f,attributes:[{id:"minecraft:max_health",base:20.0d},'
                           '{id:"minecraft:movement_speed",base:0.9d},{id:"minecraft:attack_damage",base:9.0d}]')]
     ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk},

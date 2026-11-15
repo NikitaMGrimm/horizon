@@ -1993,6 +1993,9 @@ pub fn mob_from_nbt_with_random(
     }
     saved_attributes::read_attribute_modifiers(&mut m, tag);
     m.health = float(tag.get("Health")).map_or(m.attrs.max_health, |h| h as f32);
+    // setHealth clamps it to the max health the save left, before anything
+    // later in the load (a wolf's taming) changes that.
+    m.health = m.health.min(crate::mobs::finalize::loaded_max_health(&m));
     // LivingEntity.readAdditionalSaveData: `internalSetAbsorptionAmount`
     // stores the value as read; only `setAbsorptionAmount` clamps.
     m.absorption = float(tag.get("AbsorptionAmount")).map_or(0.0, |h| h as f32);
@@ -2727,8 +2730,6 @@ pub fn mob_from_nbt_with_random(
     if m.health < 0.0 {
         m.health = 0.0;
     }
-    // And a health above the max health to it.
-    m.health = m.health.min(crate::mobs::finalize::loaded_max_health(&m));
     Some(m)
 }
 
