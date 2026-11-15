@@ -247,10 +247,10 @@ draws them itself (the material stage covers terrain only). The first-person han
 
 ## Changelog
 
-- 2026-11-13: API 0.1 (removed): no build serves it any more. `horizon-shader`, the game and the registry refuse a
-  0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`, and the registry lists 0.2 packs. The 0.1 reference
-  is gone, the templates of `horizon-shader new` are 0.2 packs, and the example pack Golden Hour is its 0.2 port
-  (2.0.0). API 0.2 is unchanged.
+- **2026-11-13: API 0.1 removed (breaking, #15886).** Use shader API 0.2 instead. The game, `horizon-shader` and
+  the registry refuse a 0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`; the game draws without it.
+  [Moving a pack to 0.2](#shader-api-02-experimental) is described above; Golden Hour 2.0.0 is the moved example. The
+  0.1 reference is gone, and the templates of `horizon-shader new` are 0.2 packs. API 0.2 is unchanged.
 - 2026-11-10: API 0.2 (additions, experimental): the `[entity]` stage, `fn entity(input: EntityInput) -> Surface`,
   for entities, block entities, items and particles, with the material stage's shadow maps and coloured lights. The
   reference gives vanilla's own as the stage's function. `horizon-shader check` takes it; the game refuses a pack
