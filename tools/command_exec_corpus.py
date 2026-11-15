@@ -7329,8 +7329,10 @@ def loaded_wolf_taming():
     """#16709: `TamableAnimal.readAdditionalSaveData` calls `setTame(true, false)` for a wolf with an
     owner, the flag alone, so its max health stays what the save says (the type's 8 when it says
     nothing). Without an owner it calls `setTame(false, true)`, and `Wolf.applyTamingSideEffects`
-    sets the base to 8. Read after summoning and after an unload and reload (frozen, so only the
-    save and the load count)."""
+    sets the base to 8. Read after summoning and after an unload and reload. The reload is not
+    frozen: under `/tick freeze` vanilla unloads the chunk but keeps its entities, so nothing would
+    be loaded again (the `if entity` read shows the wolves gone). The wolf with a saved base of 40
+    and no owner has Health 40 over a max of 8 until that reload's `setHealth` clamps it."""
     x0, y0, z0 = 3968, 260, 3776
     chunk = [[x0 >> 4, z0 >> 4]]
     owner = 'Owner:[I;1,2,3,4],'
@@ -7350,11 +7352,12 @@ def loaded_wolf_taming():
             ops.append(cmd(f'/data get entity {uuid} Health'))
 
     reads()
-    ops += [cmd('/tick freeze', False), cmd(f'/forceload remove {x0} {z0}', False), {'op': 'tick', 'n': 60},
+    ops += [cmd(f'/forceload remove {x0} {z0}', False), {'op': 'tick', 'n': 400},
             cmd(f'/execute unless loaded {x0} {y0} {z0}', expect_result=1),
+            cmd(f'/execute if entity {uuids[0]}'),
             cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk}]
     reads()
-    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]', '/tick unfreeze',
+    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
                        f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} air',
                        f'/forceload remove {x0} {z0}')
 
