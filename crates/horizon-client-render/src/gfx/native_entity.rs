@@ -268,15 +268,11 @@ const FOG: &str = "    let fog = horizon_vanilla_globals.fog;
 ";
 
 /// Under `[frame] fog = "pack"` the stage fogged its own colour: what the glint added fades as
-/// vanilla's fog over it would, `mix(c + g, fog, f)` being `mix(c, fog, f) + (1 - f) g`.
-/// `UNGLINTED` keeps `c` before `GLINT`.
+/// vanilla's fog over it would, `mix(c + g, fog, f)` being `mix(c, fog, f) + (1 - f) g`, by the
+/// stage's own `vanilla_fog` at the fragment. `UNGLINTED` keeps `c` before `GLINT`.
 const UNGLINTED: &str = "    let unglinted = color;\n";
-const PACK_FOG: &str = "    let fog = horizon_vanilla_globals.fog;
-    let f = max(horizon_vanilla_linear_fog(in.fog_distance.x, fog.x, fog.y),
-        horizon_vanilla_linear_fog(in.fog_distance.y, fog.z, fog.w));
-    let fog_color = horizon_vanilla_globals.fog_color;
-    return horizon_vanilla_frame_stored(
-        vec4(mix(color.rgb, unglinted.rgb, f * fog_color.a), color.a));
+const PACK_FOG: &str = "    let f = vanilla_fog(position);
+    return horizon_vanilla_frame_stored(vec4(mix(color.rgb, unglinted.rgb, f), color.a));
 }
 ";
 

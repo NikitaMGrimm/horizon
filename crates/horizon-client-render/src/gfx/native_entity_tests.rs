@@ -127,7 +127,8 @@ fn the_entries_around_a_stage_horizon_fogs_are_unchanged() {
     );
     assert!(!engine.contains("vanilla_fog"));
     let own = entries(OWN_FOG);
-    assert!(own.contains("mix(color.rgb, unglinted.rgb"));
+    assert!(own.contains("    let f = vanilla_fog(position);\n"));
+    assert!(!own.contains("horizon_vanilla_globals.fog"));
 }
 
 /// The kind is written above every bit the entity shaders read of a layer (the overlay, the
