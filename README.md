@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/media/readme/banner-title.webp" alt="Horizon: the game you know, rebuilt in Rust" width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/readme/title-dark.png">
+    <img src="docs/media/readme/title-light.png" alt="Horizon" width="320">
+  </picture>
 </p>
 
 <p align="center">
