@@ -5,6 +5,11 @@ is the guide for pack authors. The design and the pack format are in [api/shader
 signature, input, resource and limit is in the generated
 [api/shaders-reference-0.2.md](api/shaders-reference-0.2.md).
 
+**Shader API 0.1 is retired (#15886).** A 0.1 pack is refused with `needs shader API 0.1; this Horizon serves 0.2`:
+it stays in the list, and the game draws without it. To move one, set `api = "0.2"` and treat colours as linear light,
+as [api/shaders.md](api/shaders.md#shader-api-02-experimental) describes; the example pack Golden Hour 2.0.0 was moved
+that way.
+
 Shader packs in the Iris/OptiFine format are a separate feature with its own loader; this page is only about
 Horizon's own format.
 

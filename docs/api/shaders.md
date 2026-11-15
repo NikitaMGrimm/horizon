@@ -264,10 +264,10 @@ draws them itself (the material stage covers terrain only). The first-person han
 
 ## Changelog
 
-- 2026-11-13: API 0.1 (removed): no build serves it any more. `horizon-shader`, the game and the registry refuse a
-  0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`, and the registry lists 0.2 packs. The 0.1 reference
-  is gone, the templates of `horizon-shader new` are 0.2 packs, and the example pack Golden Hour is its 0.2 port
-  (2.0.0). API 0.2 is unchanged.
+- **2026-11-13: API 0.1 removed (breaking, #15886).** Use shader API 0.2 instead. The game, `horizon-shader` and
+  the registry refuse a 0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`; the game draws without it.
+  [Moving a pack to 0.2](#shader-api-02-experimental) is described above; Golden Hour 2.0.0 is the moved example. The
+  0.1 reference is gone, and the templates of `horizon-shader new` are 0.2 packs. API 0.2 is unchanged.
 - 2026-11-14: API 0.2 (additions, experimental): `[motion]`: the post stage of a pack that sets it gets the motion
   guide, `scene_motion` (binding 14), `fn motion_at(texel: vec2<i32>) -> MotionData` and the `MOTION_CAMERA`,
   `MOTION_OBJECT`, `MOTION_NEW` and `MOTION_NO_HISTORY` kinds: how each pixel's surface moved since last frame, for
