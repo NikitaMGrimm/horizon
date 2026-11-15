@@ -676,6 +676,35 @@ fn a_kept_texture_ping_pongs_and_starts_over_on_a_reset_and_a_new_size() {
     assert!(error.is_none(), "{error:?}");
 }
 
+/// An `rgba32uint` kept texture binds to a post pass as `texture_2d<u32>`, both versions read
+/// with `textureLoad`: zeros, until compute passes write it, across a swap and a clear. Run with
+/// `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn a_post_pass_loads_an_rgba32uint_texture_and_its_previous() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let manifest = "[[resource]]\nname = \"ints\"\nformat = \"rgba32uint\"\nsize = [4, 4]\n\
+                    keep = \"view\"\n[[post]]\nfile = \"l.wgsl\"\nreads = [\"ints\", \"ints_previous\"]\n";
+    let read = "fn post(input: PostInput) -> vec4<f32> {\n    let p = vec2<i32>(input.pixel);\n    \
+                let n = textureLoad(ints, p, 0) + textureLoad(ints_previous, p, 0);\n    \
+                return vec4<f32>(0.5 + f32(n.x + n.w), 0.25, 0.0, 1.0);\n}\n";
+    let frame = Chain::frame(&device, &queue);
+    let post = Chain::post(&device, &frame, manifest, &[("l.wgsl", read)]);
+    let mut chain = Chain::new(&device, frame, post);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    // 0.5 and 0.25, encoded (`horizon_encode`).
+    let shown = [0.5f32, 0.25, 0.0].map(|v| (v.powf(1.0 / 2.2) * 255.0).round() as u8);
+    for epochs in [[1, 1], [1, 1], [2, 1]] {
+        chain.post.kept_frame(epochs, [4, 4]);
+        let got = chain.run(&device, &queue, [4, 4]);
+        let near = got.iter().zip(shown).all(|(g, w)| g.abs_diff(w) <= 1);
+        assert!(near, "{got:?}, {shown:?} expected");
+    }
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
+}
+
 /// Kept resources cost a pack without them nothing: its chain makes one group layout, and on
 /// its first frame a bind group a pass and one for the tonemap, as before them; none on the
 /// next frame. A pack with them makes a group layout a pass besides, and its groups once for
