@@ -4,6 +4,7 @@
 mod check;
 mod compute;
 mod kept;
+mod motion;
 mod names;
 mod package_limits;
 mod reference;
