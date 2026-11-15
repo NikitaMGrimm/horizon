@@ -892,9 +892,12 @@ fn a_pack_s_own_frames_run_its_compute_pass() {
     install(&device, Some(&mut pack.post), None);
     let screen = Screen::new(&device);
     let hud = crate::hud::HudBatch::new([4, 4]);
-    let frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+    let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    for want in [0.25, 0.5, 0.75] {
+    for (n, want) in [(1, 0.25), (2, 0.5), (3, 0.75)] {
+        // A scripted clock: a slow frame on a loaded machine is no pause that resets the store.
+        let timing = crate::gfx::pack_uniforms::FrameTiming::nth(n, 50.0);
+        frame.pack.frame_timing = Some(timing);
         let display = crate::gfx::output::DisplayValues::SDR;
         pack.write(&queue, &frame, [4, 4], display, None);
         let post = &mut pack.post;
