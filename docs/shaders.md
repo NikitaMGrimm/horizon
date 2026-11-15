@@ -242,16 +242,20 @@ let hit = trace(position * 0.99, direction, 64.0);   // hit.distance < 0.0: noth
 `tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent`, `tangent`) and its `position`, `normal`
 and `distance`; `trace_any` only says whether something is in the way, which is all a shadow needs. Origins are camera-relative, as `view_position` gives them, and
 rays pass through the clear texels of leaves and plants, and through water, stained glass and ice, which are in a
-[layer of their own](#layers). Horizon keeps the scene; the look is the pack's: Horizon
+[layer of their own](#layers). `frame.ray_distance` is the distance the scene covers in every direction; a longer ray
+is allowed and may still hit geometry toward the corners, and no clamp is needed. Horizon keeps the scene; the look is the pack's: Horizon
 adds no shadows, bounce light or denoising of its own. The pack never sees the acceleration structure or a ray query,
 and the check refuses a pack that names one itself.
 
 | | |
 | --- | --- |
-| In the scene today | Terrain within 8 chunks of the camera, in two layers: solid terrain (cut-outs and lava included), which `trace` reads, and translucent terrain (water, stained glass, ice), which [`trace_layers`](#layers) reads; `frame.ray_distance` is how far it surely reaches |
-| Not in it yet | Entities, block entities, the hand, distant terrain tiles |
+| In the scene today | Terrain within 8 chunks of the camera, in two layers: solid terrain (cut-outs and lava included), which `trace` reads, and translucent terrain (water, stained glass, ice), which [`trace_layers`](#layers) reads; `frame.ray_distance` is how far it surely reaches. For a pack that names `RAY_ENTITY`, a third layer: [the entities within that reach](#entities), in view or not |
+| Not in it yet | Block entities at rest (a closed chest) or out of view, the hand, distant terrain tiles |
 | Turning it on | Pick the pack and start the game with it, on a GPU and graphics API with hardware ray queries: the device needs them from its creation, so in a game started without them a pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1` asks for ray queries and keeps the scene with any pack or none; any other value of it turns ray tracing off |
 | Without it | The pack loads and runs as it is: `frame.has_ray_tracing` is 0, `trace` misses and `trace_any` is false. Branch on `has_ray_tracing` and keep a look that works without rays. It is also 0 in a pack none of whose stages calls a trace function |
+| Graphics APIs | Vulkan; DirectX 12 where it compiles shaders with DXC (integrated GPUs, or `WGPU_DX12_COMPILER=dxc`), as FXC has no ray queries; Metal on macOS 15 and later where the GPU traces rays from render passes (untested). OpenGL has none |
+| Video memory | About 450 MB more for solid terrain on an RTX 5070 Ti, the same at render distance 12 and 32, since the scene holds 8 chunks whatever the render distance: its vertex store (384 MiB there; it starts at 24 MiB, doubles when full and grows to at most 1.5 GiB) and its acceleration structures (65 MB; 190 MB on DirectX 12). More with water, glass and ice in view: their copy shares the store, which then doubles earlier (+192 MB where it first does) |
+| When video memory runs out | The scene stops growing: sections that don't fit stay out of it, or as they were, or the whole scene stays as it was, until there is room, and the log says so once. Without room for the scene at all, the pack runs as without ray tracing |
 
 A hit also reads the resource packs' LabPBR maps, as a drawn surface does: `hit_normal_map(hit)` and
 `hit_specular_map(hit)` give its sprite's texel at full size, with the same defaults as `block_normal_map` and
@@ -273,14 +277,16 @@ pixel.
 
 ### Layers
 
-The scene has two layers, and a ray reads the ones it names. `trace` and `trace_any` read solid terrain alone;
-`trace_layers(origin, direction, max_distance, layers)` and `trace_any_layers(...)` take the layers, `RAY_SOLID`,
-`RAY_TRANSLUCENT` or both (`RAY_SOLID | RAY_TRANSLUCENT`), and are otherwise the same.
+The scene has two layers, three for a pack that names `RAY_ENTITY`, and a ray reads the ones it names. `trace` and
+`trace_any` read solid terrain alone; `trace_layers(origin, direction, max_distance, layers)` and
+`trace_any_layers(...)` take the layers, `RAY_SOLID`, `RAY_TRANSLUCENT`, `RAY_ENTITY` or several ORed together
+(`RAY_SOLID | RAY_TRANSLUCENT`), and are otherwise the same.
 
 | Layer | Holds | A ray stops |
 | --- | --- | --- |
 | `RAY_SOLID` | What the solid pass draws: opaque blocks, cut-outs (leaves, plants), lava | At an opaque texel, or a cut-out's texel of alpha 0.5 or more: the solid pass's alpha test |
 | `RAY_TRANSLUCENT` | What the translucent pass draws: water, glass and panes, ice, slime and honey blocks; any block whose texture has partly see-through texels | At any texel the translucent pass draws, however faint: only a clear one (alpha below 0.01) lets it through |
+| `RAY_ENTITY` | Only for a pack whose files name it: [the entities within the scene's reach](#entities) | Where vanilla's entity alpha test keeps the pixel: `(texel * tint).a` of 0.1 or more |
 
 A hit in the translucent layer has `translucent` true, `fluid` 1 on water, and its `albedo.a` is the texture's alpha
 there, so a pack decides what the surface does to the ray: a ray over both layers stops at the nearest surface of
@@ -303,6 +309,26 @@ for (var i = 0; i < 2; i++) {
 
 The translucent layer is the terrain's translucent quads as they are meshed: still and flowing water alike. A picture
 made with `trace` and `trace_any` alone is the same with the layer as without it.
+
+#### Entities
+
+`RAY_ENTITY` is the entities' layer. Only a pack whose files name it has it, anywhere outside a comment (dead code
+too): Horizon then builds it every frame, and binds it to the pack's traced stages, which also get `RayHit.entity`.
+Every other pack is built and runs as without it.
+
+| | |
+| --- | --- |
+| In it | Within the scene's reach, mobs, players (third person, and the others), armour stands, item frames, paintings, projectiles, vehicles, falling blocks and block displays, whether the camera draws them this frame or not (behind it, beside it, hidden behind terrain), so turning the camera changes nothing; and the block entities the camera draws with them (a chest while it opens) |
+| Not in it | Particles, world text and name tags, the hand, the camera's own body in first person, items Horizon draws itself (a dropped item, a framed one), translucent items, breaking cracks, entity shadows, energy swirls, beams, portals, lightning, glowing outlines, additive glows; block entities at rest (a closed chest) or out of view |
+| A hit | `entity` true. `albedo` the entity texture's texel in linear light, `tint`, `light` and `uv` its vertices' (the colour vanilla multiplies in, alpha included; block and sky light; the atlas position), `normal` the face's against the ray, `tangent` from its uvs; `material`, `tags`, `emission` and `fluid` 0, `translucent` false, and `hit_normal_map` and `hit_specular_map` give their defaults |
+| A ray stops | Where vanilla's alpha test keeps the entity's pixel, `(texel * tint).a` 0.1 or more, from either side of the face (on the dying dragon's dissolve, where vanilla's mask keeps it). A pack's own `[entity]` alpha is not the layer's: the scene runs no pack code |
+| Cost | For a pack that names the layer: the models of the entities within reach that the camera doesn't draw, posed on the CPU every frame, and one BLAS of the frame's entity quads and the TLAS built again every frame |
+
+A mob's traced shadow on what a post pass lights, starting off the surface as from terrain:
+
+```wgsl
+let shadowed = trace_any_layers(position + normal * 0.01, frame.sun_direction, 64.0, RAY_SOLID | RAY_ENTITY);
+```
 
 **In the material stage.** Translucent terrain (water, stained glass, ice) is blended where `material` shades it and
 leaves no surface for a post pass to light, so that is where its rays go. `input.position` and `input.normal` are
@@ -335,12 +361,12 @@ what a reflected ray hits.
 Shader API 0.2 has the keys for storage a pack keeps between frames and for compute passes: `[[resource]]` (buffers,
 and textures with this frame's and last frame's versions), `[kept] reach`, `[[before_world]]`, `[[post]]` entries
 with `compute = true`, and an option's `resets`. A compute file defines `fn compute(input: ComputeInput)`.
-`horizon-shader check` takes them now, but **they run in a later Horizon**: this game refuses a pack that declares a
-resource or a compute pass. The keys, their limits and the WGSL each pass sees are in the
+The game runs them, except beside `[ray_tracing]`: it refuses a pack that has both, as one that needs a later
+Horizon. The keys, their limits and the WGSL each pass sees are in the
 [reference](api/shaders-reference-0.2.md#kept-resources-and-compute-passes).
 
-Two parts come in later steps, not with these keys: a compute or `[[before_world]]` file doesn't get `trace` or the
-other ray functions under `[ray_tracing]`, and `[material]` can't read kept resources.
+Three parts come in later steps: kept resources beside `[ray_tracing]`, `trace` and the other ray functions in a
+compute or `[[before_world]]` file, and `[material]` reading kept resources.
 
 ## Options
 
