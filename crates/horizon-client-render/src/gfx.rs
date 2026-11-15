@@ -2233,9 +2233,8 @@ fn draws_frame(format: wgpu::TextureFormatFeatures) -> bool {
     )
 }
 
-/// The frame of a renderer made under `HORIZON_HDR_FRAME=float` (docs/design/hdr-linear-light.md)
-/// with a shader API 0.2 pack picked, or with HDR on and no pack: float, so values over 1
-/// survive from the world to the tonemap and the HDR pass.
+/// The frame under a shader API 0.2 pack, or with HDR on and no pack (hdr-linear-light.md):
+/// float, so values over 1 survive from the world to the tonemap and the HDR pass.
 const LINEAR_FRAME: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Opens a device on the first of `backend_order`'s backends that gives one.
@@ -2750,6 +2749,7 @@ impl Renderer {
             hud_layer: coverage_ok,
             held: output::held(settings, hdr_driver.as_deref()),
         };
+        output_caps.log_missing_hdr_frame(previous.is_none());
         let frame = output::resolve_frame(settings, request, output_caps, display, config.format);
         let (frame_format, hud_coverage, overlay_format) =
             (frame.format, frame.hud_layer, frame.overlay_format);
@@ -6979,9 +6979,7 @@ impl Renderer {
         }
         if let Some(native) = &mut self.native {
             native.frame.reset_history();
-            if let Some(post) = &mut native.post {
-                post.reset_history();
-            }
+            native.post.reset_history();
         }
     }
     /// The running shader pack's kind: `iris` (a `shaders/` pack) or `native` (one of
@@ -7184,9 +7182,7 @@ impl Renderer {
             block_light::LightTable,
         )>,
     ) -> std::result::Result<Vec<String>, String> {
-        let linear = pack
-            .as_ref()
-            .is_some_and(|p| p.0.manifest.api == horizon_shader_api::Api::V0_2);
+        let linear = pack.is_some();
         if (linear || self.output.frame.format == LINEAR_FRAME)
             && linear != (self.output.frame.format == LINEAR_FRAME)
             && !std::mem::replace(&mut self.frame_kept_logged, true)
@@ -7221,12 +7217,10 @@ impl Renderer {
             &constants,
             lights,
         )?;
-        self.replace_native(pack.draws().then_some(pack));
-        if self.native.is_some() {
-            self.pack_post = None;
-            self.pack_atlas = None;
-            self.pack_material_atlases = None;
-        }
+        self.replace_native(Some(pack));
+        self.pack_post = None;
+        self.pack_atlas = None;
+        self.pack_material_atlases = None;
         Ok(labels)
     }
     /// What a shader pack's gbuffers programs read from Horizon's geometry: the sky's, and
@@ -7838,7 +7832,7 @@ impl Renderer {
             && !frame.title
             && frame.menu_blur.is_none()
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
-            && self.native.as_ref().is_none_or(|n| n.post.is_none())
+            && self.native.is_none()
             && (self.surface.is_none()
                 || self.config.usage.contains(wgpu::TextureUsages::COPY_DST));
         if !fg {
@@ -7976,7 +7970,7 @@ impl Renderer {
         // TAA runs where the world post pass does, not under a shader pack's own.
         let taa = !frame.title
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
-            && self.native.as_ref().is_none_or(|n| n.post.is_none());
+            && self.native.is_none();
         let hdr_lighting = self.shader_pack_kind().is_none();
         if let Some(hdr) = &mut self.hdr {
             hdr.lighting = hdr_lighting && hdr.look;
@@ -9696,7 +9690,7 @@ impl Renderer {
         // The world's targets: the screen, or the scaled target of `post`.
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         // One of Horizon's own packs reads the same world target.
-        let native_post = !frame.title && self.native.as_ref().is_some_and(|n| n.post.is_some());
+        let native_post = !frame.title && self.native.is_some();
         self.set_up_pack_timing();
         let pack_reads_world = pack_post || native_post;
         laps.lap("r_uploads");
@@ -11209,8 +11203,7 @@ impl Renderer {
         let lifts_world = output::lifts_world(
             frame.title,
             self.output.frame.format == LINEAR_FRAME,
-            self.shader_pack_kind() == Some("iris"),
-            self.native.as_ref().map(|n| n.frame.api),
+            self.shader_pack_kind().is_some(),
         );
         if let Some((color, depth)) = &scaled
             && pack_post
@@ -11339,16 +11332,15 @@ impl Renderer {
         } else if let Some((color, depth)) = &scaled
             && native_post
             && let Some(native) = &mut self.native
-            && native.run_post(native_pack::WorldPost {
+        {
+            native.run_post(native_pack::WorldPost {
                 device: &self.device,
                 encoder: &mut encoder,
                 world: (color, depth),
                 screen: &view_target,
                 size: self.world_post.size().unwrap_or([1, 1]),
                 scene: self.ray_scene.as_ref().map(|s| (s, frame.camera)),
-            })
-        {
-            // The pack's post stage drew the screen in place of the renderer's finish.
+            });
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
             let camera = frame_gen::Camera {
                 jittered,
@@ -11852,10 +11844,7 @@ impl Renderer {
         }
         // The layered frame's light eases into the peak, before the camera overlays draw on it,
         // unless a 0.2 pack's own `[tonemap]` did.
-        let pack_tonemap = self
-            .native
-            .as_ref()
-            .is_some_and(native_pack::NativePack::tonemaps);
+        let pack_tonemap = self.native.as_ref().is_some_and(|n| n.tonemaps());
         if horizon_tone_curve(layered, !frame.title, pack_tonemap)
             && let Some(hdr) = &self.hdr
         {
@@ -12866,8 +12855,8 @@ mod tests {
             }
         }
     }
-    /// A shader API 0.2 pack picked under `HORIZON_HDR_FRAME=float` gets the float frame
-    /// wherever the device draws it, HDR on or off.
+    /// A shader API 0.2 pack picked gets the float frame wherever the device draws it, HDR on
+    /// or off.
     #[test]
     fn a_0_2_pack_gets_the_float_frame_where_the_device_draws_it() {
         use super::{LINEAR_FRAME, frame_format};
@@ -12885,9 +12874,8 @@ mod tests {
             );
         }
     }
-    /// HDR on without a pack under `HORIZON_HDR_FRAME=float` gets the float frame where the
-    /// surface offers HDR output, Smooth Gradients or not; where it doesn't, the frame is as
-    /// without the switch.
+    /// HDR on without a pack gets the float frame where the surface offers HDR output, Smooth
+    /// Gradients or not; where it doesn't, the frame is the swapchain's.
     #[test]
     fn hdr_without_a_pack_gets_the_float_frame_where_hdr_output_is_offered() {
         use super::{LINEAR_FRAME, frame_format};

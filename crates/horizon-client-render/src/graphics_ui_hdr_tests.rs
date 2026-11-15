@@ -29,47 +29,70 @@ fn smooth_gradients_wait_for_a_device_that_draws_the_16_bit_frame() {
     assert_eq!(item.switch(&s, &out), Some(true));
     s.horizon.hdr = HdrMode::Off;
     assert_eq!(item.blocked(&s, &out), Some("Turn HDR on to use it."));
+    // With HDR on it switches a `shaders/` pack's frame only: the layered float frame
+    // of every other picture has no 16-bit one to switch.
+    use crate::gfx::{FrameRequest, HdrOutput, output::tests};
+    s.horizon.hdr = HdrMode::On;
+    let (caps, reading) = tests::window(Some(HdrOutput::Pq), Some(true));
+    let layered = tests::snapshot(&s.horizon, FrameRequest::default(), caps, reading);
+    assert_eq!(
+        item.blocked(&s, &layered),
+        Some("HDR's own frame is smooth without it.")
+    );
+    let shaders_pack = FrameRequest {
+        compatibility: true,
+        ..FrameRequest::default()
+    };
+    let marked = tests::snapshot(&s.horizon, shaders_pack, caps, reading);
+    assert_eq!(item.blocked(&s, &marked), None);
+}
+
+/// On a device that can't draw HDR's frame the whole page waits: the HDR row reads Off and
+/// says why, a press leaves the saved mode alone, and Auto asks for nothing.
+#[test]
+fn hdr_waits_for_a_device_that_draws_its_frame() {
+    use crate::gfx::{HdrOutput, output::tests};
+    let unsupported = "Your GPU or graphics API doesn't support it.";
+    let mut s = Settings::default();
+    for mode in [HdrMode::On, HdrMode::Auto] {
+        s.horizon.hdr = mode;
+        // The display offers HDR and reports it; the device has no layer for the HUD.
+        let (mut caps, reading) = tests::window(Some(HdrOutput::Pq), Some(true));
+        caps.hud_layer = false;
+        let out = tests::snapshot(&s.horizon, Default::default(), caps, reading);
+        assert!(out.hdr_offered() && !out.requests_hdr(mode) && !out.hdr_on());
+        let hdr = Item::Horizon(H::Hdr);
+        assert_eq!(hdr.blocked(&s, &out), Some(unsupported));
+        assert_eq!(hdr.label(&s, &out).plain(), "HDR: Off");
+        for h in [H::HdrCalibrate, H::HdrPeak, H::HdrLighting] {
+            assert_eq!(Item::Horizon(h).blocked(&s, &out), Some(unsupported));
+        }
+        let mut ui = ui();
+        ui.screen.output = out;
+        let [x, y, ..] = row(&mut ui, &s, hdr);
+        assert!(press(&mut ui, &mut s, (x + 8.0, y + 4.0)).is_empty());
+        assert_eq!(s.horizon.hdr, mode);
+    }
 }
 
 #[test]
-fn hdr_lighting_is_greyed_only_where_the_running_pack_lights_the_world() {
-    use horizon_shader_api::Api;
+fn hdr_lighting_is_greyed_only_while_a_pack_runs() {
     let mut s = Settings::default();
     s.horizon.hdr = HdrMode::On;
     let item = Item::Horizon(H::HdrLighting);
     let lights = Some("The shader pack lights the world itself.");
     let out = offering(true, None);
     // No pack running, as with one picked but refused, missing or its mod off: live.
-    assert_eq!(item.blocked(&s, &out.with_pack(false, None)), None);
-    // A 0.1 pack on the 16-bit frame: the light sources and the sun still shine.
-    assert_eq!(
-        item.blocked(&s, &out.with_pack(false, Some(Api::V0_1))),
-        None
-    );
-    assert_eq!(
-        item.blocked(&s, &out.with_pack(false, Some(Api::V0_2))),
-        lights
-    );
-    assert_eq!(item.blocked(&s, &out.with_pack(true, None)), lights);
-    let float = EffectiveOutput {
-        frame: crate::gfx::FrameConfiguration {
-            format: wgpu::TextureFormat::Rgba16Float,
-            ..out.frame
-        },
-        ..out
-    };
-    assert_eq!(
-        item.blocked(&s, &float.with_pack(false, Some(Api::V0_1))),
-        lights
-    );
+    assert_eq!(item.blocked(&s, &out.with_pack(false)), None);
+    assert_eq!(item.blocked(&s, &out.with_pack(true)), lights);
     // HDR's own reasons come first.
     assert_eq!(
-        item.blocked(&s, &NONE.with_pack(true, None)),
+        item.blocked(&s, &NONE.with_pack(true)),
         Some("Your display or system doesn't offer HDR output.")
     );
     s.horizon.hdr = HdrMode::Off;
     assert_eq!(
-        item.blocked(&s, &out.with_pack(true, None)),
+        item.blocked(&s, &out.with_pack(true)),
         Some("Turn HDR on to use it.")
     );
 }

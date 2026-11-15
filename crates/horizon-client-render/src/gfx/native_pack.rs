@@ -19,7 +19,8 @@ pub struct NativePack {
     pub frame: NativeFrame,
     pub sky: Option<NativeSky>,
     pub material: Option<NativeMaterial>,
-    pub post: Option<NativePost>,
+    /// The post chain (none without `[[post]]`), the decode before it and the tonemap after.
+    pub post: NativePost,
     /// With a sky stage, what of Minecraft's sky still draws over it (`[sky]`).
     pub vanilla_clouds: bool,
     pub vanilla_sun: bool,
@@ -37,6 +38,8 @@ pub struct NativePack {
     pub timing: Option<PassTiming>,
     /// It declares `[ray_tracing]`: the renderer keeps a scene for it (`replace_native`).
     pub traces: bool,
+    /// With kept resources, what lets a rebuild keep them (`carry`).
+    kept: Option<super::native_post::kept::Signature>,
 }
 
 /// Whether the option `id` (a bool, or a number above 0) is on, or there is none to ask.
@@ -120,14 +123,30 @@ impl NativePack {
         scene: Option<&RayScene>,
     ) {
         let scene = scene.and_then(|s| s.traced(frame.camera));
-        let post = self
-            .post
-            .as_ref()
-            .and_then(|p| p.trace(queue, scene.as_ref()));
+        let post = self.post.trace(queue, scene.as_ref());
         let material = self.material.as_ref();
         let terrain = material.and_then(|m| m.trace(queue, scene.as_ref()));
         self.frame.ray_distance = post.or(terrain);
         self.frame.write(queue, frame, size, display);
+        if let Some(epochs) = &self.frame.epochs {
+            self.post.kept_frame(epochs.current(), size);
+        }
+    }
+
+    /// Takes the kept resources and epochs of `old`, the pack before, when this one declares
+    /// the same and composes the same stages (an option change rebuilds a pack): then the
+    /// changed options' `resets` clear theirs. Else this pack's stay fresh, loaded.
+    pub(in crate::gfx) fn carry(&mut self, old: &mut NativePack) {
+        let (Some(new), Some(was)) = (&self.kept, &old.kept) else {
+            return;
+        };
+        let Some(epochs) = &mut old.frame.epochs else {
+            return;
+        };
+        if new.carry(was, epochs) {
+            self.post.carry(&mut old.post);
+            self.frame.carry(&mut old.frame);
+        }
     }
 
     /// Joins the frame's group with this frame's `scene` from `camera` for a material stage
@@ -183,6 +202,7 @@ impl NativePack {
         lights: super::block_light::LightTable,
     ) -> Result<(Self, Vec<String>), String> {
         let (globals, format) = (terrain.globals, terrain.format);
+        let kept = super::native_post::kept::Signature::of(&report, constants);
         let textures = super::native_post::pack_textures(device, queue, &report);
         // `[shadow]`, unless its option is off, at the size its options pick.
         let chosen = report
@@ -192,15 +212,16 @@ impl NativePack {
         let settings = chosen
             .as_ref()
             .map(|settings| super::native_shadow::fitted(device, settings));
-        let api = report.manifest.api;
         let mut frame = NativeFrame::new(
             device,
             settings.as_ref(),
             textures,
             lights,
             terrain.pbr,
-            (api, terrain.linear && api == horizon_shader_api::Api::V0_2),
+            terrain.linear,
         );
+        let reach = report.manifest.kept.reach;
+        frame.epochs = (kept.as_ref()).map(|_| super::native_post::kept::Epochs::new(reach));
         // `[displacement]`, unless its option is off; nothing to displace without heights.
         let displacement = report
             .manifest
@@ -324,19 +345,15 @@ impl NativePack {
                 )
             })
             .transpose()?;
-        // A 0.2 pack always has one: its decode and tonemap run without a chain too.
+        // The decode and the tonemap run without a chain too.
         let tonemap = others.iter().find(|s| s.kind == StageKind::Tonemap);
         // A `[ray_tracing]` pack's passes as the check built them against the scene.
         let scenes: Vec<(String, naga::Module)> = post
             .iter_mut()
             .filter_map(|s| Some((s.label.clone(), s.scene.take()?)))
             .collect();
-        let mut post = (!post.is_empty() || api == horizon_shader_api::Api::V0_2)
-            .then(|| {
-                let manifest = &report.manifest;
-                NativePost::new(device, post, manifest, constants, format, &frame, tonemap)
-            })
-            .transpose()?;
+        let manifest = &report.manifest;
+        let mut post = NativePost::new(device, post, manifest, constants, format, &frame, tonemap)?;
         // One scene for every stage, as `frame.has_ray_tracing` says: where the material stage
         // traces and the device refuses its pipelines, the post passes keep missing too.
         let traced = |m: &NativeMaterial| m.scene.is_some();
@@ -344,9 +361,9 @@ impl NativePack {
         let refused = others.iter().any(wanted)
             && super::surface_setup::ray_query::on(device)
             && !material.as_ref().is_some_and(traced);
-        if let Some(post) = post.as_mut().filter(|_| !scenes.is_empty() && !refused) {
+        if !scenes.is_empty() && !refused {
             let shape = super::native_post::trace::TraceShape::of(terrain);
-            if !post.trace_scene(device, scenes, constants, &shape)
+            if !post.trace_scene(device, scenes, constants, &shape, &frame.pbr)
                 && let Some(m) = material.as_mut()
             {
                 m.scene = None;
@@ -360,13 +377,12 @@ impl NativePack {
                 .map(|s| s.label.clone()),
         );
         labels.extend(weather_label);
-        if let Some(post) = &post {
-            labels.extend(post.labels().into_iter().map(str::to_owned));
-        }
+        labels.extend(post.labels().into_iter().map(str::to_owned));
         let pack = Self {
             particle_lights: report.manifest.particle_lights.clone(),
             light_colors: report.manifest.lights.clone(),
             traces: report.manifest.ray_tracing.is_some(),
+            kept,
             frame,
             sky,
             material,
@@ -380,14 +396,6 @@ impl NativePack {
             timing: None,
         };
         Ok((pack, labels))
-    }
-
-    /// Whether the pack draws anything the game runs today.
-    pub fn draws(&self) -> bool {
-        self.sky.is_some()
-            || self.material.is_some()
-            || self.weather.is_some()
-            || self.post.is_some()
     }
 
     /// Writes this frame's inputs, once a frame, and starts timing its passes. Returns
@@ -464,8 +472,7 @@ impl NativePack {
 
     /// The post stage in place of the renderer's own finish of the world: its passes over the
     /// world's scaled target, the last onto the screen, with the history reset still pending.
-    /// False when the pack has none, for the renderer's own finish.
-    pub fn run_post(&mut self, post: WorldPost<'_>) -> bool {
+    pub fn run_post(&mut self, post: WorldPost<'_>) {
         let WorldPost {
             device,
             encoder,
@@ -474,11 +481,8 @@ impl NativePack {
             size,
             scene,
         } = post;
-        let Some(chain) = &mut self.post else {
-            return false;
-        };
         let history_reset = self.frame.take_history_reset();
-        chain.run(
+        self.post.run(
             device,
             encoder,
             (color, depth, &self.frame.surface_view),
@@ -488,12 +492,11 @@ impl NativePack {
             self.timing.as_mut(),
             scene,
         );
-        true
     }
 
     /// Whether the pack's `[tonemap]` takes the place of Horizon's tone curve.
     pub fn tonemaps(&self) -> bool {
-        self.post.as_ref().is_some_and(NativePost::tonemaps)
+        self.post.tonemaps()
     }
 
     /// Times the pack's passes, or stops, as the renderer's settings say, before its world
@@ -645,7 +648,7 @@ file = \"material.wgsl\"
             return;
         };
         let (globals, empty) = terrain_layouts(&device);
-        let report = pack("0.1", "");
+        let report = pack("");
         let built = NativePack::new(
             &device,
             &queue,
@@ -657,11 +660,11 @@ file = \"material.wgsl\"
         assert!(built.is_err(), "the pack should be refused");
     }
 
-    /// A pack of API `api` with a sky stage and the manifest's `stages` after it.
-    fn pack(api: &str, stages: &str) -> horizon_shader_api::Report {
+    /// A pack with a sky stage and the manifest's `stages` after it.
+    fn pack(stages: &str) -> horizon_shader_api::Report {
         use horizon_shader_api::{MANIFEST, Pack, check};
         let manifest = format!(
-            "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"{api}\"\n\
+            "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
              [sky]\nfile = \"sky.wgsl\"\n{stages}"
         );
         let mut files = vec![

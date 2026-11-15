@@ -9,12 +9,12 @@
 //! queries.
 
 use horizon_shader_api::stages::{
-    GROUP, RAY_LAYERS_BINDING, RAY_SCENE_BINDING, RAY_SPACE_BINDING, RAY_SPRITE_ARRAYS,
-    RAY_SPRITES_BINDING, RAY_STORE_BINDING,
+    GROUP, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING, RAY_LAYERS_BINDING, RAY_SCENE_BINDING,
+    RAY_SPACE_BINDING, RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, RAY_STORE_BINDING,
 };
 
 use super::super::native_material::{MaterialPipelines, TerrainShape, terrain_entries};
-use super::{INTERMEDIATE, NativeFrame, NativePost, post_pipeline};
+use super::{NativeFrame, NativePost, post_pipeline};
 pub(in crate::gfx) use crate::gfx::surface_setup::ray_query::ray_scene::{RayScene, Traced};
 
 /// What the scene's passes are built against besides the scene: the terrain's sprites and the
@@ -43,7 +43,8 @@ impl<'a> TraceShape<'a> {
 
 /// What a stage built against the scene reads besides the TLAS and the store.
 pub(in crate::gfx) struct Rays {
-    /// The prelude's `horizon_ray_space`: the camera in the scene's space, then `split`.
+    /// The prelude's `horizon_ray_space`: the camera in the scene's space, `split`, then the
+    /// scene's count of solid instances.
     space: wgpu::Buffer,
     /// The prelude's `horizon_ray_layers`.
     layers: wgpu::Buffer,
@@ -58,6 +59,8 @@ pub(super) struct NativeTrace {
     /// One pipeline a pass, in the passes' order.
     pub(super) pipelines: Vec<wgpu::RenderPipeline>,
     rays: Rays,
+    /// The resource packs' LabPBR maps (`NativeFrame::pbr`), for `hit_normal_map` and its kin.
+    pbr: [wgpu::TextureView; 2],
 }
 
 /// A material stage's terrain pipelines built against the scene, and its frame's group with
@@ -132,19 +135,33 @@ fn scene_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
     entries
 }
 
-/// What `limits` lacks for a fragment stage that reads the group `group` and the other groups'
-/// entries `others`, if anything.
-fn over_limits(
+/// The LabPBR maps of a post pass built against the scene, at the bindings the material stage
+/// has them (`NativeFrame`'s 12 and 13): the post group has none of its own there.
+fn post_pbr_entries() -> [wgpu::BindGroupLayoutEntry; 2] {
+    [PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING].map(|binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            // Sampled with the post stage's `nearest_sampler`.
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2Array,
+            multisampled: false,
+        },
+        count: None,
+    })
+}
+
+/// What `limits` lacks for the shader stage `stage` that reads the group `group` and the other
+/// groups' entries `others`, if anything.
+pub(super) fn over_limits(
     group: &[wgpu::BindGroupLayoutEntry],
     others: &[wgpu::BindGroupLayoutEntry],
     limits: &wgpu::Limits,
+    stage: wgpu::ShaderStages,
 ) -> Option<String> {
-    let fragment = || {
-        (group.iter().chain(others)).filter(|e| e.visibility.contains(wgpu::ShaderStages::FRAGMENT))
-    };
-    let count = |wanted: fn(&wgpu::BindingType) -> bool| {
-        fragment().filter(|e| wanted(&e.ty)).count() as u32
-    };
+    let seen = || (group.iter().chain(others)).filter(|e| e.visibility.contains(stage));
+    let count =
+        |wanted: fn(&wgpu::BindingType) -> bool| seen().filter(|e| wanted(&e.ty)).count() as u32;
     use wgpu::{BindingType::Buffer, BufferBindingType as Kind};
     let needs = [
         (
@@ -179,8 +196,13 @@ fn over_limits(
             limits.max_uniform_buffers_per_shader_stage,
         ),
         (
+            "storage textures",
+            count(|t| matches!(t, wgpu::BindingType::StorageTexture { .. })),
+            limits.max_storage_textures_per_shader_stage,
+        ),
+        (
             "acceleration structures",
-            1,
+            count(|t| matches!(t, wgpu::BindingType::AccelerationStructure { .. })),
             limits.max_acceleration_structures_per_shader_stage,
         ),
         (
@@ -214,7 +236,12 @@ fn with_scene<T>(
     let refused = if shape.sprites.len() < RAY_SPRITE_ARRAYS as usize {
         Some("the terrain's sprite arrays aren't there".to_owned())
     } else {
-        over_limits(&entries, others, &device.limits())
+        over_limits(
+            &entries,
+            others,
+            &device.limits(),
+            wgpu::ShaderStages::FRAGMENT,
+        )
     };
     if let Some(why) = refused {
         log::warn!("Horizon renderer: the shader pack's rays miss everything: {why}");
@@ -239,7 +266,7 @@ fn with_scene<T>(
     let rays = Rays {
         space: device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Native shader pack ray space"),
-            size: 16,
+            size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }),
@@ -258,11 +285,13 @@ fn with_scene<T>(
 }
 
 impl Rays {
-    /// Writes where the camera is in `scene`, and returns this frame's `frame.ray_distance`.
+    /// Writes where the camera is in `scene` and which of its instances are solid terrain's,
+    /// and returns this frame's `frame.ray_distance`.
     fn write(&self, queue: &wgpu::Queue, scene: &Traced<'_>) -> f32 {
-        let mut space = [0u8; 16];
+        let mut space = [0u8; 20];
         space[..12].copy_from_slice(bytemuck::cast_slice(&scene.camera));
-        space[12..].copy_from_slice(&self.split.to_ne_bytes());
+        space[12..16].copy_from_slice(&self.split.to_ne_bytes());
+        space[16..].copy_from_slice(&scene.solid_instances.to_ne_bytes());
         queue.write_buffer(&self.space, 0, &space);
         scene.distance
     }
@@ -304,13 +333,14 @@ impl NativePost {
     /// Builds the passes against the scene from `scenes` (each pass's label and its module
     /// with the scene, in the passes' order), where the device traces rays and takes the
     /// bindings; else the passes keep missing every ray, and the log says why once. Returns
-    /// whether they trace.
+    /// whether they trace. `pbr` is the frame's LabPBR maps (`NativeFrame::pbr`).
     pub(in crate::gfx) fn trace_scene(
         &mut self,
         device: &wgpu::Device,
         scenes: Vec<(String, naga::Module)>,
         constants: &[(String, f64)],
         shape: &TraceShape<'_>,
+        pbr: &[wgpu::TextureView; 2],
     ) -> bool {
         if scenes.len() != self.passes.len() {
             return false;
@@ -324,20 +354,20 @@ impl NativePost {
                 bind_group_layouts: &groups,
                 ..Default::default()
             });
-            // A `[ray_tracing]` pack is 0.2's: every pass draws a half-float target.
-            let target = INTERMEDIATE;
             Ok(scenes
                 .into_iter()
                 .map(|(label, module)| {
-                    post_pipeline(device, &label, &pipeline_layout, module, constants, target)
+                    post_pipeline(device, &label, &pipeline_layout, module, constants)
                 })
                 .collect())
         };
-        let traced = with_scene(device, (&self.entries, &[]), shape, build);
+        let entries = [self.entries.as_slice(), &post_pbr_entries()].concat();
+        let traced = with_scene(device, (&entries, &[]), shape, build);
         self.trace = traced.map(|(layout, pipelines, rays)| NativeTrace {
             layout,
             pipelines,
             rays,
+            pbr: pbr.clone(),
         });
         self.trace.is_some()
     }
@@ -355,9 +385,18 @@ impl NativePost {
 }
 
 impl NativeTrace {
-    /// The scene's entries of a pass's group.
+    /// The scene's entries of a pass's group, and the LabPBR maps'.
     pub(super) fn entries<'a>(&'a self, scene: &Traced<'a>) -> Vec<wgpu::BindGroupEntry<'a>> {
-        self.rays.entries(scene)
+        let mut entries = self.rays.entries(scene);
+        let maps = [PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING].into_iter();
+        entries.extend(
+            maps.zip(&self.pbr)
+                .map(|(binding, view)| wgpu::BindGroupEntry {
+                    binding,
+                    resource: wgpu::BindingResource::TextureView(view),
+                }),
+        );
+        entries
     }
 }
 
@@ -447,6 +486,7 @@ impl NativeFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const FRAGMENT: wgpu::ShaderStages = wgpu::ShaderStages::FRAGMENT;
 
     #[test]
     fn a_sprite_layer_s_words_are_its_material_id_and_its_tags() {
@@ -477,23 +517,84 @@ mod tests {
             max_bindings_per_bind_group: 60,
             ..Default::default()
         };
-        assert_eq!(over_limits(&entries, &[], &fits), None);
+        assert_eq!(over_limits(&entries, &[], &fits, FRAGMENT), None);
         // OpenGL's 16 sampled textures hold the post stage's own 12 or so, not eight more.
         let few = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 8,
             ..fits.clone()
         };
-        let why = over_limits(&entries, &[], &few).unwrap();
+        let why = over_limits(&entries, &[], &few, FRAGMENT).unwrap();
         assert_eq!(why, "9 sampled textures, the device takes 8");
         let none = wgpu::Limits {
             max_acceleration_structures_per_shader_stage: 0,
             ..fits
         };
         assert!(
-            over_limits(&entries, &[], &none)
+            over_limits(&entries, &[], &none, FRAGMENT)
                 .unwrap()
                 .contains("acceleration structures")
         );
+    }
+
+    /// Each stage counts what it sees: a compute pass's storage textures, not the fragment
+    /// stage's textures, and no acceleration structure without the scene.
+    #[test]
+    fn each_stage_counts_its_own_bindings() {
+        let (compute, both) = (
+            wgpu::ShaderStages::COMPUTE,
+            FRAGMENT | wgpu::ShaderStages::COMPUTE,
+        );
+        let at = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty,
+            count: None,
+        };
+        let storage = wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::R32Float,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        };
+        let entries = [
+            at(64, compute, storage),
+            at(66, compute, storage),
+            at(1, both, post_pbr_entries()[0].ty),
+        ];
+        let limits = wgpu::Limits {
+            max_storage_textures_per_shader_stage: 1,
+            max_sampled_textures_per_shader_stage: 1,
+            max_acceleration_structures_per_shader_stage: 0,
+            ..Default::default()
+        };
+        assert_eq!(over_limits(&entries, &[], &limits, FRAGMENT), None);
+        let why = over_limits(&entries, &[], &limits, compute);
+        assert_eq!(
+            why.as_deref(),
+            Some("2 storage textures, the device takes 1")
+        );
+    }
+
+    /// A traced post pass also reads the LabPBR maps: two more sampled textures in its stage,
+    /// at bindings below the scene's that don't raise the group's count.
+    #[test]
+    fn a_traced_post_pass_s_maps_count_toward_its_limits() {
+        let mut entries = scene_entries();
+        entries.extend(post_pbr_entries());
+        let fits = wgpu::Limits {
+            max_sampled_textures_per_shader_stage: 10,
+            max_storage_buffers_per_shader_stage: 2,
+            max_uniform_buffers_per_shader_stage: 1,
+            max_acceleration_structures_per_shader_stage: 1,
+            max_bindings_per_bind_group: 60,
+            ..Default::default()
+        };
+        assert_eq!(over_limits(&entries, &[], &fits, FRAGMENT), None);
+        let few = wgpu::Limits {
+            max_sampled_textures_per_shader_stage: 9,
+            ..fits
+        };
+        let why = over_limits(&entries, &[], &few, FRAGMENT).unwrap();
+        assert_eq!(why, "10 sampled textures, the device takes 9");
     }
 
     /// The terrain's fragment stage reads terrain.wgsl's group 0 besides the frame's group:
@@ -526,21 +627,21 @@ mod tests {
             max_bindings_per_bind_group: 60,
             ..Default::default()
         };
-        assert_eq!(over_limits(&entries, &terrain, &fits), None);
+        assert_eq!(over_limits(&entries, &terrain, &fits, FRAGMENT), None);
         let few = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 17,
             ..fits.clone()
         };
-        let why = over_limits(&entries, &terrain, &few).unwrap();
+        let why = over_limits(&entries, &terrain, &few, FRAGMENT).unwrap();
         assert_eq!(why, "18 sampled textures, the device takes 17");
         // The scene's group without the terrain's would have fitted.
-        assert_eq!(over_limits(&entries, &[], &few), None);
+        assert_eq!(over_limits(&entries, &[], &few, FRAGMENT), None);
         let one = wgpu::Limits {
             max_uniform_buffers_per_shader_stage: 1,
             ..fits
         };
         assert!(
-            over_limits(&entries, &terrain, &one)
+            over_limits(&entries, &terrain, &one, FRAGMENT)
                 .unwrap()
                 .contains("2 uniform buffers")
         );
