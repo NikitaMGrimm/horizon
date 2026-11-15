@@ -1,39 +1,101 @@
 //! A shader pack's kept resources (#16011 item 4): the storage its `[[resource]]`s declare,
-//! made per view, the layout entries a pass binds them with, and what a device lacks for them.
-//! Nothing binds or clears them yet; the game still refuses such a pack.
-use horizon_shader_api::check::CheckedStage;
-use horizon_shader_api::kept::{Dispatch, Format, Kept, Shape};
-use horizon_shader_api::stages::{KeptAccess, KeptBinding, kept_bindings};
+//! made per view when the pack is installed, the layout entries a pass binds them with, what a
+//! device lacks for them, and the epochs that say when they start over; the post chain's passes
+//! bind them, and each frame starts by swapping, fitting and clearing them (`KeptStore::begin`).
+//! Compute passes don't run yet, and the game still refuses such a pack.
+use horizon_shader_api::check::{CheckedStage, Report};
+use horizon_shader_api::kept::{self, Dispatch, Format, Keep, Kept, Shape};
+use horizon_shader_api::stages::{GROUP, KeptAccess, KeptBinding, kept_bindings};
 use horizon_shader_api::{Manifest, StageKind};
 
+use super::{NativePost, Writes};
+
 /// One resource: a buffer, or a texture's two versions, which swap each frame.
-#[cfg_attr(not(test), expect(dead_code, reason = "bound from P4a on"))]
 pub(super) enum Held {
     Buffer(wgpu::Buffer),
-    Pair([wgpu::Texture; 2]),
+    Pair([wgpu::TextureView; 2]),
 }
 
-/// A pack's kept resources for one view, in `[[resource]]` order.
+/// A post pass's kept bindings, and its layouts: the chain's shared entries and those.
+pub(super) struct KeptPass {
+    bindings: Vec<KeptBinding>,
+    pub(super) layout: wgpu::BindGroupLayout,
+    pub(super) pipeline: wgpu::PipelineLayout,
+}
+
+/// A pack's kept resources for one view, in `[[resource]]` order: none made until `allocate`.
 pub(super) struct KeptStore {
     kept: Kept,
     held: Vec<Held>,
     size: [u32; 2],
+    /// This frame's view and world epochs and R, from frame prep (`NativePack::write`).
+    next: ([u32; 2], [u32; 2]),
+    /// Each post pass's bindings and layouts (`chain`); a rebuild carries the rest, not these.
+    passes: Vec<KeptPass>,
+    /// Which version of each texture this frame writes; the other is `_previous`.
+    parity: usize,
+    /// Real frames handed over (`frame`), and the one `begin` last started.
+    serial: u32,
+    begun: u32,
+    /// The epochs the resources were last cleared for.
+    cleared: [u32; 2],
 }
 
 impl KeptStore {
     /// Every resource of `kept`, zeros, the R-relative textures at `scale` of `size` (R).
+    #[cfg(test)]
     pub(super) fn new(device: &wgpu::Device, kept: &Kept, size: [u32; 2]) -> Self {
-        let held = (kept.resources.iter())
-            .map(|r| make(device, &r.name, r.shape, size))
-            .collect();
-        let kept = kept.clone();
-        Self { kept, held, size }
+        let mut store = Self::declared(kept, size);
+        store.allocate(device);
+        store
     }
 
-    /// Remakes the R-relative textures, as zeros, when R changes.
-    pub(super) fn fit(&mut self, device: &wgpu::Device, size: [u32; 2]) {
+    /// The store of `kept` at `size`, nothing made yet.
+    pub(super) fn declared(kept: &Kept, size: [u32; 2]) -> Self {
+        Self {
+            kept: kept.clone(),
+            held: Vec::new(),
+            size,
+            next: ([1, 1], size),
+            passes: Vec::new(),
+            parity: 0,
+            serial: 0,
+            begun: 0,
+            cleared: [1, 1],
+        }
+    }
+
+    /// Makes every resource, zeros, unless they are made.
+    fn allocate(&mut self, device: &wgpu::Device) {
+        if self.held.is_empty() {
+            let (resources, size) = (&self.kept.resources, self.size);
+            self.held = (resources.iter())
+                .map(|r| make(device, &r.name, r.shape, size))
+                .collect();
+        }
+    }
+
+    /// Destroys every resource now, not when the GPU is done with the last frame.
+    fn free(&mut self) {
+        for held in self.held.drain(..) {
+            match held {
+                Held::Buffer(buffer) => buffer.destroy(),
+                Held::Pair(views) => views.iter().for_each(|v| v.texture().destroy()),
+            }
+        }
+    }
+
+    /// Takes this frame's `epochs` (view, world) and R, which it clears and fits by: a real
+    /// frame, which `begin` starts once.
+    pub(super) fn frame(&mut self, epochs: [u32; 2], size: [u32; 2]) {
+        self.next = (epochs, size);
+        self.serial = self.serial.wrapping_add(1);
+    }
+
+    /// Remakes the R-relative textures, as zeros, when R changes; whether it did.
+    pub(super) fn fit(&mut self, device: &wgpu::Device, size: [u32; 2]) -> bool {
         if size == self.size {
-            return;
+            return false;
         }
         self.size = size;
         for (r, held) in self.kept.resources.iter().zip(&mut self.held) {
@@ -41,6 +103,371 @@ impl KeptStore {
                 *held = make(device, &r.name, r.shape, size);
             }
         }
+        true
+    }
+
+    /// Starts a frame of the chain at R `size`: fits R, and once a real frame (however often
+    /// it is called) swaps the textures' versions and clears, in `encoder`, the `keep = "view"`
+    /// resources when the view epoch moved and the `keep = "world"` ones when the world's did.
+    /// Whether textures were remade, so bind groups holding them go.
+    pub(super) fn begin(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+    ) -> bool {
+        let remade = self.fit(device, size);
+        if self.begun == self.serial {
+            return remade;
+        }
+        (self.begun, self.parity) = (self.serial, 1 - self.parity);
+        let epochs = self.next.0;
+        let moved = [0, 1].map(|i| epochs[i] != self.cleared[i]);
+        self.cleared = epochs;
+        for (r, held) in self.kept.resources.iter().zip(&self.held) {
+            if !moved[usize::from(r.keep == Keep::World)] {
+                continue;
+            }
+            match held {
+                Held::Buffer(buffer) => encoder.clear_buffer(buffer, 0, None),
+                // `CLEAR_TEXTURE` is optional: a render pass clears.
+                Held::Pair(views) => {
+                    for view in views {
+                        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Kept resource clear"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            ..Default::default()
+                        }));
+                    }
+                }
+            }
+        }
+        remade
+    }
+}
+
+/// The kept resources of a post chain of the ordinary passes `stages` of `manifest`, each pass's
+/// layouts holding the group's `shared` entries and its kept ones: none without
+/// `[[resource]]`, an error where the device can't run or make them (`unmet`) or the pack has
+/// compute passes.
+pub(super) fn chain(
+    device: &wgpu::Device,
+    manifest: &Manifest,
+    stages: &[CheckedStage],
+    shared: &[wgpu::BindGroupLayoutEntry],
+) -> Result<Option<KeptStore>, String> {
+    let kept = &manifest.kept;
+    if kept.resources.is_empty() {
+        return Ok(None);
+    }
+    if let Some(why) = unmet(device, manifest, stages, shared) {
+        return Err(why);
+    }
+    if manifest.post.iter().any(|p| p.compute) {
+        return Err("compute [[post]] passes don't run yet".into());
+    }
+    let mut store = KeptStore::declared(kept, [1, 1]);
+    store.passes = (manifest.post.iter())
+        .map(|entry| {
+            let bindings = kept_bindings(manifest, entry);
+            let mut entries = shared.to_vec();
+            entries.extend(layout_entries(
+                kept,
+                &bindings,
+                wgpu::ShaderStages::FRAGMENT,
+            ));
+            let label = Some("Native shader pack post, kept");
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label,
+                entries: &entries,
+            });
+            let mut groups: [Option<&wgpu::BindGroupLayout>; GROUP as usize + 1] =
+                Default::default();
+            groups[GROUP as usize] = Some(&layout);
+            let pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label,
+                bind_group_layouts: &groups,
+                ..Default::default()
+            });
+            KeptPass {
+                bindings,
+                layout,
+                pipeline,
+            }
+        })
+        .collect();
+    Ok(Some(store))
+}
+
+/// Where each `[[post]]` entry's `output` draws: one of the pack's `targets`
+/// (`Manifest::post_targets`), a kept texture, or nowhere of its own (the chain).
+pub(super) fn outputs(manifest: &Manifest, targets: &[(&str, f32)]) -> Vec<Option<Writes>> {
+    let kept = |name| (manifest.kept.resources.iter()).position(|r| r.name == name);
+    (manifest.post.iter())
+        .map(|p| {
+            let name = p.output.as_deref()?;
+            let target = targets.iter().position(|t| t.0 == name).map(Writes::Target);
+            target.or_else(|| kept(name).map(Writes::Kept))
+        })
+        .collect()
+}
+
+/// The format a pass that `writes` off the screen draws in: a kept texture's own, else the
+/// chain's.
+pub(super) fn target(kept: &Option<KeptStore>, writes: Writes) -> wgpu::TextureFormat {
+    match (kept, writes) {
+        (Some(k), Writes::Kept(r)) => match k.kept.resources[r].shape {
+            Shape::Fixed { format: f, .. } | Shape::Scaled { format: f, .. } => format(f),
+            Shape::Buffer { .. } => unreachable!("the check takes only a texture as an output"),
+        },
+        _ => super::INTERMEDIATE,
+    }
+}
+
+/// Post pass `pass`'s kept bindings and layouts, if the chain has kept resources (the tonemap,
+/// `None`, has none).
+pub(super) fn pass(kept: &Option<KeptStore>, pass: Option<usize>) -> Option<&KeptPass> {
+    Some(&kept.as_ref()?.passes[pass?])
+}
+
+/// Post pass `pass`'s kept group entries for the frames whose written version is `parity`.
+pub(super) fn entries(
+    kept: &Option<KeptStore>,
+    pass: Option<usize>,
+    parity: usize,
+) -> Vec<wgpu::BindGroupEntry<'_>> {
+    let (Some(k), Some(p)) = (kept, self::pass(kept, pass)) else {
+        return Vec::new();
+    };
+    (p.bindings.iter())
+        .map(|b| wgpu::BindGroupEntry {
+            binding: b.binding,
+            resource: match (&k.held[b.resource], b.access) {
+                (Held::Buffer(buffer), _) => buffer.as_entire_binding(),
+                (Held::Pair(v), KeptAccess::Previous) => {
+                    wgpu::BindingResource::TextureView(&v[1 - parity])
+                }
+                (Held::Pair(v), _) => wgpu::BindingResource::TextureView(&v[parity]),
+            },
+        })
+        .collect()
+}
+
+/// This frame's set of the cached `groups`, one a parity with kept resources.
+pub(super) fn current<'a>(
+    kept: &Option<KeptStore>,
+    groups: &'a [wgpu::BindGroup],
+) -> &'a [wgpu::BindGroup] {
+    let n = groups.len() / (1 + usize::from(kept.is_some()));
+    &groups[kept.as_ref().map_or(0, |k| k.parity) * n..][..n]
+}
+
+/// This frame's version of kept texture `r`, a pass's output.
+pub(super) fn output(kept: &Option<KeptStore>, r: usize) -> &wgpu::TextureView {
+    match kept.as_ref().map(|k| (&k.held[r], k.parity)) {
+        Some((Held::Pair(v), parity)) => &v[parity],
+        _ => unreachable!("an output is a texture of the chain's store"),
+    }
+}
+
+/// Installs the kept resources of `new`, the post stage of the pack that runs from now on,
+/// where `old`'s ran: a store `new` carried over (`NativePack::carry`, before) stays; else
+/// `old`'s is destroyed before `new`'s is made, so a reload never holds two stores, and a pack
+/// that fails to build never makes one.
+pub(in crate::gfx) fn install(
+    device: &wgpu::Device,
+    new: Option<&mut NativePost>,
+    old: Option<&mut NativePost>,
+) {
+    if let Some(store) = old.and_then(|p| p.kept.as_mut()) {
+        store.free();
+    }
+    if let Some(store) = new.and_then(|p| p.kept.as_mut()) {
+        store.allocate(device);
+    }
+}
+
+impl NativePost {
+    /// Takes the kept resources of `old`, the pack this one rebuilds (`NativePack::carry`),
+    /// keeping its own passes' layouts, which its pipelines were made with.
+    pub(in crate::gfx) fn carry(&mut self, old: &mut Self) {
+        if let (Some(new), Some(was)) = (&mut self.kept, &mut old.kept) {
+            std::mem::swap(&mut new.passes, &mut was.passes);
+            std::mem::swap(new, was);
+        }
+    }
+
+    /// Starts this frame's use of the kept resources at R `size` (`KeptStore::begin`).
+    pub(super) fn begin_kept(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+    ) {
+        if (self.kept.as_mut()).is_some_and(|k| k.begin(device, encoder, size)) {
+            self.groups = None;
+        }
+    }
+
+    /// Hands the kept resources this frame's `epochs` (view, world) and R (`NativePack::write`).
+    pub(in crate::gfx) fn kept_frame(&mut self, epochs: [u32; 2], size: [u32; 2]) {
+        if let Some(kept) = &mut self.kept {
+            kept.frame(epochs, size);
+        }
+    }
+}
+
+impl super::NativeFrame {
+    /// Takes the epochs of `old`, the pack this one rebuilds (`NativePack::carry`), and its last
+    /// frame: a pause or a teleport across the rebuild still resets the carried resources.
+    pub(in crate::gfx) fn carry(&mut self, old: &mut Self) {
+        self.epochs = old.epochs.take();
+        self.last = old.last;
+    }
+}
+
+/// Resets that clear the world resources too.
+const WORLD: u32 =
+    kept::REASON_LOAD | kept::REASON_RESET | kept::REASON_WORLD | kept::REASON_TELEPORT;
+
+/// When a pack's kept resources start over (`frame.view_epoch`, `world_epoch`) and why
+/// (`reset_reasons`). An epoch moves on once in a frame that resets it, and is never 0, so a
+/// cell cleared to zeros never matches one.
+pub(in crate::gfx) struct Epochs {
+    view: u32,
+    world: u32,
+    reasons: u32,
+    moves: [bool; 2],
+    /// A teleport further than this, in blocks, resets both.
+    reach: f64,
+    /// Last frame's R and whether it was HDR.
+    seen: Option<([u32; 2], bool)>,
+}
+
+impl Epochs {
+    /// A fresh store's: both 1, loaded. Without `[kept] reach` (no world resources), view
+    /// resources clear on a teleport of 256 blocks (#16011 item 4's example).
+    pub(in crate::gfx) fn new(reach: Option<u32>) -> Self {
+        let reach = f64::from(reach.unwrap_or(256));
+        let (moves, seen) = ([false; 2], None);
+        let (view, world, reasons) = (1, 1, kept::REASON_LOAD);
+        Self {
+            view,
+            world,
+            reasons,
+            moves,
+            reach,
+            seen,
+        }
+    }
+
+    /// A reset for `bits` (`kept::REASON_*`): the view's on any, the world's too on a load,
+    /// reset, world change or teleport.
+    pub(in crate::gfx) fn note(&mut self, bits: u32) {
+        self.reasons |= bits;
+        self.moves[0] = true;
+        self.moves[1] |= bits & WORLD != 0;
+    }
+
+    /// A changed option marked `resets = keep`.
+    fn option(&mut self, keep: Keep) {
+        self.note(kept::REASON_OPTION);
+        self.moves[1] |= keep == Keep::World;
+    }
+
+    /// This frame's `[view_epoch, world_epoch, reset_reasons]`, at R `size`, HDR or not,
+    /// after a pause or not, the camera `moved` blocks since last frame. The reasons are this
+    /// frame's only.
+    pub(super) fn advance(
+        &mut self,
+        size: [u32; 2],
+        hdr: bool,
+        paused: bool,
+        moved: f64,
+    ) -> [u32; 3] {
+        let seen = self.seen.replace((size, hdr));
+        for (bit, reset) in [
+            (kept::REASON_PAUSE, paused),
+            (kept::REASON_SIZE, seen.is_some_and(|s| s.0 != size)),
+            (kept::REASON_DISPLAY, seen.is_some_and(|s| s.1 != hdr)),
+            (kept::REASON_TELEPORT, moved > self.reach),
+        ] {
+            if reset {
+                self.note(bit);
+            }
+        }
+        let next = |e: u32, moves| {
+            if moves {
+                e.checked_add(1).unwrap_or(1)
+            } else {
+                e
+            }
+        };
+        (self.view, self.world) = (
+            next(self.view, self.moves[0]),
+            next(self.world, self.moves[1]),
+        );
+        self.moves = [false; 2];
+        [self.view, self.world, std::mem::take(&mut self.reasons)]
+    }
+
+    /// The epochs (view, world) last advanced to.
+    pub(in crate::gfx) fn current(&self) -> [u32; 2] {
+        [self.view, self.world]
+    }
+}
+
+/// What lets a rebuilt pack keep the kept resources of the pack before (`NativePack::carry`):
+/// the same declaration and composed stages, with its option values and their `resets`.
+pub(in crate::gfx) struct Signature {
+    hash: u64,
+    values: Vec<(String, f64)>,
+    resets: Vec<(String, Keep)>,
+}
+
+impl Signature {
+    /// `report`'s with the option values `constants`, if it declares kept resources.
+    pub(in crate::gfx) fn of(report: &Report, constants: &[(String, f64)]) -> Option<Self> {
+        use std::hash::{Hash, Hasher};
+        let kept = &report.manifest.kept;
+        if kept.resources.is_empty() {
+            return None;
+        }
+        let mut hasher = std::hash::DefaultHasher::new();
+        format!("{kept:?}").hash(&mut hasher);
+        for s in &report.stages {
+            (format!("{:?}", s.kind), &s.file, &s.source, &s.scene_source).hash(&mut hasher);
+        }
+        Some(Self {
+            hash: hasher.finish(),
+            values: constants.to_vec(),
+            resets: kept.resets.clone(),
+        })
+    }
+
+    /// Notes on `epochs` the resets of the options changed since `old`, if the store of `old`
+    /// carries over; else false.
+    pub(in crate::gfx) fn carry(&self, old: &Self, epochs: &mut Epochs) -> bool {
+        if self.hash != old.hash {
+            return false;
+        }
+        let value = |values: &[(String, f64)], id: &str| {
+            values.iter().find(|(k, _)| k == id).map(|(_, v)| *v)
+        };
+        for (id, keep) in &self.resets {
+            if value(&self.values, id) != value(&old.values, id) {
+                epochs.option(*keep);
+            }
+        }
+        true
     }
 }
 
@@ -53,10 +480,77 @@ fn format(format: Format) -> wgpu::TextureFormat {
     }
 }
 
+/// The usages a kept texture is made with: written by compute passes, read by any pass,
+/// cleared by a render pass (`CLEAR_TEXTURE` is optional).
+const TEXTURE_USAGES: wgpu::TextureUsages = wgpu::TextureUsages::STORAGE_BINDING
+    .union(wgpu::TextureUsages::TEXTURE_BINDING)
+    .union(wgpu::TextureUsages::RENDER_ATTACHMENT);
+
+#[cfg(test)]
+thread_local! {
+    /// Usages the probe asks for besides `TEXTURE_USAGES`: a test's stand-in for a device
+    /// that can't make a format so.
+    pub(super) static PROBE_EXTRA: std::cell::Cell<wgpu::TextureUsages> =
+        const { std::cell::Cell::new(wgpu::TextureUsages::empty()) };
+}
+
+/// The first kept texture whose format the device can't make with `TEXTURE_USAGES` (OpenGL ES
+/// without `EXT_color_buffer_float` renders to no 32-bit float format), if any: a 1×1 texture
+/// of each format, made and dropped under an error scope of its own, while the pack builds, so
+/// the pack is refused and the running one keeps its store.
+fn unmade(device: &wgpu::Device, kept: &Kept) -> Option<String> {
+    #[cfg(not(test))]
+    let usage = TEXTURE_USAGES;
+    #[cfg(test)]
+    let usage = TEXTURE_USAGES | PROBE_EXTRA.get();
+    let mut seen = Vec::new();
+    for r in &kept.resources {
+        let Some(f) = r.format().filter(|f| !seen.contains(f)) else {
+            continue;
+        };
+        seen.push(f);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("Kept resource probe"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: format(f),
+                usage,
+                view_formats: &[],
+            })
+            .destroy();
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            return Some(format!(
+                "{}: the device can't make an {} texture to keep: {e}",
+                r.name,
+                f.wgsl()
+            ));
+        }
+    }
+    None
+}
+
+/// `refusal` for `device`, then whether it makes every kept texture's format (`unmade`).
+pub(super) fn unmet(
+    device: &wgpu::Device,
+    manifest: &Manifest,
+    stages: &[CheckedStage],
+    shared: &[wgpu::BindGroupLayoutEntry],
+) -> Option<String> {
+    refusal(&device.limits(), manifest, stages, shared).or_else(|| unmade(device, &manifest.kept))
+}
+
 fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held {
     let pair = |f, [width, height]: [u32; 2]| {
         [0, 1].map(|_| {
-            device.create_texture(&wgpu::TextureDescriptor {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(name),
                 size: wgpu::Extent3d {
                     width,
@@ -67,13 +561,10 @@ fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: format(f),
-                // Written by compute passes, read by any pass, cleared by a render pass
-                // (`CLEAR_TEXTURE` is optional).
-                usage: wgpu::TextureUsages::STORAGE_BINDING
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: TEXTURE_USAGES,
                 view_formats: &[],
-            })
+            });
+            texture.create_view(&Default::default())
         })
     };
     match shape {

@@ -1,10 +1,11 @@
 //! One of Horizon's own shader packs while it runs (docs/shaders.md): the frame its stages
-//! read, its sky, material and post stages, and the timer of their passes.
+//! read, its sky, material, entity and post stages, and the timer of their passes.
 
 use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::{Report, StageKind};
 
 use super::displace::Displacement;
+use super::native_entity::NativeEntity;
 use super::native_material::{DisplacedShape, MaterialPipelines, NativeMaterial, TerrainShape};
 use super::native_post::{NativeFrame, NativePost};
 use super::native_shadow::{NativeShadow, ShadowGrid};
@@ -21,6 +22,7 @@ pub struct NativePack {
     pub frame: NativeFrame,
     pub sky: Option<NativeSky>,
     pub material: Option<NativeMaterial>,
+    pub entity: Option<NativeEntity>,
     /// The post chain (none without `[[post]]`), the decode before it and the tonemap after.
     pub post: NativePost,
     /// With a sky stage, what of Minecraft's sky still draws over it (`[sky]`).
@@ -40,6 +42,8 @@ pub struct NativePack {
     pub timing: Option<PassTiming>,
     /// It declares `[ray_tracing]`: the renderer keeps a scene for it (`replace_native`).
     pub traces: bool,
+    /// With kept resources, what lets a rebuild keep them (`carry`).
+    kept: Option<super::native_post::kept::Signature>,
 }
 
 /// Whether the option `id` (a bool, or a number above 0) is on, or there is none to ask.
@@ -128,6 +132,25 @@ impl NativePack {
         let terrain = material.and_then(|m| m.trace(queue, scene.as_ref()));
         self.frame.ray_distance = post.or(terrain);
         self.frame.write(queue, frame, size, display);
+        if let Some(epochs) = &self.frame.epochs {
+            self.post.kept_frame(epochs.current(), size);
+        }
+    }
+
+    /// Takes the kept resources and epochs of `old`, the pack before, when this one declares
+    /// the same and composes the same stages (an option change rebuilds a pack): then the
+    /// changed options' `resets` clear theirs. Else this pack's stay fresh, loaded.
+    pub(in crate::gfx) fn carry(&mut self, old: &mut NativePack) {
+        let (Some(new), Some(was)) = (&self.kept, &old.kept) else {
+            return;
+        };
+        let Some(epochs) = &mut old.frame.epochs else {
+            return;
+        };
+        if new.carry(was, epochs) {
+            self.post.carry(&mut old.post);
+            self.frame.carry(&mut old.frame);
+        }
     }
 
     /// Joins the frame's group with this frame's `scene` from `camera` for a material stage
@@ -183,6 +206,7 @@ impl NativePack {
         lights: super::block_light::LightTable,
     ) -> Result<(Self, Vec<String>), String> {
         let (globals, format) = (terrain.globals, terrain.format);
+        let kept = super::native_post::kept::Signature::of(&report, constants);
         let textures = super::native_post::pack_textures(device, queue, &report);
         // `[shadow]`, unless its option is off, at the size its options pick.
         let chosen = report
@@ -200,6 +224,8 @@ impl NativePack {
             terrain.pbr,
             terrain.linear,
         );
+        let reach = report.manifest.kept.reach;
+        frame.epochs = (kept.as_ref()).map(|_| super::native_post::kept::Epochs::new(reach));
         // `[displacement]`, unless its option is off; nothing to displace without heights.
         let displacement = report
             .manifest
@@ -323,6 +349,14 @@ impl NativePack {
                 )
             })
             .transpose()?;
+        let entity = others
+            .iter()
+            .find(|s| s.kind == StageKind::Entity)
+            .map(|stage| {
+                let groups = [terrain.entities, terrain.retained_entities];
+                NativeEntity::new(device, format, groups, &frame, stage, constants)
+            })
+            .transpose()?;
         // The decode and the tonemap run without a chain too.
         let tonemap = others.iter().find(|s| s.kind == StageKind::Tonemap);
         // A `[ray_tracing]` pack's passes as the check built them against the scene.
@@ -351,7 +385,10 @@ impl NativePack {
         labels.extend(
             others
                 .iter()
-                .filter(|s| material.is_some() && s.kind == StageKind::Material)
+                .filter(|s| match s.kind {
+                    StageKind::Material => material.is_some(),
+                    kind => kind == StageKind::Entity,
+                })
                 .map(|s| s.label.clone()),
         );
         labels.extend(weather_label);
@@ -361,9 +398,11 @@ impl NativePack {
             particle_lights: report.manifest.particle_lights.clone(),
             light_colors: report.manifest.lights.clone(),
             traces: report.manifest.ray_tracing.is_some(),
+            kept,
             frame,
             sky,
             material,
+            entity,
             post,
             vanilla_clouds,
             vanilla_sun,
@@ -658,6 +697,7 @@ file = \"material.wgsl\"
             sprite_tags: &[],
             sprite_materials: &[],
             entities: empty,
+            retained_entities: empty,
             weather_groups: [empty, empty],
             pbr: None,
         }
