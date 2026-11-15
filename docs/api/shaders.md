@@ -269,6 +269,35 @@ draws them itself (the material stage covers terrain only). The first-person han
   `MOTION_OBJECT`, `MOTION_NEW` and `MOTION_NO_HISTORY` kinds: how each pixel's surface moved since last frame, for
   temporal passes. `horizon-shader check` takes it; the game refuses a pack with `[motion]` until it draws the guide.
   A pack without the key is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
+- 2026-11-13: API 0.2 (additions, experimental, not run yet): compute passes (#16011 item 4). `[[post]]`
+  entries with `compute = true` are dispatches in the chain, with `dispatch` (`[x, y, z]` cells or `"pixels"`),
+  `workgroup`, `reads` and `writes`, at most 8; an ordinary pass lists the kept resources it `reads`. A compute file
+  defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's workgroup size,
+  every invocation running and `in_bounds` false past the dispatch. Each pass's prelude declares only the resources it
+  lists, at group 3 from binding 64. `horizon-shader check` builds compute files as it builds post passes, refuses a
+  file that uses a resource its pass doesn't list, and refuses sampling or gathering an `r32float` or `rgba32float`
+  texture (`textureLoad` only). Compute work is capped at 2^25 invocations a dispatch and 2^26 a frame over every
+  compute pass, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160. Compute files don't get `trace` yet, and `[material]` can't read kept resources yet:
+  both come in later steps. The game refuses a pack with a compute pass until a later Horizon runs it. Packs without
+  them are built from the same WGSL as before, a test holds.
+- 2026-11-13: API 0.2 (additions, experimental, not run yet): kept resources (#16011 item 4). `[[resource]]`
+  declares a buffer (`buffer` bytes of an `element`: `u32`, `atomic<u32>`, `f32`, `vec4<u32>` or `vec4<f32>`) or a
+  texture (`format`: `rgba16float`, `r32float`, `rgba32float` or `rgba32uint`, the last read as `texture_2d<u32>` and
+  written by compute passes only, never an `output`; a fixed `size` or a `scale` of the render size) a
+  pack keeps between frames, `keep = "view"` or `"world"`, the latter fixed in size and with `[kept] reach`. A
+  `[[post]] output` may name a kept texture; an option may say what it `resets`. `horizon-shader check` takes them,
+  with their names, counts and memory checked (at most 8 resources, 32 MiB of buffers, 1 MiB of fixed textures, and
+  R-relative textures two each of the 4 post targets); the game refuses a pack that declares one until a later
+  Horizon runs them. Compute passes and the WGSL that reads the resources come next.
+- 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` the scene holds translucent terrain (water,
+  stained glass, ice) in a second layer. Where `trace` is, the prelude gets
+  `fn trace_layers(origin, direction, max_distance, layers) -> RayHit`, `fn trace_any_layers(...) -> bool` and the
+  constants `RAY_SOLID` and `RAY_TRANSLUCENT` to name the layers with; `trace` and `trace_any` keep reading solid
+  terrain alone, so a picture made with them doesn't change. A hit in the translucent layer has `translucent` true
+  and `fluid` 1 on water; a ray stops there at any texel but a clear one (alpha below 0.01), as the translucent pass
+  draws. The check refuses a pack's own function, constant or post `output` by the four names there, and a
+  `displacement` or `vertex` that reaches the new functions, as `trace`'s. Packs without `[ray_tracing]` are built
+  from the same WGSL as before, a test holds.
 - 2026-11-13: API 0.2 (**breaking**, experimental): the material stage keeps the engine's coverage unless the pack
   declares it, with `[material] coverage`, `"engine"` (the default) or `"pack"`. Under `"engine"` solid and cutout
   terrain's alpha test reads the texture's alpha, not the returned one, translucent terrain is cut on the texture's

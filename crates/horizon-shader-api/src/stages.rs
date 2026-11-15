@@ -3,8 +3,8 @@
 //! pack's files to build a stage: the prelude before (the inputs and the
 //! resources), the entry points after.
 use crate::inputs::{
-    DISPLACEMENT_INPUT, ENTITY_INPUT, Frame, MATERIAL_INPUT, POST_INPUT, RAY_HIT, SKY_INPUT,
-    SURFACE, Struct, TONEMAP_INPUT, VERTEX_INPUT, WEATHER_INPUT,
+    COMPUTE_INPUT, DISPLACEMENT_INPUT, ENTITY_INPUT, Frame, MATERIAL_INPUT, POST_INPUT, RAY_HIT,
+    SKY_INPUT, SURFACE, Struct, TONEMAP_INPUT, VERTEX_INPUT, WEATHER_INPUT,
 };
 use crate::manifest::Api;
 use crate::package::Pack;
@@ -31,6 +31,9 @@ pub enum StageKind {
     /// 0.2: the colour of surfaces that are no block terrain (entities, block entities, items,
     /// particles), before the alpha test, the glint and fog. Checked, not yet drawn.
     Entity,
+    /// 0.2: a dispatch in the post chain (`[[post]] compute = true`), which reads what a post
+    /// pass does. Checked, not yet run; not in `ALL`, since each pass's entry is its own.
+    Compute,
 }
 
 /// A resource a stage reads, declared by its prelude.
@@ -489,7 +492,7 @@ pub enum Tracing {
     /// The pack didn't ask: none of it.
     None,
     /// The pack asked and the scene isn't there (a GPU without ray queries, ray tracing off):
-    /// `trace` and `trace_any` that miss, and nothing a device without ray queries refuses.
+    /// trace functions that miss, and nothing a device without ray queries refuses.
     Stub,
     /// The pack asked and the renderer binds the scene.
     Scene,
@@ -500,28 +503,53 @@ pub enum Tracing {
 pub const RAY_SCENE_BINDING: u32 = 48;
 /// Every traced section's quads as the mesher's vertices (six words each, four a quad).
 pub const RAY_STORE_BINDING: u32 = 49;
-/// `horizon_RaySpace`, 16 bytes: the camera in the scene's space (three floats), then how many
-/// layers a sprite array holds (a `u32`).
+/// `horizon_RaySpace`, 32 bytes: the camera in the scene's space (three floats), how many
+/// layers a sprite array holds (a `u32`), then how many of the scene's instances, its first
+/// ones, are solid terrain's (a `u32`).
 pub const RAY_SPACE_BINDING: u32 = 50;
 /// Two words per sprite layer: the pack's `[[materials]]` id, then its `[[tags]]` bits.
 pub const RAY_LAYERS_BINDING: u32 = 51;
 /// The first of the `RAY_SPRITE_ARRAYS` block sprite arrays, the others after.
 pub const RAY_SPRITES_BINDING: u32 = 52;
 pub const RAY_SPRITE_ARRAYS: u32 = 8;
+/// The scene's layers, as `RAY_LAYERS` declares them to a pack: the bit of each in a ray's cull
+/// mask, which the renderer gives the layer's instances as their mask.
+pub const RAY_SOLID: u32 = 1;
+pub const RAY_TRANSLUCENT: u32 = 2;
 
 /// The directive the scene's prelude starts with: WGSL takes it before any declaration.
 const RAY_ENABLE: &str = "enable wgpu_ray_query;\n";
 
-/// `trace` and `trace_any` without the scene: every ray misses.
-const RAY_STUB: &str = "\
-// The nearest surface from the camera-relative `origin` along the unit vector `direction`,
-// within `max_distance` blocks. The scene isn't there (`frame.has_ray_tracing` is 0): a miss.
+/// The scene's layers and the functions that read solid terrain alone, with the scene or without
+/// it: `trace_layers` and `trace_any_layers` come before (`RAY_SCENE`, `RAY_STUB`).
+const RAY_LAYERS: &str = "\
+// The scene's layers, to OR together for `trace_layers` and `trace_any_layers`: solid terrain
+// (cut-outs too), and what the translucent pass draws (water, stained glass, ice).
+const RAY_SOLID: u32 = 1u;
+const RAY_TRANSLUCENT: u32 = 2u;
+// The nearest solid surface from the camera-relative `origin` along the unit vector `direction`,
+// within `max_distance` blocks; `distance` is negative where there is none.
 fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
+    return trace_layers(origin, direction, max_distance, RAY_SOLID);
+}
+// Whether solid terrain lies within `max_distance` blocks of `origin` along `direction`: a
+// shadow ray, which stops at the first surface it finds.
+fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool {
+    return trace_any_layers(origin, direction, max_distance, RAY_SOLID);
+}
+";
+
+/// `trace_layers` and `trace_any_layers` without the scene: every ray misses.
+const RAY_STUB: &str = "\
+// The nearest surface of `layers` from the camera-relative `origin` along the unit vector
+// `direction`, within `max_distance` blocks. The scene isn't there (`frame.has_ray_tracing` is
+// 0): a miss.
+fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit {
     return RayHit(-1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0),
         vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, vec4<f32>(0.0), 0u);
 }
-// Whether anything lies within `max_distance` blocks of `origin` along `direction`.
-fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool {
+// Whether anything of `layers` lies within `max_distance` blocks of `origin` along `direction`.
+fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool {
     return false;
 }
 ";
@@ -618,14 +646,17 @@ fn hit_specular_map(hit: RayHit) -> vec4<f32> {
 }
 ";
 
-/// `trace` and `trace_any` through the scene the renderer binds (gfx/ray_scene.rs): a hit is a
-/// triangle of a quad in the store, read as terrain.wgsl reads the mesher's vertices.
+/// `trace_layers` and `trace_any_layers` through the scene the renderer binds
+/// (gfx/ray_scene.rs): a hit is a triangle of a quad in the store, read as terrain.wgsl reads
+/// the mesher's vertices.
 const RAY_SCENE: &str = "\
 struct horizon_RaySpace {
     // The camera in the scene's space: from the corner of the scene's anchor column, in blocks.
     camera: vec3<f32>,
     // The layers one sprite array holds (terrain.wgsl's `SPRITE_SPLIT`).
     sprite_split: u32,
+    // The scene's instances of solid terrain, its first ones: the others are translucent terrain.
+    solid_instances: u32,
 }
 @group(3) @binding(48) var horizon_ray_scene: acceleration_structure;
 // Every traced section's quads as `TerrainVertex` (six words: the position, the uv's two u16,
@@ -722,21 +753,27 @@ fn horizon_ray_tangent(t: horizon_RayTriangle, e1: vec3<f32>, e2: vec3<f32>, nor
     let tangent = normalize(along);
     return vec4<f32>(tangent, select(-1.0, 1.0, dot(cross(normal, tangent), dv) >= 0.0));
 }
-// Whether a triangle stops the ray where it crosses it: terrain's cutout test. Bit 15 of the
-// layer marks a quad over opaque texels; another stops it where its texel's alpha is 0.5 or more.
+// Whether a triangle stops the ray where it crosses it, as its pass draws the texel there. Solid
+// terrain's cutout test: bit 15 of the layer marks a quad over opaque texels; another stops it
+// where its texel's alpha is 0.5 or more. Translucent terrain's (terrain.wgsl's
+// `fs_translucent`): every texel but a clear one, alpha below 0.01, stops it.
 fn horizon_ray_stops(c: RayIntersection) -> bool {
     let t = horizon_ray_triangle(c.instance_custom_data, c.primitive_index, c.barycentrics);
     let layer = horizon_ray_word(t.corners.x, 4u) & 0xffffu;
+    if c.instance_index >= horizon_ray_space.solid_instances {
+        return horizon_ray_texel(layer & 0x7fffu, horizon_ray_uv(t)).a >= 0.01;
+    }
     if (layer & 0x8000u) != 0u {
         return true;
     }
     return horizon_ray_texel(layer, horizon_ray_uv(t)).a >= 0.5;
 }
-// The nearest triangle that stops the ray, or with `first` any of them.
-fn horizon_ray_cast(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, first: bool) -> RayIntersection {
+// The nearest triangle of `layers` that stops the ray, or with `first` any of them: an
+// instance's mask is its layer's bit.
+fn horizon_ray_cast(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32, first: bool) -> RayIntersection {
     var query: ray_query;
     let flags = select(RAY_FLAG_NONE, RAY_FLAG_TERMINATE_ON_FIRST_HIT, first);
-    rayQueryInitialize(&query, horizon_ray_scene, RayDesc(flags, 0xffu, 0.0,
+    rayQueryInitialize(&query, horizon_ray_scene, RayDesc(flags, layers & 3u, 0.0,
         max(max_distance, 0.0), origin + horizon_ray_space.camera, direction));
     while rayQueryProceed(&query) {
         if horizon_ray_stops(rayQueryGetCandidateIntersection(&query)) {
@@ -745,10 +782,11 @@ fn horizon_ray_cast(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, 
     }
     return rayQueryGetCommittedIntersection(&query);
 }
-// The nearest surface from the camera-relative `origin` along the unit vector `direction`,
-// within `max_distance` blocks; `distance` is negative where there is none.
-fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
-    let hit = horizon_ray_cast(origin, direction, max_distance, false);
+// The nearest surface of `layers` (`RAY_SOLID`, `RAY_TRANSLUCENT` or both) from the
+// camera-relative `origin` along the unit vector `direction`, within `max_distance` blocks;
+// `distance` is negative where there is none.
+fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit {
+    let hit = horizon_ray_cast(origin, direction, max_distance, layers, false);
     if hit.kind == RAY_QUERY_INTERSECTION_NONE {
         return RayHit(-1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0),
             vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, vec4<f32>(0.0), 0u);
@@ -783,8 +821,8 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
     let flags = horizon_ray_word(t.corners.x, 5u) >> 24u;
     let high = flags >> 4u;
     let fluid_quad = high >= 8u && (high & 7u) < 6u;
-    // The scene holds solid terrain only: water and lava's kind as the solid pass resolves it.
-    let translucent = false;
+    // Water is in the translucent layer and lava in the solid one, as their passes draw them.
+    let translucent = hit.instance_index >= horizon_ray_space.solid_instances;
     let fluid = select(0u, select(2u, 1u, translucent), fluid_quad);
     let code = 15u - (flags & 15u);
     let tier = select(code, code - 4u, code > 4u);
@@ -794,10 +832,10 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
         min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)), material, tags, emission, fluid,
         translucent, horizon_ray_tangent(t, e1, e2, normal), layer);
 }
-// Whether anything lies within `max_distance` blocks of `origin` along `direction`: a shadow
-// ray, which stops at the first surface it finds.
-fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool {
-    return horizon_ray_cast(origin, direction, max_distance, true).kind != RAY_QUERY_INTERSECTION_NONE;
+// Whether anything of `layers` lies within `max_distance` blocks of `origin` along `direction`.
+fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool {
+    return horizon_ray_cast(origin, direction, max_distance, layers, true).kind
+        != RAY_QUERY_INTERSECTION_NONE;
 }
 ";
 
@@ -1087,6 +1125,7 @@ impl StageKind {
             StageKind::Post => "post",
             StageKind::Tonemap => "tonemap",
             StageKind::Entity => "entity",
+            StageKind::Compute => "compute",
         }
     }
 
@@ -1104,31 +1143,36 @@ impl StageKind {
             StageKind::Post => &POST_INPUT,
             StageKind::Tonemap => &TONEMAP_INPUT,
             StageKind::Entity => &ENTITY_INPUT,
+            StageKind::Compute => &COMPUTE_INPUT,
         }
     }
 
-    /// The type the function returns.
+    /// The type the function returns (empty: none).
     pub fn output(self) -> &'static str {
         match self {
+            StageKind::Compute => "",
             StageKind::Material | StageKind::Entity => SURFACE.name,
             StageKind::Vertex | StageKind::Tonemap => "vec3<f32>",
             StageKind::Sky | StageKind::Weather | StageKind::Post => "vec4<f32>",
         }
     }
 
-    /// `fn <name>(input: <Input>) -> <Output>`.
+    /// `fn <name>(input: <Input>) -> <Output>`, without `->` for a function returning nothing.
     pub fn signature(self) -> String {
+        let output = match self.output() {
+            "" => String::new(),
+            ty => format!(" -> {ty}"),
+        };
         format!(
-            "fn {}(input: {}) -> {}",
+            "fn {}(input: {}){output}",
             self.function(),
-            self.input().name,
-            self.output()
+            self.input().name
         )
     }
 
     pub fn resources(self) -> &'static [Resource] {
         match self {
-            StageKind::Post => &POST_RESOURCES,
+            StageKind::Post | StageKind::Compute => &POST_RESOURCES,
             StageKind::Sky | StageKind::Vertex | StageKind::Weather => std::slice::from_ref(&FRAME),
             StageKind::Material => &MATERIAL_RESOURCES,
             StageKind::Tonemap => &TONEMAP_RESOURCES,
@@ -1143,15 +1187,16 @@ impl StageKind {
     }
 
     /// `prelude` with what `tracing` holds of the scene: in every stage the frame's two fields
-    /// for it, and in the post and material stages `RayHit`, `trace`, `trace_any`,
-    /// `hit_normal_map` and `hit_specular_map` (and in the post stage `block_pbr_maps`).
+    /// for it, and in the post and material stages `RayHit`, `trace`, `trace_any`, their
+    /// `_layers` forms with `RAY_SOLID` and `RAY_TRANSLUCENT`, `hit_normal_map` and
+    /// `hit_specular_map` (and in the post stage `block_pbr_maps`).
     pub fn prelude_traced(self, api: Api, tracing: Tracing) -> String {
         let rays = matches!(self, StageKind::Post | StageKind::Material);
         self.prelude_rays(api, tracing, rays)
     }
 
     /// `prelude_traced`, with the ray names only where `rays`: a material stage that calls
-    /// neither `trace` nor `trace_any` is built as it was before them.
+    /// none of the trace functions is built as it was before them.
     fn prelude_rays(self, api: Api, tracing: Tracing, rays: bool) -> String {
         let rays = rays && tracing != Tracing::None;
         let mut out = match tracing {
@@ -1179,7 +1224,7 @@ impl StageKind {
             out += COLOR_HELPERS;
         }
         match self {
-            StageKind::Post => {
+            StageKind::Post | StageKind::Compute => {
                 out += POST_HELPERS;
                 out += POST_SURFACE;
                 out += SHADOW_HELPERS;
@@ -1204,6 +1249,7 @@ impl StageKind {
                 Tracing::Scene => RAY_SCENE,
                 _ => RAY_STUB,
             };
+            out += RAY_LAYERS;
             // The material stage's renderer, or the check's stand-in, reads the LabPBR maps.
             if self == StageKind::Post {
                 out += match tracing {
@@ -1233,6 +1279,8 @@ impl StageKind {
             // 0.1 has no tonemap or entity stage: a manifest with one is refused before it is built.
             (_, StageKind::Tonemap) => TONEMAP_ENTRIES,
             (_, StageKind::Entity) => ENTITY_ENTRIES,
+            // Each compute pass has its own (`compute_entries`).
+            (_, StageKind::Compute) => "",
         }
     }
 }
@@ -1358,19 +1406,111 @@ fn motion_at(texel: vec2<i32>) -> MotionData {
 }
 ";
 
+/// The binding of a pack's first `[[resource]]` in group 3, a texture's last-frame version the
+/// next; the others after, two each.
+pub const KEPT_BINDING: u32 = 64;
+
+/// The declarations of the `[[resource]]`s the pass `stage` lists, part of its prelude: a buffer
+/// as `array<element>`, read-write where written (an `atomic<u32>` read as `u32` where only
+/// read); this frame's texture a storage texture where written, else read as `texture_2d`;
+/// last frame's (`_previous`) read only.
+pub fn kept_declarations(manifest: &crate::manifest::Manifest, stage: &crate::Stage) -> String {
+    use crate::kept::{Element, Shape};
+    let mut out = String::new();
+    for (i, r) in manifest.kept.resources.iter().enumerate() {
+        let (binding, name) = (KEPT_BINDING + 2 * i as u32, &r.name);
+        let (read, written) = (stage.reads.contains(name), stage.writes.contains(name));
+        let ty = match r.shape {
+            Shape::Buffer { element, .. } if written => {
+                format!("var<storage, read_write> {name}: array<{}>", element.wgsl())
+            }
+            Shape::Buffer { element, .. } if read => {
+                let element = match element {
+                    Element::AtomicU32 => Element::U32,
+                    e => e,
+                };
+                format!("var<storage, read> {name}: array<{}>", element.wgsl())
+            }
+            Shape::Fixed { format, .. } | Shape::Scaled { format, .. } if written => {
+                format!("var {name}: texture_storage_2d<{}, write>", format.wgsl())
+            }
+            Shape::Fixed { format, .. } | Shape::Scaled { format, .. } if read => {
+                format!("var {name}: texture_2d<{}>", format.texel())
+            }
+            _ => String::new(),
+        };
+        if !ty.is_empty() {
+            out += &format!("@group({GROUP}) @binding({binding}) {ty};\n");
+        }
+        if let Some(format) = r.format()
+            && stage.reads.contains(&format!("{name}_previous"))
+        {
+            out += &format!(
+                "@group({GROUP}) @binding({}) var {name}_previous: texture_2d<{}>;\n",
+                binding + 1,
+                format.texel()
+            );
+        }
+    }
+    out
+}
+
+/// A compute pass's entry point: its workgroup size, every invocation calling `compute`, with
+/// `in_bounds` false beyond the dispatch's size.
+fn compute_entries(stage: &crate::Stage) -> String {
+    let [x, y, z] = stage.workgroup.unwrap_or([1, 1, 1]);
+    let size = match stage.dispatch {
+        Some(crate::kept::Dispatch::Cells([a, b, c])) => format!("vec3<u32>({a}u, {b}u, {c}u)"),
+        _ => "vec3<u32>(vec2<u32>(frame.resolution), 1u)".to_owned(),
+    };
+    format!(
+        "@compute @workgroup_size({x}, {y}, {z})\n\
+         fn horizon_cs_compute(@builtin(global_invocation_id) cell: vec3<u32>, \
+         @builtin(local_invocation_index) local: u32) {{\n    \
+         let size = {size};\n    \
+         compute(ComputeInput(cell, local, size, all(cell < size)));\n}}\n"
+    )
+}
+
 /// The WGSL of the stage `kind` whose own file is `file`: the prelude, the
 /// pack's shared files in order, the file, then the entry points, all of the pack's line. A
 /// pack with `[ray_tracing]` gets `trace` without the scene (`Tracing::Stub`), which every
 /// device takes.
 pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
-    compose_traced(pack, kind, file, false)
+    compose_traced(pack, kind, file, None, false)
 }
 
 /// `compose` for a pack with `[ray_tracing]` where the renderer binds the scene: its post
-/// stage traces it, and its material stage where that calls `trace` or `trace_any`. Such a
-/// module needs a device with ray queries.
+/// stage traces it, and its material stage where that calls a trace function (`TRACE_NAMES`).
+/// Such a module needs a device with ray queries.
 pub fn compose_scene(pack: &Pack, kind: StageKind, file: &str) -> Composed {
-    compose_traced(pack, kind, file, true)
+    compose_traced(pack, kind, file, None, true)
+}
+
+/// The manifest entry of the stage `kind` whose file is `file`: with `at`, the entry at that
+/// index of its list (`[[post]]` for a post or compute pass), since two entries may share a file
+/// and differ in the rest; else the first.
+pub fn entry<'a>(
+    m: &'a crate::Manifest,
+    kind: StageKind,
+    file: &str,
+    at: Option<usize>,
+) -> Option<&'a crate::Stage> {
+    let (list, compute) = match kind {
+        StageKind::Post => (&m.post, false),
+        StageKind::Compute => (&m.post, true),
+        StageKind::Sky => return m.sky.as_ref(),
+        StageKind::Material => return m.material.as_ref(),
+        StageKind::Vertex => return m.vertex.as_ref(),
+        StageKind::Weather => return m.weather.as_ref(),
+        StageKind::Tonemap => return m.tonemap.as_ref(),
+        StageKind::Entity => return m.entity.as_ref(),
+    };
+    let fits = |s: &&crate::Stage| s.file == file && s.compute == compute;
+    match at {
+        Some(at) => list.get(at).filter(fits),
+        None => list.iter().find(fits),
+    }
 }
 
 /// The names in WGSL `text` outside its comments (block comments nest), each with its byte
@@ -1409,14 +1549,24 @@ pub(crate) fn identifiers(text: &str) -> Vec<(usize, &str)> {
     names
 }
 
-/// Whether a material stage's files, `texts`, name `trace` or `trace_any`: only then does its
-/// prelude have them and the renderer build its terrain against the scene.
+/// The functions that trace a ray.
+const TRACE_NAMES: [&str; 4] = ["trace", "trace_any", "trace_layers", "trace_any_layers"];
+
+/// Whether a material stage's files, `texts`, name a trace function: only then does its prelude
+/// have them and the renderer build its terrain against the scene.
 fn traces<'a>(mut texts: impl Iterator<Item = &'a str>) -> bool {
-    let ray = |(_, name): &(usize, &str)| *name == "trace" || *name == "trace_any";
+    let ray = |(_, name): &(usize, &str)| TRACE_NAMES.contains(name);
     texts.any(|text| identifiers(text).iter().any(ray))
 }
 
-fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Composed {
+/// `compose` (`scene`: `compose_scene`) of the entry `at` of the stage's list (`entry`).
+pub(crate) fn compose_traced(
+    pack: &Pack,
+    kind: StageKind,
+    file: &str,
+    at: Option<usize>,
+    scene: bool,
+) -> Composed {
     let api = pack.manifest.api;
     let tracing = match (&pack.manifest.ray_tracing, scene) {
         (None, _) => Tracing::None,
@@ -1446,15 +1596,7 @@ fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Comp
         .map(String::as_str)
         .filter(|s| *s != file)
         .collect();
-    let stage = match kind {
-        StageKind::Sky => m.sky.as_ref(),
-        StageKind::Material => m.material.as_ref(),
-        StageKind::Vertex => m.vertex.as_ref(),
-        StageKind::Weather => m.weather.as_ref(),
-        StageKind::Post => m.post.iter().find(|s| s.file == file),
-        StageKind::Tonemap => m.tonemap.as_ref(),
-        StageKind::Entity => m.entity.as_ref(),
-    };
+    let stage = entry(m, kind, file, at);
     let extras = stage.into_iter().flat_map(|s| &s.files);
     files.extend(
         extras
@@ -1481,11 +1623,14 @@ fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Comp
     };
     let mut prelude =
         kind.prelude_rays(api, tracing, rays) + &texture_declarations(&pack.manifest.textures);
-    if kind == StageKind::Post {
+    if matches!(kind, StageKind::Post | StageKind::Compute) {
         prelude += &post_target_declarations(&pack.manifest);
-        if api == Api::V0_2 && pack.manifest.motion.is_some() {
-            prelude += MOTION;
-        }
+    }
+    if kind == StageKind::Post && api == Api::V0_2 && pack.manifest.motion.is_some() {
+        prelude += MOTION;
+    }
+    if let Some(stage) = stage {
+        prelude += &kept_declarations(m, stage);
     }
     push("<prelude>", &prelude);
     for f in &files {
@@ -1496,6 +1641,8 @@ fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Comp
             "<entries>",
             &(kind.entries(api).to_owned() + DISPLACEMENT_ENTRIES),
         );
+    } else if let (StageKind::Compute, Some(stage)) = (kind, stage) {
+        push("<entries>", &compute_entries(stage));
     } else {
         push("<entries>", kind.entries(api));
     }

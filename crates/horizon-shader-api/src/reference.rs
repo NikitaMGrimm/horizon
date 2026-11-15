@@ -1,12 +1,17 @@
 //! docs/api/shaders-reference.md (0.1) and shaders-reference-0.2.md, generated from the stages
 //! and inputs this crate defines (`tests/reference.rs` fails when a file drifts).
 use crate::check::{MAX_EXPRESSIONS, MAX_TEXTURE_READS};
-use crate::inputs::{DISPLACEMENT_INPUT, Frame, RAY_HIT, SURFACE, Struct};
+use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT, SURFACE, Struct};
+use crate::kept::{
+    Element, Format, MAX_BUFFER_BYTES, MAX_COMPUTE_POST, MAX_DISPATCH_INVOCATIONS,
+    MAX_FIXED_TEXTURE_BYTES, MAX_FRAME_INVOCATIONS, MAX_RESOURCES, MAX_WORKGROUP,
+    MAX_WORKGROUP_INVOCATIONS, PIXELS_COUNTED_AS,
+};
 use crate::manifest::{Api, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES};
 use crate::package::{MAX_TOTAL, MAX_WGSL};
 use crate::stages::{
-    GROUP, MOTION_BINDING, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING, RAY_SCENE_BINDING,
-    RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
+    GROUP, KEPT_BINDING, MOTION_BINDING, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING,
+    RAY_SCENE_BINDING, RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
 };
 
 fn table(s: &Struct, offsets: Option<&[usize]>) -> String {
@@ -114,33 +119,45 @@ fn ray_tracing() -> String {
     let mut out = String::from(
         "### Ray tracing\n\n\
          With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass or a `[material]` stage) the post\n\
-         stage's prelude also has `RayHit`, `trace`, `trace_any` and the helpers below, so does the material stage's where\n\
-         its files name `trace` or `trace_any`, and the `Frame` of every stage of the pack has `has_ray_tracing` and\n\
-         `ray_distance`. A pack without the key has none of them, and a material stage that names neither function is built\n\
-         as without it.\n\n\
+         stage's prelude also has `RayHit` and the functions and constants below, so does the material stage's where its\n\
+         files name one of the four trace functions, and the `Frame` of every stage of the pack has `has_ray_tracing` and\n\
+         `ray_distance`. A pack without the key has none of them, and a material stage that names no trace function is\n\
+         built as without it.\n\n\
          The game traces for the pack picked when it starts: only then, and only for a pack with `[ray_tracing]`, does it\n\
          ask the GPU for hardware ray queries, where the GPU and graphics API have them. In a game started without them a\n\
          pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1`\n\
          asks for ray queries and keeps the scene with any pack or none; any other value of it turns ray tracing off.\n\n\
-         - `fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit`: the nearest surface from\n  \
-         `origin` (camera-relative, in blocks, as `view_position` gives it) along the unit vector `direction`, within\n  \
+         - `fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit`: the nearest solid surface\n  \
+         from `origin` (camera-relative, in blocks, as `view_position` gives it) along the unit vector `direction`, within\n  \
          `max_distance` blocks.\n\
-         - `fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool`: whether any surface is in\n  \
-         the way: a shadow ray, which stops at the first it finds and reads nothing of it.\n\
+         - `fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool`: whether any solid surface\n  \
+         is in the way: a shadow ray, which stops at the first it finds and reads nothing of it.\n\
+         - `const RAY_SOLID: u32`, `const RAY_TRANSLUCENT: u32`: the scene's two layers, bits to OR together. Solid\n  \
+         terrain, with cut-outs (leaves, plants) and lava; and what the translucent pass draws: water, glass, stained\n  \
+         glass, ice, slime and honey blocks, any block whose texture has partly see-through texels.\n\
+         - `fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit` and\n  \
+         `fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool`: `trace`\n  \
+         and `trace_any` over the layers `layers` names; `trace(o, d, m)` is `trace_layers(o, d, m, RAY_SOLID)`. With no\n  \
+         layer named every ray misses.\n\
          - `fn hit_normal_map(hit: RayHit) -> vec4<f32>`, `fn hit_specular_map(hit: RayHit) -> vec4<f32>`: the resource\n  \
          packs' LabPBR maps at the hit, its sprite's texel at `hit.uv` at full size, as `block_normal_map_level(uv, 0.0)`\n  \
          and `block_specular_map_level(uv, 0.0)` read a drawn surface's; their defaults without maps, and on a miss.\n\
          - In the post stage, `fn block_pbr_maps() -> bool`: whether the resource packs ship LabPBR maps, as the material\n  \
          stage's.\n\n\
-         A ray starts at `origin` itself, so move a point off its own surface before tracing from it. It passes through\n\
-         the clear texels of a cut-out texture (leaves, plants), as terrain's alpha test does: a texel stops it from alpha\n\
-         0.5 up. The scene is Horizon's: the solid terrain around the camera, out to `frame.ray_distance` at least. While\n\
+         A ray starts at `origin` itself, so move a point off its own surface before tracing from it. What stops it is what\n\
+         the surface's own pass draws. In the solid layer it passes through the clear texels of a cut-out texture (leaves,\n\
+         plants), as terrain's alpha test does: a texel stops it from alpha 0.5 up. In the translucent layer every texel\n\
+         stops it, however faint, except a clear one (alpha below 0.01), which the translucent pass doesn't draw either;\n\
+         the hit's `albedo.a` is the texel's alpha and its `translucent` is true. A ray over both layers stops at the\n\
+         nearest surface of either: to go on through a translucent one, trace again from just behind the hit. The scene is\n\
+         Horizon's: the terrain around the camera, out to `frame.ray_distance` at least, without entities, particles,\n\
+         clouds or distant terrain. While\n\
          the game doesn't trace (`frame.has_ray_tracing` is 0) the pack is built and runs all the same, and every ray\n\
          misses. Your files name no ray query of their own (`ray_query`, `acceleration_structure`, `RayDesc`,\n\
          `RayIntersection`, a `rayQuery` function, `enable wgpu_ray_query`): the check refuses them, and an `output`\n\
          named as one of these functions.\n\n\
          In the material stage only `material` traces: `displacement` and the vertex stage's `vertex`, whose files share\n\
-         its module, run in vertex shaders, and the check refuses a pack where either reaches `trace` or `trace_any`.\n\
+         its module, run in vertex shaders, and the check refuses a pack where either reaches a trace function.\n\
          `material` runs for every terrain fragment drawn, so a ray costs more there than in a post pass: keep its rays for\n\
          translucent surfaces (`input.translucent`), which leave no surface for a post pass to light.\n\n",
     );
@@ -152,6 +169,63 @@ fn ray_tracing() -> String {
         RAY_SPRITES_BINDING + RAY_SPRITE_ARRAYS - 1
     );
     out
+}
+
+/// 0.2's kept resources and compute passes, after the post stage.
+fn kept() -> String {
+    let list = |names: Vec<&str>| {
+        let quoted: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+        quoted.join(", ")
+    };
+    let elements = list(Element::ALL.iter().map(|e| e.wgsl()).collect());
+    let formats = list(Format::ALL.iter().map(|f| f.wgsl()).collect());
+    let mut out = format!(
+        "## Kept resources and compute passes\n\n\
+         **Checked, not run yet:** `horizon-shader check` takes these keys, and the game refuses a pack that declares a\n\
+         `[[resource]]` or a compute `[[post]]` entry: it needs a later Horizon.\n\n\
+         - `[[resource]]`: `name`; `buffer` (bytes) with `element` ({elements}), or `format`\n  \
+         ({formats}) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `\"view\"`\n  \
+         (screen history) or `\"world\"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in\n  \
+         blocks, clears it). A texture has this frame's version, `<name>`, and last frame's, `<name>_previous`; a buffer\n  \
+         has one. Both names are free WGSL names, as an `output`'s, and no word WGSL reserves.\n\
+         - `[[post]]` with `compute = true`: a dispatch in the chain where it stands, with `dispatch` (`[x, y, z]` cells,\n  \
+         or `\"pixels\"`, one per texel of the render size), `workgroup = [x, y, z]`, `reads` and `writes`. It has no\n  \
+         `output` or `scale`, isn't the last entry and doesn't advance `previous`. An ordinary pass lists what it `reads`, and its\n  \
+         `output` may name a kept texture, which it draws at that texture's size.\n\
+         - An option's `resets = \"view\"` clears the view's kept resources when the player changes it, `\"world\"` all\n  \
+         of them.\n\n\
+         A pass lists every resource it uses: in `reads` this frame's `x` or last frame's `x_previous`, in `writes` (a\n\
+         compute pass's) `x`, once. An `output` is its pass's write. Its prelude declares only what it lists, so a name\n\
+         it doesn't list is the file's own, and using such a resource is refused as unlisted. The check also refuses a\n\
+         compute pass that writes a texture and reads it back (read `_previous`, or a buffer), and a pass that reads its\n\
+         own `output`.\n\n\
+         A compute file defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's\n\
+         workgroup size. Every invocation of every workgroup runs it, so `var<workgroup>` and `workgroupBarrier()`\n\
+         reductions stay uniform: one beyond the dispatch has `in_bounds` false and touches no resource. A compute\n\
+         `[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`.\n\n\
+         **Not yet, in later steps:** a compute file doesn't get `trace` or the other ray functions under\n\
+         `[ray_tracing]`, and `[material]` can't read kept resources.\n\n"
+    );
+    out += &table(&COMPUTE_INPUT, None);
+    out += &format!(
+        "A pass's prelude declares the resources it lists, the pack's resource i at binding {KEPT_BINDING} + 2i of group\n\
+         {GROUP} and its `_previous` at {} + 2i: a buffer `var<storage, read_write> x: array<element>` where written,\n\
+         `var<storage, read>` where only read (an `atomic<u32>` buffer then reads as `array<u32>`); a texture\n\
+         `texture_storage_2d<format, write>` where written, else `texture_2d<f32>` (`texture_2d<u32>` for\n\
+         `rgba32uint`, which only a compute pass writes). An `r32float`, `rgba32float` or `rgba32uint` texture is read\n\
+         with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.\n\n",
+        KEPT_BINDING + 1
+    );
+    out + &format!(
+        "Limits: {MAX_RESOURCES} resources, {MAX_COMPUTE_POST} compute `[[post]]` entries; {} MiB of buffers and {} KiB of\n\
+         fixed-size textures, both versions counted; each R-relative kept texture takes two of the post targets `output`s share; a workgroup of up to {MAX_WORKGROUP:?} and\n\
+         {MAX_WORKGROUP_INVOCATIONS} invocations; {MAX_DISPATCH_INVOCATIONS} invocations a dispatch and {MAX_FRAME_INVOCATIONS} a frame over every\n\
+         compute pass, counted as whole workgroups, a `\"pixels\"` dispatch as {}×{} (R isn't known at load).\n\n",
+        MAX_BUFFER_BYTES >> 20,
+        MAX_FIXED_TEXTURE_BYTES >> 10,
+        PIXELS_COUNTED_AS[0],
+        PIXELS_COUNTED_AS[1]
+    )
 }
 
 /// 0.2's `[material] coverage`, after the paragraph on what a stage is.
@@ -259,6 +333,7 @@ pub fn markdown(api: Api) -> String {
             StageKind::Weather => "[weather]",
             StageKind::Tonemap => "[tonemap]",
             StageKind::Entity => "[entity]",
+            StageKind::Compute => "[[post]] compute = true",
         };
         out += &format!("| {} | `{key}` | `{}` |\n", kind.name(), kind.signature());
     }
@@ -358,6 +433,7 @@ pub fn markdown(api: Api) -> String {
                     pass reads a blank one in place of the target it writes).\n\n";
             if api == Api::V0_2 {
                 out += &ray_tracing();
+                out += &kept();
                 out += &MOTION_NOTES.replace("{binding}", &MOTION_BINDING.to_string());
             }
         }
