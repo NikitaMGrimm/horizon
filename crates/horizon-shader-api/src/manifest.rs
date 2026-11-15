@@ -62,6 +62,18 @@ pub enum Primaries {
     Bt2020,
 }
 
+/// `[material] coverage` (0.2): which alpha decides whether a point of solid or cutout terrain is
+/// drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Coverage {
+    /// The engine's alpha test on the sampled texture, as Horizon's own terrain: the returned
+    /// alpha is translucent terrain's opacity only, and the stage may not `discard`.
+    #[default]
+    Engine,
+    /// The returned alpha drives the alpha test, and the stage may `discard`. 0.1 always.
+    Pack,
+}
+
 impl Primaries {
     /// `Frame.luminance`: the weights that give a colour's luminance in these primaries.
     pub const fn luminance(self) -> [f32; 3] {
@@ -123,6 +135,8 @@ pub struct Manifest {
     pub blend: Blend,
     /// 0.2: `[frame] primaries`.
     pub primaries: Primaries,
+    /// 0.2: `[material] coverage`; `Pack` on 0.1, whose returned alpha always decides.
+    pub coverage: Coverage,
     pub options: Vec<PackOption>,
     /// How the settings page lays the options out; the first page is the one it opens on.
     /// Empty: one page with every option.
@@ -146,7 +160,25 @@ pub struct Manifest {
     pub shadow: Option<Shadow>,
     /// Relief as geometry near the camera, if the pack asks for it; needs `[material]`.
     pub displacement: Option<Displacement>,
+    /// 0.2: the scene the post stage's `trace` reads, if the pack asks for it; needs `[[post]]`.
+    pub ray_tracing: Option<RayTracing>,
+    /// 0.2: the motion guide the post stage's `motion_at` reads, if the pack asks for it;
+    /// needs `[[post]]`.
+    pub motion: Option<Motion>,
 }
+
+/// `[ray_tracing]` (0.2): the pack's post passes get `trace` and `trace_any`, which read the
+/// terrain around the camera where the device traces rays (`frame.has_ray_tracing`) and miss
+/// where it doesn't. No keys yet.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RayTracing {}
+
+/// `[motion]` (0.2): the pack's post passes get `scene_motion`, `motion_at`, `MotionData` and
+/// the `MOTION_` kinds, how each pixel's surface moved since last frame. No keys yet.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Motion {}
 
 /// `[displacement]`: within `distance` of the camera, the faces of solid terrain whose
 /// resource pack textures have LabPBR heights are drawn as a grid of `cells` by `cells`, each
@@ -390,6 +422,9 @@ pub struct Stage {
     /// (true when absent); false for a pack that fogs its surfaces itself.
     #[serde(default)]
     pub fog: Option<bool>,
+    /// The material stage only (0.2): `"engine"` (when absent) or `"pack"`, `Manifest::coverage`.
+    #[serde(default)]
+    pub coverage: Option<String>,
     /// The sky stage only: whether Minecraft's clouds still draw (true when absent); false for
     /// a pack whose sky draws its own.
     #[serde(default)]
@@ -523,6 +558,8 @@ struct Raw {
     reflection: Option<Reflection>,
     shadow: Option<Shadow>,
     displacement: Option<RawDisplacement>,
+    ray_tracing: Option<RayTracing>,
+    motion: Option<Motion>,
 }
 
 #[derive(Deserialize)]
@@ -556,8 +593,11 @@ struct RawBudget {
 
 /// `[[post]] scale` and `output`: scales from `POST_SCALES`, below 1 only with an output,
 /// the last pass drawing the picture itself, outputs named as WGSL names no other resource
-/// takes, each at one scale, `MAX_POST_TARGETS` at most.
-fn check_post_targets(post: &[Stage]) -> Result<(), String> {
+/// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'; under `[motion]`, nor the
+/// guide's `scene_motion` and `motion_at`), each at one scale, `MAX_POST_TARGETS` at most.
+fn check_post_targets(post: &[Stage], ray_tracing: bool, motion: bool) -> Result<(), String> {
+    let traced = ["trace", "trace_any"];
+    let guide = ["scene_motion", "motion_at"];
     let reserved = [
         "frame",
         "scene_color",
@@ -599,7 +639,10 @@ fn check_post_targets(post: &[Stage]) -> Result<(), String> {
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
             && !name.starts_with("horizon_");
-        if !valid || reserved.contains(&name.as_str()) {
+        let taken = reserved.contains(&name.as_str())
+            || (ray_tracing && traced.contains(&name.as_str()))
+            || (motion && guide.contains(&name.as_str()));
+        if !valid || taken {
             return Err(format!(
                 "{}: output {name:?} is not a free WGSL name ([a-z][a-z0-9_]*, at most 32)",
                 p.file
@@ -646,6 +689,12 @@ impl Manifest {
                 (raw.tonemap.is_some(), "[tonemap]"),
                 (raw.entity.is_some(), "[entity]"),
                 (raw.frame.is_some(), "[frame]"),
+                (raw.ray_tracing.is_some(), "[ray_tracing]"),
+                (raw.motion.is_some(), "[motion]"),
+                (
+                    raw.material.as_ref().is_some_and(|m| m.coverage.is_some()),
+                    "[material] coverage",
+                ),
             ] {
                 if present {
                     return Err(err(format!(
@@ -671,6 +720,12 @@ impl Manifest {
                 ));
             }
             Some(p) => return Err(err(format!("frame.primaries {p:?}: bt709 or bt2020"))),
+        };
+        let coverage = match raw.material.as_ref().and_then(|m| m.coverage.as_deref()) {
+            _ if api == Api::V0_1 => Coverage::Pack,
+            None | Some("engine") => Coverage::Engine,
+            Some("pack") => Coverage::Pack,
+            Some(c) => return Err(err(format!("material.coverage {c:?}: engine or pack"))),
         };
         let id_ok = (1..=64).contains(&raw.id.len())
             && raw
@@ -718,6 +773,18 @@ impl Manifest {
         if raw
             .sky
             .iter()
+            .chain(&raw.vertex)
+            .chain(&raw.weather)
+            .chain(&raw.post)
+            .chain(&raw.tonemap)
+            .chain(&raw.entity)
+            .any(|s| s.coverage.is_some())
+        {
+            return Err(err("`coverage` is a key of [material] only".into()));
+        }
+        if raw
+            .sky
+            .iter()
             .chain(&raw.material)
             .chain(&raw.vertex)
             .chain(&raw.tonemap)
@@ -726,7 +793,18 @@ impl Manifest {
         {
             return Err(err("`scale` and `output` are keys of [[post]] only".into()));
         }
-        check_post_targets(&raw.post).map_err(err)?;
+        check_post_targets(&raw.post, raw.ray_tracing.is_some(), raw.motion.is_some())
+            .map_err(err)?;
+        if raw.ray_tracing.is_some() && raw.post.is_empty() {
+            return Err(err(
+                "[ray_tracing] needs a [[post]] pass: `trace` is the post stage's".into(),
+            ));
+        }
+        if raw.motion.is_some() && raw.post.is_empty() {
+            return Err(err(
+                "[motion] needs a [[post]] pass: the motion guide is the post stage's".into(),
+            ));
+        }
         if raw.post.len() > MAX_POST_PASSES {
             return Err(err(format!(
                 "{} post passes; a pack may chain {MAX_POST_PASSES}",
@@ -779,10 +857,12 @@ impl Manifest {
             }
             options.push(option);
         }
-        if !raw.tags.is_empty() && raw.material.is_none() {
-            return Err(err(
-                "tags are read by the material stage: give it a [material]".into(),
-            ));
+        // `RayHit` has a surface's tags and material id, as `MaterialInput` does.
+        let traced = raw.ray_tracing.is_some();
+        if !raw.tags.is_empty() && raw.material.is_none() && !traced {
+            return Err(err("tags are read by the material stage and by `trace`: \
+                 give it a [material] or a [ray_tracing]"
+                .into()));
         }
         if raw.tags.len() > MAX_TAGS {
             return Err(err(format!(
@@ -806,10 +886,11 @@ impl Manifest {
             }
         }
         let solid_ids = raw.shadow.iter().any(|s| !s.solid_materials.is_empty());
-        if !raw.materials.is_empty() && raw.material.is_none() && !solid_ids {
+        if !raw.materials.is_empty() && raw.material.is_none() && !solid_ids && !traced {
             return Err(err(
-                "materials are read by the material stage and shadow.solid_materials: \
-                 give it a [material] or use them there"
+                "materials are read by the material stage, `trace` and \
+                 shadow.solid_materials: give it a [material] or a [ray_tracing], or use \
+                 them there"
                     .into(),
             ));
         }
@@ -1077,6 +1158,7 @@ impl Manifest {
             entity: raw.entity,
             blend,
             primaries,
+            coverage,
             options,
             pages,
             tags: raw.tags,
@@ -1088,6 +1170,8 @@ impl Manifest {
             reflection: raw.reflection,
             shadow: raw.shadow,
             displacement,
+            ray_tracing: raw.ray_tracing,
+            motion: raw.motion,
         })
     }
 
