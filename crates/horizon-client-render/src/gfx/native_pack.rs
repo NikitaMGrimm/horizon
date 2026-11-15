@@ -128,8 +128,8 @@ impl NativePack {
         let terrain = material.and_then(|m| m.trace(queue, scene.as_ref()));
         self.frame.ray_distance = post.or(terrain);
         self.frame.write(queue, frame, size, display);
-        if let (Some(epochs), Some(post)) = (&self.frame.epochs, &mut self.post) {
-            post.kept_frame(epochs.current(), size);
+        if let Some(epochs) = &self.frame.epochs {
+            self.post.kept_frame(epochs.current(), size);
         }
     }
 
@@ -140,13 +140,11 @@ impl NativePack {
         let (Some(new), Some(was)) = (&self.kept, &old.kept) else {
             return;
         };
-        let (Some(post), Some(old_post), Some(epochs)) =
-            (&mut self.post, &mut old.post, &mut old.frame.epochs)
-        else {
+        let Some(epochs) = &mut old.frame.epochs else {
             return;
         };
         if new.carry(was, epochs) {
-            post.carry(old_post);
+            self.post.carry(&mut old.post);
             self.frame.carry(&mut old.frame);
         }
     }
