@@ -7273,18 +7273,19 @@ def loaded_health_above_max():
     """#16654: `LivingEntity.readAdditionalSaveData` reads `Health` through `setHealth`, which clamps it
     to the max health the saved `attributes` leave. A saved Health Boost doesn't raise that bound: its
     modifier comes back after the read. A slime's saved attributes replace its size's
-    (`AbstractCubeMob.readAdditionalSaveData` sets the size first). Read after summoning, after a tick, after an unload and reload
-    (frozen, so only the save and the load count), and two ticks later."""
+    (`AbstractCubeMob.readAdditionalSaveData` sets the size first). Read after summoning, after a tick,
+    after an unload and reload (frozen, so only the save and the load count), and two ticks later."""
     x0, y0, z0 = 3840, 260, 3776
     chunk = [[x0 >> 4, z0 >> 4]]
     leader = '{id:"minecraft:leader_zombie_bonus",amount:50.0d,operation:"add_value"}'
     boost = 'active_effects:[{id:"minecraft:health_boost",amplifier:4b,duration:100000}]'
+    # Husks, not zombies: a zombie burns in daylight, and takes its first damage at a varying tick.
     subjects = [('cow', 'Health:100.0f'),
-                ('zombie', 'Health:100.0f'),
-                ('zombie', 'Health:15.5f'),
-                ('zombie', 'Health:100.0f,attributes:[{id:"minecraft:max_health",base:100.0d}]'),
-                ('zombie', f'Health:100.0f,attributes:[{{id:"minecraft:max_health",base:20.0d,modifiers:[{leader}]}}]'),
-                ('zombie', f'Health:40.0f,{boost}'),
+                ('husk', 'Health:100.0f'),
+                ('husk', 'Health:15.5f'),
+                ('husk', 'Health:100.0f,attributes:[{id:"minecraft:max_health",base:100.0d}]'),
+                ('husk', f'Health:100.0f,attributes:[{{id:"minecraft:max_health",base:20.0d,modifiers:[{leader}]}}]'),
+                ('husk', f'Health:40.0f,{boost}'),
                 ('iron_golem', 'Health:500.0f'),
                 ('slime', 'Size:3,Health:100.0f'),
                 ('magma_cube', 'Health:2.5f'),
@@ -7315,7 +7316,11 @@ def loaded_health_above_max():
     reads()
     ops += [cmd('/tick unfreeze', False), {'op': 'tick', 'n': 2}]
     reads()
-    return ops + setup(f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
+    box = f'x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16'
+    # A big cube mob killed here would split 20 ticks later, inside the next group.
+    shrink = [f'/execute as @e[type={kind},{box}] run data merge entity @s {{Size:0}}'
+              for kind in ('slime', 'magma_cube', 'sulfur_cube')]
+    return ops + setup(*shrink, f'/kill @e[type=!player,{box}]',
                        f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} air',
                        f'/forceload remove {x0} {z0}')
 
