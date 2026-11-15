@@ -1,7 +1,7 @@
 //! The sun's passes on the float frame, through the actual entity shader and pipelines: a row
 //! of sun texels across the target, over the sky at paper white.
 use super::Celestial;
-use crate::gfx::hdr::{SCENE_PEAK as S, TIERS};
+use crate::gfx::hdr::{SCENE_PEAK as S, SUN_CAP, TIERS};
 use crate::mesher::{LOW, VERY_BRIGHT, Vertex};
 use wgpu::util::DeviceExt;
 
@@ -27,8 +27,14 @@ fn top(c: [f32; 3]) -> f32 {
 }
 
 /// The float frame's stored colour of each texel of `row` drawn by the bodies' passes at `tier`
-/// onto vanilla's `sky`.
-fn draw(lifted: bool, row: &[[u8; 3]], tier: u8, sky: [f32; 3]) -> Option<Vec<[f32; 3]>> {
+/// onto vanilla's `sky`, the sun's disc's peak at `sun_peak`.
+fn draw(
+    lifted: bool,
+    row: &[[u8; 3]],
+    tier: u8,
+    sky: [f32; 3],
+    sun_peak: f32,
+) -> Option<Vec<[f32; 3]>> {
     let (device, queue) = gpu()?;
     let width = row.len() as u32;
     let size = |width| wgpu::Extent3d {
@@ -110,7 +116,7 @@ fn draw(lifted: bool, row: &[[u8; 3]], tier: u8, sky: [f32; 3]) -> Option<Vec<[f
         view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
         hdr_windows: [TIERS.map(|t| t.start), TIERS.map(|t| t.full)],
         hdr_light: [0.0, 0.0, 1.0, 1.0],
-        hdr_settings: [S, 0.0, 1.0, 0.0],
+        hdr_settings: [sun_peak, 0.0, 1.0, 0.0],
         hdr_gains: TIERS.map(|t| t.gain),
         ..bytemuck::Zeroable::zeroed()
     };
@@ -230,7 +236,7 @@ fn draw(lifted: bool, row: &[[u8; 3]], tier: u8, sky: [f32; 3]) -> Option<Vec<[f
 #[test]
 fn the_suns_disc_shows_vanillas_colour_with_white_at_the_peak() {
     for sky in SKIES {
-        let Some(out) = draw(true, &RINGS, VERY_BRIGHT, sky) else {
+        let Some(out) = draw(true, &RINGS, VERY_BRIGHT, sky, S) else {
             eprintln!("celestial GPU unavailable");
             return;
         };
@@ -255,8 +261,8 @@ fn the_halo_and_the_moon_add_as_before_below_the_peak() {
     let row: Vec<_> = std::iter::once(RINGS[0]).chain(halo).collect();
     for sky in SKIES {
         let (Some(sun), Some(added)) = (
-            draw(true, &row, VERY_BRIGHT, sky),
-            draw(false, &row, VERY_BRIGHT, sky),
+            draw(true, &row, VERY_BRIGHT, sky, S),
+            draw(false, &row, VERY_BRIGHT, sky, S),
         ) else {
             eprintln!("celestial GPU unavailable");
             return;
@@ -274,8 +280,8 @@ fn the_halo_and_the_moon_add_as_before_below_the_peak() {
         );
         let moon = [[217, 228, 255], [122, 130, 150], [40, 40, 50]];
         assert_eq!(
-            draw(true, &moon, LOW, sky),
-            draw(false, &moon, LOW, sky),
+            draw(true, &moon, LOW, sky, S),
+            draw(false, &moon, LOW, sky, S),
             "sky {sky:?}: the moon"
         );
     }
@@ -292,7 +298,7 @@ fn a_soft_edged_sun_fades_into_the_sky_without_a_ring() {
         })
         .collect();
     for sky in SKIES {
-        let Some(out) = draw(true, &row, VERY_BRIGHT, sky) else {
+        let Some(out) = draw(true, &row, VERY_BRIGHT, sky, S) else {
             eprintln!("celestial GPU unavailable");
             return;
         };
@@ -305,5 +311,46 @@ fn a_soft_edged_sun_fades_into_the_sky_without_a_ring() {
             light.windows(2).all(smooth),
             "sky {sky:?}: a ring or a step in {light:?}"
         );
+    }
+}
+
+/// A display above the scene's peak (`Hdr::sun_peak`: 1500 nits, and the cap, at a paper white
+/// of 203): the disc's white is the display's, and what isn't the disc is drawn exactly as on a
+/// display at the scene's peak.
+#[test]
+fn on_a_brighter_display_only_the_disc_follows_its_peak() {
+    let halo = [40u8, 36, 27, 19, 10, 4, 1].map(|v| [v, v, v / 2]);
+    let row: Vec<_> = RINGS.into_iter().chain(halo).collect();
+    let moon = [[217, 228, 255], [122, 130, 150], [40, 40, 50]];
+    for peak in [1500.0 / 203.0, SUN_CAP] {
+        for sky in SKIES {
+            let (Some(bright), Some(mastered)) = (
+                draw(true, &row, VERY_BRIGHT, sky, peak),
+                draw(true, &row, VERY_BRIGHT, sky, S),
+            ) else {
+                eprintln!("celestial GPU unavailable");
+                return;
+            };
+            for (ring, stored) in RINGS.iter().zip(&bright) {
+                for c in 0..3 {
+                    let vanilla = (sky[c] + f32::from(ring[c]) / 255.0).min(1.0);
+                    let (got, want) = (stored[c].powf(2.2), peak * vanilla.powf(2.2));
+                    assert!(
+                        (got - want).abs() < 0.005 * peak,
+                        "peak {peak}, sky {sky:?}, ring {ring:?}: {stored:?}"
+                    );
+                }
+            }
+            assert_eq!(
+                bright[RINGS.len()..],
+                mastered[RINGS.len()..],
+                "peak {peak}, sky {sky:?}: the halo"
+            );
+            assert_eq!(
+                draw(true, &moon, LOW, sky, peak),
+                draw(true, &moon, LOW, sky, S),
+                "peak {peak}, sky {sky:?}: the moon"
+            );
+        }
     }
 }
