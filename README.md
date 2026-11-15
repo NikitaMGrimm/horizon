@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <b>Minecraft: Java Edition 26.3, rebuilt from scratch in Rust.</b><br>
-  The same rules and the same terrain, your own worlds, in one native program without Java.
+  <b>Minecraft: Java Edition 26.3 as one native program, without Java.</b><br>
+  Vanilla's terrain, mobs, villagers and redstone in every dimension, and your saves open as they are.
 </p>
 
 <p align="center">
@@ -21,31 +21,16 @@
 <p align="center">
   <a href="https://playhorizon.dev"><b>Website</b></a> ·
   <a href="https://playhorizon.dev/docs/"><b>Docs</b></a> ·
-  <a href="https://playhorizon.dev/docs/install"><b>Install guide</b></a> ·
-  <a href="https://discord.gg/playhorizon"><b>Discord</b></a>
+  <a href="https://playhorizon.dev/docs/install"><b>Install guide</b></a>
 </p>
 
 <p align="center">
-  <img src="docs/media/readme/hero-lookout.webp" alt="A player's view from a wooden lookout over a meadow village: a friend in iron armour stands at the edge, another rides a horse below, and cherry groves, snowy peaks and an ocean run to the horizon" width="100%">
+  <img src="docs/media/readme/hero-lookout.webp" alt="A player's view from a wooden lookout over a village: a friend in iron armour stands at the edge, another rides a horse between the houses below, and forest, snowy peaks and the sea run to the horizon" width="100%">
 </p>
 
-<table align="center">
-  <tr>
-    <td width="50%" valign="top"><b>See farther</b><br><sub>Terrain up to 1,024 chunks away, HDR and controllers.</sub></td>
-    <td width="50%" valign="top"><b>Play together</b><br><sub>Vanilla and Horizon servers, LAN, or a code from a friend.</sub></td>
-  </tr>
-  <tr>
-    <td valign="top"><b>Your worlds</b><br><sub>Survival, creative and hardcore, and your saves open as they are.</sub></td>
-    <td valign="top"><b>Same terrain</b><br><sub>Vanilla world generation in every dimension.</sub></td>
-  </tr>
-  <tr>
-    <td valign="top"><b>Same mobs</b><br><sub>Attributes, spawn rules and mob AI match vanilla.</sub></td>
-    <td valign="top"><b>Same rules</b><br><sub>Villagers and redstone work as they do in vanilla.</sub></td>
-  </tr>
-</table>
-
 <p align="center">
-  <img src="docs/media/readme/hero-nether.webp" alt="A player's view from a strider on a lava sea in the Nether, behind a friend riding another strider toward a lavafall and a crimson forest" width="100%">
+  <b>See farther</b> · terrain up to 1,024 chunks away, HDR and controllers<br>
+  <b>Play together</b> · vanilla and Horizon servers, LAN, or a code from a friend
 </p>
 
 <p align="center">
