@@ -1050,7 +1050,6 @@ fn entity_coverage_is_the_texture_s_and_the_layer_s_unless_the_pack_declares_its
     let hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
     let globals = super::super::Globals {
         filtering: [0.0, 1.0, 0.0, 0.0],
-        hdr_windows: hdr.windows(),
         ..bytemuck::Zeroable::zeroed()
     };
     let background = [0.0, 0.0, 0.25, 0.5];
