@@ -188,7 +188,8 @@ impl Retained {
                 self.slots.free(key);
                 continue;
             }
-            let Some(first) = self.slots.alloc(key, quads.len() as u64) else {
+            // The store grows below, after the loop, with every slot's contents copied over.
+            let Some(first) = self.slots.alloc(key, quads.len() as u64, |_| true) else {
                 // The store is at its largest: the section keeps its old BLAS, if it has one,
                 // and waits for room.
                 if !std::mem::replace(&mut self.full_logged, true) {

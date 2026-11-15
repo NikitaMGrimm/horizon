@@ -7,7 +7,9 @@ use crate::kept::{
     MAX_DISPATCH_INVOCATIONS, MAX_FIXED_TEXTURE_BYTES, MAX_FRAME_INVOCATIONS, MAX_RESOURCES,
     MAX_WORKGROUP, MAX_WORKGROUP_INVOCATIONS, PIXELS_COUNTED_AS, REASONS,
 };
-use crate::manifest::{API, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES};
+use crate::manifest::{
+    API, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES, MAX_POST_TARGETS, POST_TARGET_BUDGET,
+};
 use crate::package::{MAX_TOTAL, MAX_WGSL};
 use crate::stages::{
     GROUP, KEPT_BINDING, MOTION_BINDING, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING,
@@ -191,8 +193,8 @@ fn kept() -> String {
     let formats = list(Format::ALL.iter().map(|f| f.wgsl()).collect());
     let mut out = format!(
         "## Kept resources and compute passes\n\n\
-         **Checked, not run yet:** `horizon-shader check` takes these keys, and the game refuses a pack that declares a\n\
-         `[[resource]]`, a `[[before_world]]` entry or a compute `[[post]]` entry: it needs a later Horizon.\n\n\
+         Not yet with `[ray_tracing]`: the game refuses a pack that has it beside a `[[resource]]`, a `[[before_world]]` entry\n\
+         or a compute `[[post]]` entry, as one that needs a later Horizon.\n\n\
          - `[[resource]]`: `name`; `buffer` (bytes) with `element` ({elements}), or `format`\n  \
          ({formats}) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `\"view\"`\n  \
          (screen history) or `\"world\"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in\n  \
@@ -254,12 +256,12 @@ fn kept() -> String {
     }
     out + &format!(
         "\nLimits: {MAX_RESOURCES} resources, {MAX_BEFORE_WORLD} `[[before_world]]` entries, {MAX_COMPUTE_POST} compute\n\
-         `[[post]]` entries; {} MiB of buffers and {} KiB of fixed-size textures, both versions counted; each R-relative\n\
-         kept texture takes two of the post targets `output`s share; a workgroup of up to {MAX_WORKGROUP:?} and\n\
+         `[[post]]` entries; {} MiB of buffers and {} MiB of fixed-size textures, both versions counted; each R-relative\n\
+         kept texture takes 2 of the post targets' budget (Limits); a workgroup of up to {MAX_WORKGROUP:?} and\n\
          {MAX_WORKGROUP_INVOCATIONS} invocations; {MAX_DISPATCH_INVOCATIONS} invocations a dispatch and {MAX_FRAME_INVOCATIONS} a frame over every\n\
          compute pass, `[[before_world]]` and `[[post]]` together, counted as whole workgroups, a `\"pixels\"` dispatch as {}×{} (R isn't known at load).\n\n",
         MAX_BUFFER_BYTES >> 20,
-        MAX_FIXED_TEXTURE_BYTES >> 10,
+        MAX_FIXED_TEXTURE_BYTES >> 20,
         PIXELS_COUNTED_AS[0],
         PIXELS_COUNTED_AS[1]
     )
@@ -279,14 +281,25 @@ terrain, below 0.01 on translucent) and the stage may `discard`. Normal and para
 silhouette needs no `\"pack\"`, and neither do `[vertex]` and `[displacement]`, which move geometry, not coverage.
 The stage writes no depth of its own either way.
 
+## `[entity] coverage`
+
+The same rule for what the entity stage draws, without translucent terrain's exception. Under `coverage = \"engine\"`
+(the default) Horizon keeps its own coverage of each entity: the texture's alpha times the layer's opacity (the
+vertex alpha: a mob's translucent layer, a fading warden) is cut below 0.1 and is the alpha the layer blends by;
+dissolve masks, back-face culling and the rest of Horizon's cuts stay Horizon's. The alpha `entity` returns is
+ignored, and `entity`, and every function it calls, may not `discard`: the check refuses it. A pack that cuts or
+fades entities itself sets `coverage = \"pack\"`: the returned alpha is then cut below 0.1 and blends, and the stage
+may `discard`. Horizon's own cuts run under either.
+
 ";
 
 /// The entity stage's notes, after its input: what it returns, and vanilla's own.
 const ENTITY_NOTES: &str = "\
 `entity` lights what is no block terrain: `input.kind` says which. It returns the same `Surface` as `material` (rgb
-linear light, 0 or more and unbounded; alpha its coverage), so a pack writes its lighting once and calls it from both
-stages. Around it Horizon keeps vanilla's order: the alpha test on the returned alpha, then the enchantment glint
-added on top, then fog. A pack without `[entity]` is drawn as before, and sees none of this stage's names; the rule
+linear light, 0 or more and unbounded; its alpha read only under `[entity] coverage = \"pack\"`), so a pack writes
+its lighting once and calls it from both stages. Around it Horizon keeps vanilla's order: the alpha test (on the
+texture and the layer's opacity, or under `\"pack\"` on the returned alpha), then the enchantment glint added on top,
+then fog. A pack without `[entity]` is drawn as before, and sees none of this stage's names; the rule
 for new names holds for the stage as for the others.
 
 **What the game draws through the stage so far: entities and block entities** (`kind` 0 and 1). Until a later
@@ -491,6 +504,9 @@ pub fn markdown() -> String {
          | `choice` | `values`, `default` (one of them) | `override <id>: u32`, the value's index |\n\n\
          ## Limits\n\n\
          - {MAX_POST_PASSES} post passes, {MAX_OPTIONS} options, `budget.gpu_ms` up to {MAX_GPU_MS}.\n\
+         - Post targets: {MAX_POST_TARGETS} `output`s, and {POST_TARGET_BUDGET} render-size `rgba16float` textures of memory with the\n  \
+         R-relative kept textures: an `output` takes its `scale`² (1, 0.25 or 0.0625), an R-relative kept texture 2 (its\n  \
+         two versions, at any format and scale).\n\
          - {} KiB per WGSL file, {} MiB per pack.\n\
          - Per stage: {MAX_EXPRESSIONS} naga expressions over all its functions, {MAX_TEXTURE_READS} texture reads (samples,\n  \
          gathers and loads, the prelude's included).\n\n\

@@ -28,6 +28,7 @@ use horizon_core::{
 };
 use horizon_world::registry::BlockStateId;
 use std::{collections::HashMap, sync::Arc};
+mod block_effects;
 mod cells;
 mod hit;
 mod index;
@@ -144,6 +145,8 @@ pub(super) struct Minecart {
     /// `Entity.ticksFrozen` (`TicksFrozen` in its save): powder snow builds
     /// it up (`InsideBlockEffectType.FREEZE`), a cart never melts it.
     pub ticks_frozen: i32,
+    /// The cactus hits its `applyEffectsFromBlocks` met this tick, taken once it is stored.
+    pub cactus_hits: u32,
     pub items: Vec<Option<ItemStack>>,
     /// Furnace minecarts: fuel ticks and `MinecartFurnace.push`. Its y part
     /// stays between ticks (it sets the push's length), only saving drops it.
@@ -378,6 +381,7 @@ impl Minecart {
             damage: 0.0,
             no_gravity: false,
             ticks_frozen: 0,
+            cactus_hits: 0,
             items: vec![None; kind.slots()],
             fuel: 0,
             push: Vec3::ZERO,
@@ -1290,43 +1294,20 @@ impl Game<'_> {
             );
         }
     }
-    /// `applyEffectsFromBlocks` for a cart: a bubble column lifts or drags it
-    /// and resets the fall distance.
-    fn cart_block_effects(&self, c: &mut Minecart) {
-        if c.push_by_bubble_column(
-            &self.world,
-            self.pack.assets.registry,
-            self.res.facts(),
-            self.collision,
-        ) {
-            c.fall_distance = 0.0;
+    /// `Entity.clearFire` for a cart. The only fire a cart has here is the
+    /// `Fire` it was loaded with, which its save writes back.
+    fn clear_cart_fire(&mut self, id: u32) {
+        if let Some(horizon_world::nbt::Tag::Compound(map)) = self.persist.raw.get_mut(&id) {
+            map.remove(&"Fire".into());
         }
-        // PowderSnowBlock's FREEZE contact is counted here too.
-        // WebBlock.entityInside: makeStuckInBlock(0.25, 0.05, 0.25) for every
-        // cobweb the box (deflated by 1.0E-5) is in; it resets the fall distance.
-        let b = c.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
-        let (lo, hi) = (b.min_position(), b.max_position());
-        let facts = self.res.facts();
-        let mut froze = false;
-        for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
-            for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
-                for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                    let name = &*facts.get(self.world.block(x, y, z)).name;
-                    if name == "minecraft:powder_snow" {
-                        froze = true;
-                    }
-                    if name == "minecraft:cobweb" {
-                        c.fall_distance = 0.0;
-                        c.stuck = Vec3::new(0.25, f64::from(0.05_f32), 0.25);
-                    }
-                }
-            }
-        }
-        if froze {
-            // InsideBlockEffectType.FREEZE: once per applyEffectsFromBlocks.
-            c.ticks_frozen = (c.ticks_frozen + 1)
-                .min(horizon_client::motion::PlayerMotion::TICKS_REQUIRED_TO_FREEZE);
-        }
+    }
+    fn cart_loaded_on_fire(&self, id: u32) -> bool {
+        self.persist
+            .raw
+            .get(&id)
+            .and_then(|raw| raw.get("Fire"))
+            .and_then(horizon_client::nbt_path::int_value)
+            .is_some_and(|fire| fire > 0)
     }
     /// Runs `push_from_cart` for the cart being ticked (`c` is a copy of the
     /// stored one, kept at `slot`): the stored cart is replaced by `c` for the
@@ -1434,6 +1415,13 @@ impl Game<'_> {
         // updateFluidInteraction: being in water resets the fall distance.
         if c.in_water {
             c.fall_distance = 0.0;
+        }
+        // Entity.move: water (WaterFluid.entityInside) and rain put a burning
+        // entity out. (Powder snow and a water cauldron do too; not here yet.)
+        if self.cart_loaded_on_fire(c.id)
+            && (c.in_water || self.in_rain(c.position, c.position.y + HEIGHT))
+        {
+            self.clear_cart_fire(c.id);
         }
         // Entity.checkInsideBlocks runs once after the cart tick, sweeping every
         // movement through powder snow. PowderSnowBlock uses getKnownMovement,
@@ -1996,6 +1984,7 @@ impl Game<'_> {
                 hint = i + 1;
                 let p = self.carts[i].position;
                 if ticking(p.x.floor() as i32, p.z.floor() as i32) {
+                    self.cart_cactus_tick(id, i);
                     self.cart_lava_tick(id, i);
                 }
             }
@@ -2867,9 +2856,9 @@ impl Game<'_> {
         light: u8,
         out: &mut Vec<Vertex>,
     ) {
-        let lid = |_: [i32; 3]| 0.0;
         let scene = horizon_client::block_entity_render::Scene {
             camera: glam::DVec3::ZERO,
+            spyglass_outline: self.camera_type.first_person() && self.scoping(),
             orientation: glam::Quat::IDENTITY,
             anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
             texts: None,
@@ -2882,7 +2871,7 @@ impl Game<'_> {
             translucent_sprites: &self.gui.atlas.translucent,
             atlas_revision: self.gui.atlas.revision,
             nether: self.nether_lighting(),
-            lid: &lid,
+            lid: &|_: [i32; 3]| 0.0,
             sign: &|_| None,
             banner: &|_| Vec::new(),
             skull: &|_| None,
@@ -3941,7 +3930,7 @@ mod container_drop_tests {
             }
             game.world.random.set_seed(1234);
             if boat {
-                assert_eq!(game.hurt_boat_result(0, 100.0, false), Some(true));
+                assert_eq!(game.hurt_boat_result(0, 100.0, false, None), Some(true));
                 assert!(game.boats.is_empty());
             } else {
                 assert!(game.hurt_cart_result(0, 100.0, false, false, CartHit::default()));
