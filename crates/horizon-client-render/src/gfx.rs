@@ -9697,18 +9697,7 @@ impl Renderer {
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         // One of Horizon's own packs reads the same world target.
         let native_post = !frame.title && self.native.as_ref().is_some_and(|n| n.post.is_some());
-        if let Some(timer) = Self::pass_timer(&mut self.pack_post, &mut self.native)
-            && timer.is_some() != self.pass_timing
-        {
-            *timer = self
-                .pass_timing
-                .then(|| pack_timing::PassTiming::new(&self.device, &self.queue))
-                .flatten();
-        }
-        if let Some(Some(t)) = Self::pass_timer(&mut self.pack_post, &mut self.native) {
-            t.gap = self.pass_timing_gap;
-            t.keep_frames(self.keep_timed_frames);
-        }
+        self.set_up_pack_timing();
         let pack_reads_world = pack_post || native_post;
         laps.lap("r_uploads");
         // Phase 2 of occlusion culling draws over the depth, and a shader pack or TAA reads it.
@@ -11350,19 +11339,16 @@ impl Renderer {
         } else if let Some((color, depth)) = &scaled
             && native_post
             && let Some(native) = &mut self.native
-            && let Some(post) = &mut native.post
+            && native.run_post(native_pack::WorldPost {
+                device: &self.device,
+                encoder: &mut encoder,
+                world: (color, depth),
+                screen: &view_target,
+                size: self.world_post.size().unwrap_or([1, 1]),
+                scene: self.ray_scene.as_ref().map(|s| (s, frame.camera)),
+            })
         {
-            let history_reset = native.frame.take_history_reset();
-            post.run(
-                &self.device,
-                &mut encoder,
-                (color, depth, &native.frame.surface_view),
-                &view_target,
-                self.world_post.size().unwrap_or([1, 1]),
-                history_reset,
-                native.timing.as_mut(),
-                self.ray_scene.as_ref().map(|s| (s, frame.camera)),
-            );
+            // The pack's post stage drew the screen in place of the renderer's finish.
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
             let camera = frame_gen::Camera {
                 jittered,
@@ -11610,9 +11596,7 @@ impl Renderer {
             timer.submitted(&self.queue);
             timer.collect(&self.device, &mut self.gpu_times);
         }
-        if let Some(Some(timer)) = Self::pass_timer(&mut self.pack_post, &mut self.native) {
-            timer.submitted(&self.queue);
-        }
+        self.pack_timing_submitted();
         if let Some(timer) = &mut self.own_timing {
             timer.submitted(&self.queue);
         }
@@ -11871,8 +11855,7 @@ impl Renderer {
         let pack_tonemap = self
             .native
             .as_ref()
-            .and_then(|n| n.post.as_ref())
-            .is_some_and(native_post::NativePost::tonemaps);
+            .is_some_and(native_pack::NativePack::tonemaps);
         if horizon_tone_curve(layered, !frame.title, pack_tonemap)
             && let Some(hdr) = &self.hdr
         {
