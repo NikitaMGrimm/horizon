@@ -194,16 +194,26 @@ fn a_0_2_prelude_declares_only_the_names_on_its_list() {
     }
 }
 
-/// The rule at work: `[ray_tracing]` brings three names, to the post stage of the pack that set
-/// it, the same whether the renderer has the scene or not.
+/// The names on `tests/names-0.2/<list>.txt`.
+fn listed(list: &str) -> BTreeSet<String> {
+    let path = format!("{}/tests/names-0.2/{list}.txt", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let lines = text.lines().map(str::trim);
+    (lines.filter(|l| !l.is_empty() && !l.starts_with('#')))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `[ray_tracing]` brings the post stage the names of `post_ray_tracing.txt`, and no others, the
+/// same whether the renderer has the scene or not.
 #[test]
 fn ray_tracing_brings_its_names_to_the_post_stage_of_the_pack_that_asks() {
     let pack = pack_with("[ray_tracing]\n", None);
     for &kind in Api::V0_2.stages() {
         let file = format!("{}.wgsl", kind.name());
-        let (mut want, _) = listed_names(kind);
+        let mut want = listed(kind.name());
         if kind == StageKind::Post {
-            want.extend(["RayHit", "trace", "trace_any"].map(str::to_owned));
+            want.extend(listed("post_ray_tracing"));
         }
         for composed in [
             compose(&pack, kind, &file),
@@ -212,6 +222,28 @@ fn ray_tracing_brings_its_names_to_the_post_stage_of_the_pack_that_asks() {
             assert_eq!(prelude_names(&composed, kind), want, "{kind:?}");
         }
     }
+}
+
+/// `[motion]` brings the post stage the motion guide's names, `post_motion.txt`, and no others.
+#[test]
+fn motion_brings_the_post_stage_only_the_motion_names() {
+    let mut files = pack(None).files;
+    let manifest = files.get_mut(MANIFEST).unwrap();
+    manifest.extend_from_slice(b"[motion]\n");
+    let pack = Pack::from_files(files).unwrap();
+    for &kind in Api::V0_2.stages() {
+        let composed = compose(&pack, kind, &format!("{}.wgsl", kind.name()));
+        let have: BTreeSet<String> = declared(&composed.text[composed.parts[0].1.clone()])
+            .into_iter()
+            .filter(|n| !n.starts_with("horizon_"))
+            .collect();
+        let mut expected = listed(kind.name());
+        if kind == horizon_shader_api::StageKind::Post {
+            expected.extend(listed("post_motion"));
+        }
+        assert_eq!(have, expected, "{kind:?}");
+    }
+    check(&pack).unwrap();
 }
 
 fn messages(result: Result<horizon_shader_api::Report, Vec<Problem>>) -> Vec<String> {
