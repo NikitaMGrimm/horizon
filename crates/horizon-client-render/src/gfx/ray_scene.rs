@@ -597,9 +597,12 @@ struct Unpacker {
 impl Unpacker {
     /// None without the video memory for the first store.
     fn new(device: &wgpu::Device, capacity: u64) -> Option<Self> {
+        // The store first: a scene that is asked for again each frame without room for it must
+        // not compile the pipeline each time.
+        let store = store_buffer(device, capacity)?;
         Some(Self {
             pipeline: unpack_pipeline(device),
-            store: store_buffer(device, capacity)?,
+            store,
         })
     }
 
