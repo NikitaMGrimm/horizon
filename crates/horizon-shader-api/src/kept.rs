@@ -20,6 +20,13 @@ pub const MAX_WORKGROUP: [u32; 3] = [256, 256, 64];
 pub const MAX_WORKGROUP_INVOCATIONS: u32 = 256;
 /// The workgroups a fixed dispatch may need along an axis (wgpu's default limit).
 pub const MAX_WORKGROUPS: u32 = 65535;
+/// The invocations of one dispatch, and of every compute pass of a frame (per view) together,
+/// counted as whole workgroups (`invocations`).
+pub const MAX_DISPATCH_INVOCATIONS: u64 = 1 << 25;
+pub const MAX_FRAME_INVOCATIONS: u64 = 1 << 26;
+/// The size a `"pixels"` dispatch counts as: R isn't known at load, and such a dispatch scales
+/// with R as a fragment pass does, so the caps measure the pack, not the window.
+pub const PIXELS_COUNTED_AS: [u32; 2] = [3840, 2160];
 
 /// What clears a kept resource (docs/api/shaders-reference-0.2.md, "Kept resources").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,10 +112,17 @@ pub enum Format {
     Rgba16Float,
     R32Float,
     Rgba32Float,
+    /// Integers, read as `texture_2d<u32>`; only a compute pass writes one.
+    Rgba32Uint,
 }
 
 impl Format {
-    pub const ALL: [Format; 3] = [Format::Rgba16Float, Format::R32Float, Format::Rgba32Float];
+    pub const ALL: [Format; 4] = [
+        Format::Rgba16Float,
+        Format::R32Float,
+        Format::Rgba32Float,
+        Format::Rgba32Uint,
+    ];
 
     /// Its WGSL texel format, as the manifest writes it.
     pub const fn wgsl(self) -> &'static str {
@@ -116,6 +130,15 @@ impl Format {
             Format::Rgba16Float => "rgba16float",
             Format::R32Float => "r32float",
             Format::Rgba32Float => "rgba32float",
+            Format::Rgba32Uint => "rgba32uint",
+        }
+    }
+
+    /// The scalar a read of it gives (`texture_2d<_>`).
+    pub const fn texel(self) -> &'static str {
+        match self {
+            Format::Rgba32Uint => "u32",
+            _ => "f32",
         }
     }
 
@@ -123,7 +146,7 @@ impl Format {
         match self {
             Format::R32Float => 4,
             Format::Rgba16Float => 8,
-            Format::Rgba32Float => 16,
+            Format::Rgba32Float | Format::Rgba32Uint => 16,
         }
     }
 }
@@ -151,6 +174,14 @@ pub struct Resource {
 impl Resource {
     pub fn is_texture(&self) -> bool {
         !matches!(self.shape, Shape::Buffer { .. })
+    }
+
+    /// A texture's format; none for a buffer.
+    pub fn format(&self) -> Option<Format> {
+        match self.shape {
+            Shape::Buffer { .. } => None,
+            Shape::Fixed { format, .. } | Shape::Scaled { format, .. } => Some(format),
+        }
     }
 }
 
@@ -263,7 +294,7 @@ fn resource(r: RawResource, ray_tracing: bool) -> Result<Resource, String> {
             }
             let Some(format) = Format::ALL.into_iter().find(|f| f.wgsl() == format) else {
                 return Err(fail(format!(
-                    "format {format:?}: rgba16float, r32float or rgba32float"
+                    "format {format:?}: rgba16float, r32float, rgba32float or rgba32uint"
                 )));
             };
             match (r.size, r.scale) {
@@ -296,6 +327,35 @@ fn resource(r: RawResource, ray_tracing: bool) -> Result<Resource, String> {
     })
 }
 
+/// The invocations a compute entry of a valid shape runs, as whole workgroups (every invocation
+/// of a partly filled one runs `compute`), its `"pixels"` at `PIXELS_COUNTED_AS`.
+pub fn invocations(s: &Stage) -> u64 {
+    let (Some(workgroup), Some(dispatch)) = (s.workgroup, s.dispatch) else {
+        return 0;
+    };
+    let [w, h] = PIXELS_COUNTED_AS;
+    let cells = match dispatch {
+        Dispatch::Pixels => [w, h, 1],
+        Dispatch::Cells(cells) => cells,
+    };
+    (cells.iter().zip(workgroup))
+        .map(|(c, w)| u64::from(c.div_ceil(w)) * u64::from(w))
+        .product()
+}
+
+/// The frame's compute entries `computes` (`[[before_world]]` and compute `[[post]]`), together
+/// within `MAX_FRAME_INVOCATIONS`.
+fn frame_invocations<'a>(computes: impl Iterator<Item = &'a Stage>) -> Result<(), String> {
+    let total: u64 = computes.map(invocations).sum();
+    if total > MAX_FRAME_INVOCATIONS {
+        return Err(format!(
+            "the compute passes run {total} invocations a frame (whole workgroups, \"pixels\" \
+             counted at 3840×2160); a pack may run {MAX_FRAME_INVOCATIONS}"
+        ));
+    }
+    Ok(())
+}
+
 /// A compute entry's `workgroup` and `dispatch`.
 fn compute_shape(s: &Stage) -> Result<(), String> {
     let (Some(workgroup), Some(dispatch)) = (s.workgroup, s.dispatch) else {
@@ -324,6 +384,14 @@ fn compute_shape(s: &Stage) -> Result<(), String> {
                 s.file
             ));
         }
+    }
+    let n = invocations(s);
+    if n > MAX_DISPATCH_INVOCATIONS {
+        return Err(format!(
+            "{}: {n} invocations (whole workgroups, \"pixels\" counted at 3840×2160); a \
+             dispatch may run {MAX_DISPATCH_INVOCATIONS}",
+            s.file
+        ));
     }
     Ok(())
 }
@@ -504,6 +572,7 @@ pub(crate) fn check(
         compute_shape(s)?;
     }
     post_entries(post)?;
+    frame_invocations(before_world.iter().chain(post.iter().filter(|p| p.compute)))?;
     for s in before_world.iter().chain(post) {
         access(s, &resources)?;
     }
@@ -528,7 +597,8 @@ pub(crate) fn check(
 }
 
 /// The 4 post targets: an `output` naming a kept texture writes it, at its own size (no
-/// `scale`) and never its `_previous`; each R-relative kept texture takes two.
+/// `scale`), never its `_previous` nor an `rgba32uint` one, which only a compute pass writes;
+/// each R-relative kept texture takes two.
 pub(crate) fn kept_targets(post: &[Stage], resources: &[Resource]) -> Result<usize, String> {
     for p in post {
         let Some(output) = &p.output else { continue };
@@ -540,6 +610,15 @@ pub(crate) fn kept_targets(post: &[Stage], resources: &[Resource]) -> Result<usi
                  with no `scale`",
                 p.file,
                 if r.is_texture() { "texture" } else { "buffer" }
+            ));
+        }
+        if let Some(r) = resources.iter().find(|r| r.name == *output)
+            && r.format() == Some(Format::Rgba32Uint)
+        {
+            return Err(format!(
+                "{}: output {output:?} is an rgba32uint texture: a pass draws floats, so only a \
+                 compute pass writes one",
+                p.file
             ));
         }
         if resources

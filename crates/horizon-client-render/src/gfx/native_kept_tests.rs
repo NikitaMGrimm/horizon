@@ -70,7 +70,7 @@ fn each_shape_is_made_with_its_size_and_usages_and_fit_remakes_the_scaled_ones()
     let kept = every_shape();
     let mut store = KeptStore::new(&device, &kept, [101, 60]);
     let buffers = [(64, None); 5];
-    let textures = |half| [(0, Some([3, 2])), (0, Some(half))].repeat(3);
+    let textures = |half| [(0, Some([3, 2])), (0, Some(half))].repeat(Format::ALL.len());
     assert_eq!(
         sizes(&store),
         [&buffers[..], &textures([51, 30])[..]].concat()
@@ -266,8 +266,8 @@ fn a_pass_s_kept_bindings_count_toward_its_stage_s_limits() {
     assert_eq!(why, "p.wgsl: 5 storage buffers, the device takes 4");
 }
 
-/// A read 32-bit texture isn't filterable, a written one is write-only storage, and a buffer is
-/// read-only where the pass doesn't write it.
+/// A read 32-bit texture isn't filterable (an `rgba32uint` one is `u32`), a written one is
+/// write-only storage, and a buffer is read-only where the pass doesn't write it.
 #[test]
 fn layout_entries_follow_the_access_and_the_format() {
     let kept = every_shape();
@@ -285,6 +285,21 @@ fn layout_entries_follow_the_access_and_the_format() {
     assert_eq!(ty(at(5, KeptAccess::Previous)), texture(true));
     assert_eq!(ty(at(7, KeptAccess::Read)), texture(false));
     assert_eq!(ty(at(9, KeptAccess::Previous)), texture(false));
+    let uint = wgpu::BindingType::Texture {
+        sample_type: wgpu::TextureSampleType::Uint,
+        view_dimension: wgpu::TextureViewDimension::D2,
+        multisampled: false,
+    };
+    assert_eq!(ty(at(11, KeptAccess::Read)), uint);
+    assert_eq!(ty(at(12, KeptAccess::Previous)), uint);
+    assert_eq!(
+        ty(at(11, KeptAccess::Write)),
+        wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba32Uint,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        }
+    );
     assert_eq!(
         ty(at(8, KeptAccess::Write)),
         wgpu::BindingType::StorageTexture {
