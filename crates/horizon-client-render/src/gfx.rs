@@ -9866,24 +9866,21 @@ impl Renderer {
         if !frame.title
             && let Some(native) = &mut self.native
         {
-            let size = self
-                .world_post
-                .size()
-                .filter(|_| scaled.is_some())
-                .unwrap_or([self.config.width, self.config.height]);
-            let scene = self.ray_scene.as_ref();
-            native.write(&self.queue, frame, size, output.display(), scene);
-            native.frame.block_light.update(
-                &self.queue,
-                frame.camera,
-                &self.light_blocks,
-                self.light_revision,
-            );
-            if let Some(t) = &mut native.timing {
-                t.begin(&self.device, &self.queue);
-                native_sky_pass =
-                    native.sky.is_some() && t.recording() && sky_visible && frame.skybox;
-            }
+            native_sky_pass = native.start_frame(native_pack::FrameStart {
+                device: &self.device,
+                queue: &self.queue,
+                frame,
+                size: self
+                    .world_post
+                    .size()
+                    .filter(|_| scaled.is_some())
+                    .unwrap_or([self.config.width, self.config.height]),
+                output: &output,
+                lights: &self.light_blocks,
+                light_revision: self.light_revision,
+                sky_visible,
+                scene: self.ray_scene.as_ref(),
+            });
         }
         // One of Horizon's own packs: its shadow passes, from the shadow camera's lists.
         if !frame.title
@@ -9917,38 +9914,15 @@ impl Renderer {
                 lists,
             });
         }
-        if native_sky_pass
-            && let Some(native) = &mut self.native
-            && let Some(sky) = &native.sky
-        {
-            if let Some(t) = &mut native.timing {
-                let format = self.output.frame.format;
-                t.mark(&self.device, &mut encoder, (world_view, format));
-            }
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(&sky.label),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: world_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: world_depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: native.timing.as_mut().and_then(|t| t.writes(&sky.label)),
-                ..Default::default()
+        if native_sky_pass && let Some(native) = &mut self.native {
+            native.draw_sky_pass(native_sky::SkyPass {
+                device: &self.device,
+                encoder: &mut encoder,
+                target: (world_view, self.output.frame.format),
+                depth: world_depth,
+                clear,
+                globals: &self.group,
             });
-            pass.set_bind_group(0, &self.group, &[]);
-            sky.draw(&mut pass, &native.frame);
         }
         laps.lap("r_pack_inputs");
         // The water mirror, for one of Horizon's own packs that reads it: the world as a
@@ -10063,43 +10037,28 @@ impl Renderer {
                 reflection = Some(mirror.color.clone());
             }
         }
+        // One of Horizon's own packs: the mirror its material reads, and its copies of the world
+        // before translucent terrain and its surface target, the size of this frame's targets.
         if let Some(native) = &mut self.native {
-            let reflection =
-                reflection.map(|view| native.frame.linear_mirror(&self.device, &mut encoder, view));
-            native
-                .frame
-                .set_reflection(&self.device, reflection.as_ref());
-        }
-        // The material stage's copies of the world before translucent terrain, the size of
-        // this frame's targets.
-        if let Some(native) = &mut self.native
-            && native.material.is_some()
-            && !frame.title
-        {
-            let color = scaled.as_ref().map(|(c, _)| c.texture());
-            native
-                .frame
-                .fit_opaque(&self.device, world_depth.texture(), color);
-        }
-        if let Some(native) = self.native.as_mut().filter(|_| !frame.title) {
-            let writes = native.material.as_ref().is_some_and(|m| m.writes_surface);
-            let depth = world_depth.texture();
-            let size = if writes {
-                [depth.width(), depth.height()]
-            } else {
-                [1, 1]
-            };
-            native.frame.fit_surface(&self.device, size);
-            native.bind_scene(&self.device, self.ray_scene.as_ref(), frame.camera);
+            native.prepare_world_targets(native_pack::WorldTargets {
+                device: &self.device,
+                encoder: &mut encoder,
+                reflection,
+                title: frame.title,
+                depth: world_depth.texture(),
+                color: scaled.as_ref().map(|(c, _)| c.texture()),
+            });
+            if !frame.title {
+                native.bind_scene(&self.device, self.ray_scene.as_ref(), frame.camera);
+            }
         }
         laps.lap("r_mirror");
-        // One of Horizon's own packs with a material stage: terrain draws with its pipelines,
-        // which read the pack's frame at group 3.
+        // One of Horizon's own packs with a material stage: terrain draws with its layers.
         let material = self
             .native
             .as_ref()
             .filter(|_| !frame.title && !warp_on)
-            .and_then(|n| n.terrain());
+            .and_then(native_pack::NativePack::terrain_layers);
         // Without HDR output, the solid shaders without its lighting (`SolidPipeline`).
         let hdr = self.hdr.is_some();
         // A world warp's pipelines in place of the terrain's and the entities' (`warp_on`).
@@ -10107,7 +10066,7 @@ impl Renderer {
         let warp_group = self.world_warps.group().filter(|_| warp_on);
         let solid_pipeline = match warped {
             Some(w) => w.solid.get(hdr),
-            None => material.map_or(self.solid.get(hdr), |(m, _)| &m.solid),
+            None => material.map_or(self.solid.get(hdr), |m| m.solid),
         };
         // Two solid passes only where a discard costs the GPU its hidden surface
         // removal: Apple's tiled GPUs, behind Metal. Elsewhere the second pass
@@ -10115,31 +10074,24 @@ impl Renderer {
         let split_solid = self.info.backend == wgpu::Backend::Metal && !warp_on;
         let translucent_pipeline = match warped {
             Some(w) => &w.translucent,
-            None => material.map_or(&self.translucent, |(m, _)| &m.translucent),
+            None => material.map_or(&self.translucent, |m| m.translucent),
         };
-        let pack_flat = material.and_then(|(m, _)| m.flat.as_ref());
+        let pack_flat = material.and_then(|m| m.flat);
         // A material stage's translucent pass reads a copy of the depth the solid terrain
         // left: it is stored across the pass that ends before the copy.
         let keep_depth = keep_depth || material.is_some();
         // GPU culling's occlusion test splits the world pass as cull.rs's does.
         let gpu_occluding = gpu_frame && self.gpu_culling.as_ref().is_some_and(|g| g.occluding());
         let pack_frame = |pass: &mut wgpu::RenderPass<'_>| {
-            if let Some((_, group)) = material {
-                pass.set_bind_group(horizon_shader_api::stages::GROUP, group, &[]);
+            if let Some(m) = material {
+                m.bind(pass);
             }
         };
         // A pack's solid terrain that calls `set_surface` also writes the surface target, in
         // passes of its own between the sky and everything else.
-        let surface = self
-            .native
-            .as_ref()
-            .filter(|n| {
-                !frame.title
-                    && !pack_draws_terrain
-                    && !warp_on
-                    && n.material.as_ref().is_some_and(|m| m.writes_surface)
-            })
-            .map(|n| n.frame.surface_view.clone());
+        let surface = material
+            .and_then(|m| m.surface)
+            .filter(|_| !pack_draws_terrain);
         // Solid terrain through the visibility buffer (`visbuffer`): flat frames without a
         // pack drawing terrain, a material stage, a surface target or a shadow pass.
         let vis_frame = flat_frame
@@ -10203,41 +10155,42 @@ impl Renderer {
             pack_frame(&mut pass);
             if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
                 pass.stage(self.own_timing.as_mut(), "sky");
-                if !frame.title && frame.skybox && !pack_draws_sky && !native_sky_pass {
-                    match self
-                        .native
-                        .as_ref()
-                        .and_then(|n| Some((n.sky.as_ref()?, &n.frame)))
-                    {
-                        Some((sky, native)) => {
-                            sky.draw(&mut pass, native);
-                            // The sky binds the frame's own group; a material stage that
-                            // traces draws with the scene's.
-                            pack_frame(&mut pass);
+                let native_sky = !frame.title
+                    && frame.skybox
+                    && !pack_draws_sky
+                    && !native_sky_pass
+                    && self.native.as_ref().is_some_and(|n| n.draw_sky(&mut pass));
+                if native_sky {
+                    // The sky binds the frame's own group; a material stage that traces draws
+                    // with the scene's.
+                    pack_frame(&mut pass);
+                }
+                if !frame.title
+                    && frame.skybox
+                    && !pack_draws_sky
+                    && !native_sky_pass
+                    && !native_sky
+                {
+                    match self.core_sky.as_ref().filter(|c| c.draws_disc()) {
+                        Some(core) => {
+                            core.draw_disc(&mut pass);
+                            pass.set_bind_group(0, &self.group, &[]);
                         }
                         None => {
-                            match self.core_sky.as_ref().filter(|c| c.draws_disc()) {
-                                Some(core) => {
-                                    core.draw_disc(&mut pass);
-                                    pass.set_bind_group(0, &self.group, &[]);
-                                }
-                                None => {
-                                    pass.set_pipeline(&self.sky_base);
-                                    pass.draw(0..3, 0..1);
-                                }
-                            }
-                            if frame.sky.sunrise_color[3] > 0.001 {
-                                pass.set_pipeline(&self.sunrise_pipeline);
-                                pass.set_vertex_buffer(0, self.sunrise_buffer.slice(..));
-                                pass.draw(0..sunrise_fan::VERTICES as u32, 0..1);
-                            }
-                            // OptiFine custom sky layers, over the disc and sunrise and under the
-                            // sun, moon and stars.
-                            if self.custom_sky.is_drawing() {
-                                self.custom_sky.draw(&mut pass);
-                                pass.set_bind_group(0, &self.group, &[]);
-                            }
+                            pass.set_pipeline(&self.sky_base);
+                            pass.draw(0..3, 0..1);
                         }
+                    }
+                    if frame.sky.sunrise_color[3] > 0.001 {
+                        pass.set_pipeline(&self.sunrise_pipeline);
+                        pass.set_vertex_buffer(0, self.sunrise_buffer.slice(..));
+                        pass.draw(0..sunrise_fan::VERTICES as u32, 0..1);
+                    }
+                    // OptiFine custom sky layers, over the disc and sunrise and under the
+                    // sun, moon and stars.
+                    if self.custom_sky.is_drawing() {
+                        self.custom_sky.draw(&mut pass);
+                        pass.set_bind_group(0, &self.group, &[]);
                     }
                 }
                 if frame.title {
@@ -10264,7 +10217,7 @@ impl Renderer {
                             && self
                                 .native
                                 .as_ref()
-                                .is_some_and(|n| n.sky.is_some() && !n.vanilla_sun);
+                                .is_some_and(native_pack::NativePack::hides_sun);
                         let first = if own_sun { 6 } else { 0 };
                         // A resource pack's core/sky isn't vanilla's sky times the sky's
                         // lift, which the sun's disc pass assumes: today's add there.
@@ -10280,7 +10233,7 @@ impl Renderer {
                 let own_stars = self
                     .native
                     .as_ref()
-                    .is_some_and(|n| n.sky.is_some() && !n.vanilla_stars);
+                    .is_some_and(native_pack::NativePack::hides_stars);
                 if !frame.title && frame.stars.is_some() && !pack_draws_sky && !own_stars {
                     match self.core_sky.as_ref().filter(|c| c.draws_stars()) {
                         Some(core) => core.draw_stars(&mut pass),
@@ -10607,7 +10560,7 @@ impl Renderer {
                 .as_ref()
                 .filter(|_| !frame.title && !pack_draws_terrain && !warp_on)
                 && let Some(d) = &n.displacement
-                && let Some(pipeline) = material.and_then(|(m, _)| m.displaced.as_ref())
+                && let Some(pipeline) = material.and_then(|m| m.displaced)
             {
                 pass.stage(self.own_timing.as_mut(), "displacement");
                 pass.set_bind_group(0, &self.group, &[]);
@@ -10866,19 +10819,16 @@ impl Renderer {
             // One of Horizon's own packs reads the world before translucent terrain
             // (`opaque_depth`, `opaque_color`): the pass ends, the targets are copied, and a
             // pass that loads both carries on.
-            if material.is_some()
-                && let Some(native) = self.native.as_ref().filter(|n| n.frame.reads_opaque)
+            if material.is_some_and(|m| m.reads_opaque)
+                && let Some(native) = &self.native
             {
                 drop(pass);
-                let depth = world_depth.texture();
-                encoder.copy_texture_to_texture(
-                    depth.as_image_copy(),
-                    native.frame.opaque_depth.as_image_copy(),
-                    depth.size(),
-                );
-                if let Some((color, _)) = &scaled {
-                    native.frame.copy_opaque(&self.device, &mut encoder, color);
-                }
+                native.copy_opaque(native_material::OpaqueCopy {
+                    device: &self.device,
+                    encoder: &mut encoder,
+                    depth: world_depth.texture(),
+                    color: scaled.as_ref().map(|(c, _)| c),
+                });
                 pass = world_pass_after_culling(
                     &mut encoder,
                     world_view,
@@ -11228,13 +11178,12 @@ impl Renderer {
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             if !pack_draws_weather && !oit_on {
                 pass.stage(self.own_timing.as_mut(), "weather");
-                let native_weather = self
-                    .native
-                    .as_ref()
-                    .filter(|_| !frame.title)
-                    .and_then(|n| Some((n.weather.as_ref()?, &n.frame.group)));
-                self.weather
-                    .draw(&mut pass, &self.entity_group, native_weather);
+                let native = self.native.as_ref().filter(|_| !frame.title);
+                if !native
+                    .is_some_and(|n| n.draw_weather(&mut pass, &self.weather, &self.entity_group))
+                {
+                    self.weather.draw(&mut pass, &self.entity_group);
+                }
                 pass.set_bind_group(0, &self.group, &[]);
             }
             // LevelRenderer: the world border after translucent terrain and weather.

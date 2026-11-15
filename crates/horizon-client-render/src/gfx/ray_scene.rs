@@ -427,6 +427,32 @@ impl RayScene {
     }
 }
 
+/// `scene` for a pack that `wants` one: the one there is, or a new one; none otherwise.
+fn follow(scene: &mut Option<RayScene>, device: &wgpu::Device, wants: bool) {
+    if !wants {
+        *scene = None;
+    } else if scene.is_none() {
+        *scene = RayScene::new(device);
+    }
+}
+
+/// Drops the BLAS and slot of every part whose section is not `resident`; whether any went.
+fn drop_released<B>(
+    blas: &mut FxHashMap<Part, B>,
+    slots: &mut Slots,
+    resident: impl Fn(SectionKey) -> bool,
+) -> bool {
+    let before = blas.len();
+    blas.retain(|&part, _| {
+        let kept = resident(part.0);
+        if !kept {
+            slots.free(part);
+        }
+        kept
+    });
+    blas.len() != before
+}
+
 /// Drops from `blas` both layers of the sections past `keep` chunks of column `column`, and
 /// frees their slots. Whether any went.
 fn leave<T>(
@@ -446,38 +472,12 @@ fn leave<T>(
     blas.len() != before
 }
 
-/// Drops both layers' BLAS and slots of every section not `resident`; whether any went.
-fn drop_released<T>(
-    blas: &mut FxHashMap<Part, T>,
-    slots: &mut Slots,
-    resident: impl Fn(SectionKey) -> bool,
-) -> bool {
-    let before = blas.len();
-    blas.retain(|part, _| {
-        let kept = resident(part.0);
-        if !kept {
-            slots.free(*part);
-        }
-        kept
-    });
-    blas.len() != before
-}
-
 /// Vertices the store may grow to on a device with `limits`: the unpack pass binds it whole.
 fn largest_store(limits: &wgpu::Limits) -> u64 {
     let bytes = limits
         .max_buffer_size
         .min(limits.max_storage_buffer_binding_size);
     MOST_STORE.min(bytes / STRIDE / 4 * 4)
-}
-
-/// `scene` for a pack that `wants` one: the one there is, or a new one; none otherwise.
-fn follow(scene: &mut Option<RayScene>, device: &wgpu::Device, wants: bool) {
-    if !wants {
-        *scene = None;
-    } else if scene.is_none() {
-        *scene = RayScene::new(device);
-    }
 }
 
 /// Whether section `key` is within `reach` chunks of column `column`, along x and z.
@@ -910,16 +910,14 @@ mod tests {
     fn sections_no_longer_resident_leave_the_scene_and_the_store() {
         let mut slots = Slots::new(64, 64);
         let mut blas = FxHashMap::default();
-        let b_clear: Part = (B.0, Layer::Translucent);
-        for key in [A, B, C, b_clear] {
+        for key in [A, B, C] {
             slots.alloc(key, 8);
             blas.insert(key, ());
         }
-        // B's column was unloaded without a new mesh: both its layers go.
+        // B's column was unloaded without a new mesh.
         assert!(drop_released(&mut blas, &mut slots, |k| k != B.0));
         assert_eq!(blas.len(), 2);
-        assert!(!blas.contains_key(&B) && !blas.contains_key(&b_clear));
-        assert_eq!(slots.first(b_clear), None);
+        assert!(!blas.contains_key(&B));
         assert_eq!(slots.first(B), None);
         assert_eq!(slots.alloc(B, 8), Some(8), "its slot is free again");
         assert!(!drop_released(&mut blas, &mut slots, |_| true));
@@ -1098,10 +1096,8 @@ mod tests {
         follow(&mut scene, &device, wanted(Switch::Pack, true));
         scene.as_mut().unwrap().mark(A.0);
         follow(&mut scene, &device, wanted(Switch::Pack, true));
-        assert_eq!(
-            scene.as_ref().map(|s| s.dirty.len()),
-            Some(Layer::BOTH.len())
-        );
+        // A marked section waits in both layers, the solid one and the translucent one.
+        assert_eq!(scene.as_ref().map(|s| s.dirty.len()), Some(2));
         follow(&mut scene, &device, wanted(Switch::Pack, false));
         assert!(scene.is_none());
         follow(&mut scene, &device, wanted(Switch::Pack, true));
