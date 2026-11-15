@@ -1450,11 +1450,7 @@ pub fn kept_declarations(manifest: &crate::manifest::Manifest, stage: &crate::St
             }
             (_, KeptAccess::Read) => format!("var {name}: texture_2d<{texel}>"),
         };
-        out += &format!(
-            "@group({GROUP}) @binding({}) {ty};
-",
-            b.binding
-        );
+        out += &format!("@group({GROUP}) @binding({}) {ty};\n", b.binding);
     }
     out
 }
