@@ -229,8 +229,8 @@ let hit = trace(position * 0.99, direction, 64.0);   // hit.distance < 0.0: noth
 `tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent`, `tangent`) and its `position`, `normal`
 and `distance`; `trace_any` only says whether something is in the way, which is all a shadow needs. Origins are camera-relative, as `view_position` gives them, and
 rays pass through the clear texels of leaves and plants, and through water, stained glass and ice, which are in a
-[layer of their own](#layers). A ray ends where it leaves the scene, so a `max_distance` past `frame.ray_distance`
-finds nothing more and needs no clamp. Horizon keeps the scene; the look is the pack's: Horizon
+[layer of their own](#layers). `frame.ray_distance` is the distance the scene covers in every direction; a longer ray
+is allowed and may still hit geometry toward the corners, and no clamp is needed. Horizon keeps the scene; the look is the pack's: Horizon
 adds no shadows, bounce light or denoising of its own. The pack never sees the acceleration structure or a ray query,
 and the check refuses a pack that names one itself.
 
