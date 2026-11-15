@@ -675,6 +675,40 @@ fn a_traced_post_stage_is_checked_without_the_scene_and_with_it() {
     );
 }
 
+/// Spec #16011 item 5: turning its rays off is the pack's choice. A bool option's `override` may
+/// guard `trace`: the stage is taken with the option off and on, without the scene and with it.
+#[test]
+fn a_pack_option_may_turn_its_rays_off() {
+    let post = "override rt_shadows: bool = true;
+fn post(input: PostInput) -> vec4<f32> {
+    if !rt_shadows || frame.has_ray_tracing == 0u || input.depth == 0.0 {
+        return input.color;
+    }
+    let hit = trace(view_position(input.uv, input.depth), frame.sun_direction, 64.0);
+    return vec4<f32>(input.color.rgb * select(1.0, 0.5, hit.distance >= 0.0), input.color.a);
+}
+";
+    let option = "[ray_tracing]\n[[options]]\nid = \"rt_shadows\"\nname = \"Ray traced shadows\"\n\
+                  type = \"bool\"\ndefault = true\n";
+    let report = pack_0_2(post, TONEMAP, option).unwrap();
+    let stage = &report.stages[0];
+    let plain = naga::valid::Capabilities::default();
+    let scene = (stage.scene.as_ref()).map(|m| (m, plain | naga::valid::Capabilities::RAY_QUERY));
+    for (module, capabilities) in [(&stage.module, plain)].into_iter().chain(scene) {
+        let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), capabilities)
+            .validate(module)
+            .unwrap();
+        for on in [0.0, 1.0] {
+            let constants = [("rt_shadows".to_owned(), on)].into_iter().collect();
+            let (specialized, _) =
+                naga::back::pipeline_constants::process_overrides(module, &info, None, &constants)
+                    .unwrap();
+            assert!(valid(&specialized, capabilities), "rt_shadows = {on}");
+        }
+    }
+    assert!(stage.scene.as_ref().is_some_and(ray_queries));
+}
+
 #[test]
 fn a_traced_pack_names_no_ray_query_of_its_own() {
     let own = "// A ray_query in a comment is no use of one.
@@ -739,6 +773,62 @@ fn post(input: PostInput) -> vec4<f32> {
 ";
     let problems = traced(built).unwrap_err();
     assert_eq!(refused(&problems, "RayHit"), [("post.wgsl".to_owned(), 2)]);
+}
+
+/// A 0.2 material pack: `[material]` with `keys`, its `material.wgsl` and a shared `helpers.wgsl`.
+fn coverage_pack(
+    keys: &str,
+    material: &str,
+    helpers: &str,
+) -> Result<horizon_shader_api::Report, Vec<Problem>> {
+    let manifest = format!(
+        "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+         shared = [\"helpers.wgsl\"]\n[material]\nfile = \"material.wgsl\"\n{keys}"
+    );
+    let files = [
+        (MANIFEST, manifest.as_str()),
+        ("helpers.wgsl", helpers),
+        ("material.wgsl", material),
+    ]
+    .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+    .into();
+    check(&Pack::from_files(files).unwrap())
+}
+
+#[test]
+fn a_discard_reachable_from_material_needs_pack_coverage() {
+    let direct = "fn material(input: MaterialInput) -> Surface {\n    \
+                  if input.albedo.a < 0.3 {\n        discard;\n    }\n    \
+                  return Surface(input.albedo);\n}\n";
+    // Through a shared helper, two calls deep, inside a loop.
+    let helpers = "fn cut(a: f32) {\n    for (var i = 0; i < 2; i++) {\n        \
+                   if a < 0.3 {\n            discard;\n        }\n    }\n}\n\
+                   fn holes(a: f32) -> f32 {\n    cut(a);\n    return a;\n}\n";
+    let through = "fn material(input: MaterialInput) -> Surface {\n    \
+                   return Surface(vec4(input.albedo.rgb, holes(input.albedo.a)));\n}\n";
+    let refused = |keys: &str, material: &str, helpers: &str| {
+        let p = coverage_pack(keys, material, helpers).expect_err("should fail");
+        let p: Vec<_> = p
+            .into_iter()
+            .filter(|p| p.message.contains("`discard` reachable from `material`"))
+            .collect();
+        assert_eq!(p.len(), 1, "{p:#?}");
+        assert!(p[0].message.contains("coverage = \"pack\""), "{p:#?}");
+        (p[0].file.clone(), p[0].line)
+    };
+    let none = "fn unused() {}\n";
+    assert_eq!(refused("", direct, none), ("material.wgsl".into(), 3));
+    assert_eq!(refused("", through, helpers), ("helpers.wgsl".into(), 4));
+    let engine = "coverage = \"engine\"\n";
+    assert_eq!(
+        refused(engine, through, helpers),
+        ("helpers.wgsl".into(), 4)
+    );
+    let own = "coverage = \"pack\"\n";
+    coverage_pack(own, direct, none).unwrap();
+    coverage_pack(own, through, helpers).unwrap();
+    // A helper with a discard that `material` never calls cuts no hole.
+    coverage_pack("", MATERIAL, helpers).unwrap();
 }
 
 #[test]
@@ -944,60 +1034,4 @@ fn a_ray_from_a_vertex_shader_is_refused() {
     let plain = "fn vertex(input: VertexInput) -> vec3<f32> { return input.position; }\n";
     let keys = format!("{keys}[displacement]\n");
     traced_material(&both, &keys, &[("vertex.wgsl", plain)]).unwrap();
-}
-
-/// A 0.2 material pack: `[material]` with `keys`, its `material.wgsl` and a shared `helpers.wgsl`.
-fn coverage_pack(
-    keys: &str,
-    material: &str,
-    helpers: &str,
-) -> Result<horizon_shader_api::Report, Vec<Problem>> {
-    let manifest = format!(
-        "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
-         shared = [\"helpers.wgsl\"]\n[material]\nfile = \"material.wgsl\"\n{keys}"
-    );
-    let files = [
-        (MANIFEST, manifest.as_str()),
-        ("helpers.wgsl", helpers),
-        ("material.wgsl", material),
-    ]
-    .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
-    .into();
-    check(&Pack::from_files(files).unwrap())
-}
-
-#[test]
-fn a_discard_reachable_from_material_needs_pack_coverage() {
-    let direct = "fn material(input: MaterialInput) -> Surface {\n    \
-                  if input.albedo.a < 0.3 {\n        discard;\n    }\n    \
-                  return Surface(input.albedo);\n}\n";
-    // Through a shared helper, two calls deep, inside a loop.
-    let helpers = "fn cut(a: f32) {\n    for (var i = 0; i < 2; i++) {\n        \
-                   if a < 0.3 {\n            discard;\n        }\n    }\n}\n\
-                   fn holes(a: f32) -> f32 {\n    cut(a);\n    return a;\n}\n";
-    let through = "fn material(input: MaterialInput) -> Surface {\n    \
-                   return Surface(vec4(input.albedo.rgb, holes(input.albedo.a)));\n}\n";
-    let refused = |keys: &str, material: &str, helpers: &str| {
-        let p = coverage_pack(keys, material, helpers).expect_err("should fail");
-        let p: Vec<_> = p
-            .into_iter()
-            .filter(|p| p.message.contains("`discard` reachable from `material`"))
-            .collect();
-        assert_eq!(p.len(), 1, "{p:#?}");
-        assert!(p[0].message.contains("coverage = \"pack\""), "{p:#?}");
-        (p[0].file.clone(), p[0].line)
-    };
-    let none = "fn unused() {}\n";
-    assert_eq!(refused("", direct, none), ("material.wgsl".into(), 3));
-    assert_eq!(refused("", through, helpers), ("helpers.wgsl".into(), 4));
-    let engine = "coverage = \"engine\"\n";
-    assert_eq!(
-        refused(engine, through, helpers),
-        ("helpers.wgsl".into(), 4)
-    );
-    let own = "coverage = \"pack\"\n";
-    coverage_pack(own, direct, none).unwrap();
-    coverage_pack(own, through, helpers).unwrap();
-    // A helper with a discard that `material` never calls cuts no hole.
-    coverage_pack("", MATERIAL, helpers).unwrap();
 }

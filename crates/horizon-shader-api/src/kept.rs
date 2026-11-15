@@ -164,12 +164,12 @@ fn keep(value: &str) -> Result<Keep, String> {
     }
 }
 
-fn resource(r: RawResource, ray_tracing: bool) -> Result<Resource, String> {
+fn resource(r: RawResource, ray_tracing: bool, motion: bool) -> Result<Resource, String> {
     let name = &r.name;
     let previous = format!("{name}_previous");
     // WGSL's own functions and types too: a global by such a name hides them from the prelude.
     let builtin = |n: &str| naga::keywords::wgsl::BUILTIN_IDENTIFIERS.contains(&n);
-    let free = |n: &str| !crate::manifest::taken(n, ray_tracing) && !builtin(n);
+    let free = |n: &str| !crate::manifest::taken(n, ray_tracing, motion) && !builtin(n);
     if !crate::manifest::target_name(name) || !free(name) || !free(&previous) {
         return Err(format!(
             "resource {name:?} is not a free WGSL name ([a-z][a-z0-9_]*, at most 32, and \
@@ -248,6 +248,7 @@ pub(crate) fn check(
     kept: Option<RawKept>,
     raw: Vec<RawResource>,
     ray_tracing: bool,
+    motion: bool,
     resets: Vec<(String, String)>,
 ) -> Result<Kept, String> {
     if raw.len() > MAX_RESOURCES {
@@ -258,7 +259,7 @@ pub(crate) fn check(
     }
     let mut resources: Vec<Resource> = Vec::new();
     for r in raw {
-        let r = resource(r, ray_tracing)?;
+        let r = resource(r, ray_tracing, motion)?;
         let clash = |o: &Resource| {
             [&o.name, &format!("{}_previous", o.name)].contains(&&r.name)
                 || format!("{}_previous", r.name) == o.name

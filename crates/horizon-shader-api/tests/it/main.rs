@@ -3,6 +3,7 @@
 
 mod check;
 mod kept;
+mod motion;
 mod names;
 mod package_limits;
 mod reference;
