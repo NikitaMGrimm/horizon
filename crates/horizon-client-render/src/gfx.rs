@@ -348,6 +348,7 @@ pub(crate) mod upload;
 mod view;
 mod visbuffer;
 mod wgsl_prefix;
+mod world_handover;
 mod world_post;
 pub mod world_primitives;
 mod world_warp;
@@ -471,8 +472,9 @@ struct Globals {
     /// HDR output's tier windows, low to very bright: where the lift starts, where it is
     /// full (`hdr::Hdr::windows`); zero without HDR.
     hdr_windows: [[f32; 4]; 2],
+    /// x and y unused; z 1 with HDR output on; w the world's writers write light (terrain.wgsl).
     hdr_light: [f32; 4],
-    /// The scene's peak, HDR lighting's gain, world/look and debug; then the tiers' gains
+    /// The sun's disc's peak, an unused lane, world/look and debug; then the tiers' gains
     /// (`Hdr::draw_params`).
     hdr_settings: [f32; 4],
     hdr_gains: [f32; 4],
@@ -5159,7 +5161,7 @@ impl Renderer {
             pass.draw_indexed(0..quads * 6, (first * 4) as i32, 0..1);
         }
     }
-    /// HDR lighting on the clouds just drawn: the sky's value (`fs_hdr_cloud_mark`).
+    /// Unmarks the clouds just drawn (`fs_hdr_cloud_mark`).
     fn mark_clouds(&self, pass: &mut wgpu::RenderPass<'_>, quads: u32) {
         if !light_marks(self.output.frame.format, self.hdr.is_some())
             || self.hdr.as_ref().is_none_or(|h| !h.lighting)
@@ -5174,7 +5176,7 @@ impl Renderer {
         pass.draw_indexed(0..quads * 6, 0, 0..1);
         pass.set_bind_group(0, &self.group, &[]);
     }
-    /// HDR lighting on translucent terrain, over the draws that just blended it.
+    /// Unmarks translucent terrain, over the draws that just blended it (`fs_translucent_mark`).
     fn mark_translucent_terrain(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -5345,7 +5347,7 @@ impl Renderer {
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        self.frame_gen.stop();
+        self.frame_gen.stop_to_configure();
         self.surface = None;
         let surface = match spare {
             Some(surface) => surface,
@@ -6773,7 +6775,7 @@ impl Renderer {
     /// Configures the window surface again. One that fails is still the one
     /// wgpu configured before, which acquisition reports as a validation error.
     fn configure_surface(&mut self) {
-        self.frame_gen.stop();
+        self.frame_gen.stop_to_configure();
         // The submit thread may still present to the old swapchain.
         self.queue.wait();
         if let Some(surface) = &self.surface
@@ -6786,6 +6788,7 @@ impl Renderer {
             )
         {
             log::warn!("Horizon renderer: the window surface did not configure ({e})");
+            self.frame_gen.refused = true;
         }
     }
     /// HDR calibration's test picture (`crate::hdr_calibration`) while it runs, else None.
@@ -6841,32 +6844,6 @@ impl Renderer {
         if let Some(hdr) = &mut self.hdr {
             hdr.look = on;
         }
-    }
-    /// Whether this renderer's frame is the one a renderer made now would draw in
-    /// (`requested_frame`). Under `HORIZON_HDR_FRAME=float` the game makes the renderer again
-    /// when it isn't (docs/design/hdr-linear-light.md, "When it changes").
-    pub fn frame_follows(
-        &self,
-        settings: &crate::graphics::Graphics,
-        request: output::FrameRequest,
-    ) -> bool {
-        self.requested_frame(settings, request) == self.output.frame
-    }
-    /// The frame a renderer made now would draw in (`output::resolve_frame`) for `settings`
-    /// and the pack's `request`, with what this renderer's destination offers and its display
-    /// reports.
-    pub fn requested_frame(
-        &self,
-        settings: &crate::graphics::Graphics,
-        request: output::FrameRequest,
-    ) -> output::FrameConfiguration {
-        output::resolve_frame(
-            settings,
-            request,
-            self.caps_for(settings),
-            output_apply::graced(self.auto_off_since, self.reading, &self.output),
-            self.config.format,
-        )
     }
     /// Measures which pixels of each block sprite may shine (`hdr_stats`), at the current
     /// masks. Only with HDR output on: without it the frame's alpha is never read.
@@ -7810,6 +7787,9 @@ impl Renderer {
         self.world_post.scale = scale / scale.max(1.0);
         self.hud.zoom = size[0] as f32 / window[0] as f32;
         [self.config.width, self.config.height] = size;
+        // Frame generation's present thread shows the window's frames, not this one: it stops,
+        // and the window's next frame starts it again.
+        self.frame_gen.stop();
         let surface = self.surface.take();
         let hdr = self.hdr.take_if(|_| !layered);
         let offscreen = std::mem::replace(&mut self.offscreen, target);
@@ -7890,7 +7870,7 @@ impl Renderer {
             if self.device_lost.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err("the graphics device was lost".into());
             }
-            self.frame_gen.stop();
+            self.frame_gen.stop_to_configure();
             if Self::configure(
                 &self.device,
                 surface,
@@ -7906,12 +7886,15 @@ impl Renderer {
         }
         laps.lap("r_prepare");
         // Frame generation: its present thread acquires and presents, this frame draws
-        // into frames of its own. Not over menus that blur the frame, a shader pack's
-        // own post passes, HDR (or the 16-bit frame it was started with) or the title screen.
+        // into frames of its own. Not over menus that blur the frame, a shader pack's own post
+        // passes, HDR output without the HUD's layer (or the 16-bit frame HDR was started
+        // with) or the title screen.
         let fg = self.frame_gen.on
-            && !self.frame_gen.paused
-            && self.hdr.is_none()
-            && self.output.frame.format == self.config.format.remove_srgb_suffix()
+            && !(self.frame_gen.paused || self.frame_gen.refused)
+            && (self.hdr.as_ref()).map_or(
+                self.output.frame.format == self.config.format.remove_srgb_suffix(),
+                hdr::Hdr::layered,
+            )
             && !frame.title
             && frame.menu_blur.is_none()
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
@@ -7932,7 +7915,7 @@ impl Renderer {
                     self.surface.as_ref(),
                     self.offscreen.as_ref(),
                     &self.window,
-                    &self.config,
+                    &self.surface_config(),
                 )
             })
             .flatten();
@@ -7985,8 +7968,8 @@ impl Renderer {
         }
         let size = [self.config.width, self.config.height];
         let target_texture = match (&surface_frame, &mut self.hdr) {
-            _ if let Some((real, _)) = &fg_frames => real.clone(),
             (_, Some(hdr)) => hdr.frame(&self.device, size),
+            _ if let Some((real, _)) = &fg_frames => real.clone(),
             // A screenshot of a swapchain without COPY_SRC (OpenGL), and a 16-bit frame
             // with HDR off, draw into a texture of their own, then onto the swapchain or
             // the offscreen target.
@@ -8218,13 +8201,8 @@ impl Renderer {
             ],
             hdr_windows: self.hdr.as_ref().map_or([[0.0; 4]; 2], hdr::Hdr::windows),
             hdr_light: [
-                frame.sky.sky_light_factor,
-                // The underwater overlay: the sky and fog are the water's own colour there.
-                if frame.screen.iter().any(|q| q.world_tint) {
-                    0.0
-                } else {
-                    frame.sky.sky_light_factor
-                },
+                0.0,
+                0.0,
                 // Only HDR output reads the solid terrain's lighting alpha.
                 if self.hdr.is_some() { 1.0 } else { 0.0 },
                 f32::from(u8::from(hdr_gain)),
@@ -10086,12 +10064,7 @@ impl Renderer {
                     view_proj: mirror_view_projection(view_proj, plane).to_cols_array_2d(),
                     inverse_view,
                     fog_ends,
-                    hdr_light: [
-                        globals.hdr_light[0],
-                        globals.hdr_light[1],
-                        globals.hdr_light[2],
-                        0.0,
-                    ],
+                    hdr_light: [0.0, 0.0, globals.hdr_light[2], 0.0],
                     ..globals
                 };
                 self.uploads.buffer(
@@ -10928,7 +10901,7 @@ impl Renderer {
             // (`opaque_depth`, `opaque_color`): the pass ends, the targets are copied, and a
             // pass that loads both carries on.
             if material.is_some()
-                && let Some(native) = &self.native
+                && let Some(native) = self.native.as_ref().filter(|n| n.frame.reads_opaque)
             {
                 drop(pass);
                 let depth = world_depth.texture();
@@ -11337,6 +11310,12 @@ impl Renderer {
                 self.draw_hand(&mut pass, hand_quads, world_quads + additive_quads);
             }
         }
+        let lifts_world = output::lifts_world(
+            frame.title,
+            self.output.frame.format == LINEAR_FRAME,
+            self.shader_pack_kind() == Some("iris"),
+            self.native.as_ref().map(|n| n.frame.api),
+        );
         if let Some((color, depth)) = &scaled
             && pack_post
             && let Some((dimension, Some(mut post))) = self.pack_post.take()
@@ -11478,11 +11457,6 @@ impl Renderer {
                 native.timing.as_mut(),
             );
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
-            let world = self
-                .frame_gen
-                .world(&self.device, &self.world_post, &self.config);
-            self.world_post
-                .finish(&self.queue, &mut encoder, &world, self.own_timing.as_mut());
             let camera = frame_gen::Camera {
                 jittered,
                 view_proj,
@@ -11494,32 +11468,19 @@ impl Renderer {
                 far: frame.depth_far,
                 fov_y: frame.fov_degrees.to_radians(),
             };
-            let generated_view = generated.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(self.config.format.remove_srgb_suffix()),
-                ..Default::default()
-            });
-            fg_made = self.frame_gen.generate(
-                &self.device,
-                &self.queue,
-                &mut encoder,
-                &self.world_post,
-                &view_target,
-                &generated_view,
-                &camera,
-            );
-            if fg_made {
-                let overlay = Overlay {
-                    hand_quads: hand_quads * u32::from(!pack_draws_hand),
-                    first_hand_vertex: made_hand_vertex,
-                    crosshair,
-                    first_crosshair: debug_depth + debug_top,
-                    world_depth: false,
-                    real: false,
-                    hand_drawn: !pack_draws_hand,
-                    hand_view_proj,
-                };
-                self.draw_overlay(&mut encoder, frame, &generated_view, generated, &overlay);
-            }
+            let overlay = Overlay {
+                hand_quads: hand_quads * u32::from(!pack_draws_hand),
+                first_hand_vertex: made_hand_vertex,
+                crosshair,
+                first_crosshair: debug_depth + debug_top,
+                world_depth: false,
+                real: false,
+                hand_drawn: !pack_draws_hand,
+                hand_view_proj,
+            };
+            let onto = (&view_target, &target_texture, generated);
+            fg_made =
+                self.draw_generated(&mut encoder, frame, &camera, &overlay, onto, lifts_world);
         } else if scaled.is_some() {
             self.world_post.finish(
                 &self.queue,
@@ -11585,7 +11546,10 @@ impl Renderer {
         };
         let overlay = Overlay {
             hand_quads: hand_quads * u32::from(!pack_draws_hand && !hand_in_world),
-            first_hand_vertex: ((world_quads + additive_quads) * 4) as i32,
+            first_hand_vertex: match fg_made && frame_gen::generated_only() && self.hdr.is_some() {
+                true => made_hand_vertex,
+                false => ((world_quads + additive_quads) * 4) as i32,
+            },
             crosshair,
             first_crosshair: debug_depth + debug_top,
             world_depth: scaled.is_none(),
@@ -11636,17 +11600,17 @@ impl Renderer {
         {
             self.readback.present(&self.device, &mut encoder, image);
         }
-        let lifts_world = output::lifts_world(
-            frame.title,
-            self.output.frame.format == LINEAR_FRAME,
-            self.shader_pack_kind() == Some("iris"),
-            self.native.as_ref().map(|n| n.frame.api),
-        );
-        match (&self.hdr, &surface_frame) {
-            (Some(hdr), Some(f)) => hdr.present(
+        // With frame generation on a window, its real frame.
+        let shown = surface_frame.as_ref().map(|f| &f.texture);
+        let shown = shown.or(fg_frames
+            .as_ref()
+            .filter(|_| self.surface.is_some())
+            .map(|f| &f.0));
+        match (&self.hdr, shown) {
+            (Some(hdr), Some(texture)) => hdr.present(
                 &self.queue,
                 &mut encoder,
-                &f.texture,
+                texture,
                 lifts_world,
                 self.own_timing.as_mut(),
             ),
@@ -11801,7 +11765,7 @@ impl Renderer {
                 self.configure_surface();
             }
         } else if let Some((real, generated)) = fg_frames {
-            self.frame_gen.present(real, generated, fg_made);
+            self.present_generated(real, generated, fg_made);
         }
         if self.surface.is_none() {
             // No swapchain paces offscreen frames: keep two on the GPU at most.
@@ -14447,9 +14411,11 @@ struct DisplayWatch {
 }
 
 impl DisplayReading {
-    /// What wgpu reads from the OS for `surface`'s display; nothing without one.
+    /// What wgpu reads from the OS for `surface`'s display; without one, `hdr::offscreen_display`.
     fn read(surface: Option<&wgpu::Surface>, adapter: &wgpu::Adapter) -> Self {
-        surface.map_or_else(Self::default, |s| Self::os(&s.display_hdr_info(adapter)))
+        surface.map_or_else(hdr::offscreen_display, |s| {
+            Self::os(&s.display_hdr_info(adapter))
+        })
     }
     fn os(info: &wgpu::DisplayHdrInfo) -> Self {
         #[cfg(target_os = "macos")]
