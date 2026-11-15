@@ -17,8 +17,7 @@
   <a href="https://playhorizon.dev/docs/install"><b>Install guide</b></a> ·
   <a href="https://playhorizon.dev/docs/"><b>Docs</b></a> ·
   <a href="https://playhorizon.dev/mods"><b>Mods</b></a> ·
-  <a href="https://discord.gg/playhorizon"><b>Discord</b></a> ·
-  <a href="https://playhorizon.dev"><b>Website</b></a>
+  <a href="https://discord.gg/playhorizon"><b>Discord</b></a>
 </p>
 
 <p align="center">
@@ -34,13 +33,13 @@
 </table>
 
 <p align="center">
-  <sub>Start and frame rate against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast on a Ryzen 7 9800X3D with an RTX 5080: the title screen in about 3 seconds instead of 11, and 31 to 38 percent more frames per second across render distances. Other computers are on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
+  <sub>Start and frame rate against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast, on a Ryzen 7 9800X3D with an RTX 5080. Other computers are on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
 </p>
 
 ## What you get
 
 - **The game you know.** Survival, creative and hardcore in every dimension, with vanilla's terrain, mobs, villagers and redstone. Your saves open as they are.
-- **Far terrain.** The world is drawn up to 1,024 chunks away, past the render distance.
+- **Far terrain.** The world stays in view far past the render distance.
 - **Friends.** Join vanilla and Horizon servers, open your world to LAN, or send a friend an invite code. The server runs without Java.
 - **Mods.** Horizon has its own mod system, with zoom, a minimap and shader packs in the [catalogue](https://playhorizon.dev/mods). You can [make your own](https://playhorizon.dev/docs/make-a-mod).
 - **HDR and controllers.** Both are in the settings, with no mod to install.
