@@ -345,7 +345,8 @@ The game runs them. The keys, their limits and the WGSL each pass sees are in th
 [reference](api/shaders-reference-0.2.md#kept-resources-and-compute-passes).
 
 Under `[ray_tracing]` a compute or `[[before_world]]` file that calls a trace function gets them, as a post pass does;
-a `[[before_world]]` pass traces this frame's scene. One part comes in a later step: `[material]` can't read kept
+a `[[before_world]]` pass traces this frame's scene. The four trace names are found by name, as in the material
+stage, so under `[ray_tracing]` don't give them to anything of the pack's own. One part comes in a later step: `[material]` can't read kept
 resources.
 
 ## Options
