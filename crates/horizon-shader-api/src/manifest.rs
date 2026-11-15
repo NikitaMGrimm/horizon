@@ -1325,8 +1325,7 @@ impl Manifest {
         out
     }
 
-    /// Whether the pack declares kept resources or compute passes, which the game doesn't run
-    /// yet.
+    /// Whether the pack declares kept resources or compute passes.
     pub fn computes(&self) -> bool {
         !self.kept.resources.is_empty()
             || !self.kept.before_world.is_empty()
