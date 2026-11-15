@@ -49,6 +49,9 @@ pub(super) struct KeptStore {
     /// Real frames handed over (`frame`), and the one `begin` last started.
     serial: u32,
     begun: u32,
+    /// Whether the last `begin` started its frame: the compute passes run once a frame, so
+    /// an in-place write (`x[i] += 1`) counts once however often the chain runs.
+    started: bool,
     /// The epochs the resources were last cleared for.
     cleared: [u32; 2],
 }
@@ -73,6 +76,7 @@ impl KeptStore {
             computes: Vec::new(),
             parity: 0,
             serial: 0,
+            started: false,
             begun: 0,
             cleared: [1, 1],
         }
@@ -130,7 +134,8 @@ impl KeptStore {
         size: [u32; 2],
     ) -> bool {
         let remade = self.fit(device, size);
-        if self.begun == self.serial {
+        self.started = self.begun != self.serial;
+        if !self.started {
             return remade;
         }
         (self.begun, self.parity) = (self.serial, 1 - self.parity);
@@ -228,7 +233,9 @@ pub(super) fn chain(
             at += 1;
             continue;
         }
-        let Some(stage) = computes.next() else { break };
+        let Some(stage) = computes.next() else {
+            return Err(format!("{}: no checked compute stage", entry.file));
+        };
         let layout = &store.passes[ordinary.len() + store.computes.len()].pipeline;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let present = super::present_constants(&stage.module, constants);
@@ -275,9 +282,9 @@ pub(super) fn order(
 }
 
 /// Dispatches, in `encoder`, the compute passes that run before ordinary pass `at`, with this
-/// frame's `groups` (`order`'s) at R `size`: `"pixels"` covers R in whole workgroups, the
-/// prelude's `in_bounds` false past it. An indirect dispatch (#16545's follow-up) would take
-/// its workgroups from a buffer here.
+/// frame's `groups` (`order`'s) at R `size`, on the frame's first run of the chain only
+/// (`begin`): `"pixels"` covers R in whole workgroups, the prelude's `in_bounds` false past it.
+/// An indirect dispatch (#16545's follow-up) would take its workgroups from a buffer here.
 pub(super) fn dispatch(
     kept: &Option<KeptStore>,
     encoder: &mut wgpu::CommandEncoder,
@@ -285,7 +292,9 @@ pub(super) fn dispatch(
     at: usize,
     size: [u32; 2],
 ) {
-    let Some(k) = kept else { return };
+    let Some(k) = kept.as_ref().filter(|k| k.started) else {
+        return;
+    };
     let ordinary = k.passes.len() - k.computes.len();
     for (c, p) in k.computes.iter().enumerate().filter(|(_, p)| p.at == at) {
         let cells = match p.dispatch {

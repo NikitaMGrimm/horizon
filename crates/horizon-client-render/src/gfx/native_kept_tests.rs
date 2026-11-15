@@ -730,7 +730,7 @@ fn shows(got: [u8; 4], want: [f32; 3]) -> bool {
 }
 
 /// The chain of `manifest` and `files` over `frames` (epochs, R, the colour expected), with no
-/// validation error.
+/// validation error; a second run in the last frame dispatches nothing and shows the same.
 fn computes(manifest: &str, files: &[(&str, &str)], frames: &[([u32; 2], [u32; 2], [f32; 3])]) {
     let Some((device, queue)) = device() else {
         return;
@@ -743,6 +743,12 @@ fn computes(manifest: &str, files: &[(&str, &str)], frames: &[([u32; 2], [u32; 2
         let got = chain.next(&device, &queue, epochs, size);
         assert!(shows(got, want), "frame {n}: {got:?}, {want:?} expected");
     }
+    let (_, size, want) = frames[frames.len() - 1];
+    let again = chain.run(&device, &queue, size);
+    assert!(
+        shows(again, want),
+        "run again: {again:?}, {want:?} expected"
+    );
     let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
 }
