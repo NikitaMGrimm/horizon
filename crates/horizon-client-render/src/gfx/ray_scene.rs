@@ -22,7 +22,8 @@
 //! never reads, so a camera that moves builds nothing here. Their vertices are copied into the
 //! store as they are.
 //!
-//! Video memory running out is not fatal: everything here is made inside an out-of-memory scope
+//! Video memory running out is not fatal: what grows with the world (the store, each part's
+//! BLAS and its compacted copy, the TLAS) is made inside an out-of-memory scope
 //! (`out_of_memory_free`). A part whose slot or BLAS can't be made waits as at a full store, a
 //! TLAS that can't grow leaves the frame's scene as it was, and without room for the first store
 //! or TLAS there is no scene.
@@ -348,6 +349,7 @@ impl RayScene {
                 .flatten()
         }) {
             Some(grown) => {
+                self.refused = None;
                 changed |= grown;
                 self.generation += u64::from(grown);
             }
