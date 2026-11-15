@@ -284,11 +284,7 @@ impl Frame {
     /// where the epochs are: there `luminance` keeps the epochs' bytes (`@size`), so they stay
     /// at the offsets the uploaded struct has.
     pub fn declared_wgsl(ray_tracing: bool, kept: bool, fog: bool) -> String {
-        let mut out = format!(
-            "struct {} {{
-",
-            Self::WGSL.name
-        );
+        let mut out = format!("struct {} {{\n", Self::WGSL.name);
         for f in Self::declared(ray_tracing, kept, fog) {
             let luminance = f.name == Self::WGSL.fields[Self::KEPT_FIELDS.start - 1].name;
             if luminance && fog && !kept {
@@ -298,14 +294,9 @@ impl Frame {
             } else {
                 out += "    ";
             }
-            out += &format!(
-                "{}: {},
-",
-                f.name, f.ty
-            );
+            out += &format!("{}: {},\n", f.name, f.ty);
         }
-        out + "}
-"
+        out + "}\n"
     }
 }
 
