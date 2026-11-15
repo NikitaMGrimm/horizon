@@ -584,12 +584,14 @@ fn a_pack_with_every_kept_resource_traces() {
     assert!(error.is_none(), "{error:?}");
 }
 
-/// An entity layer's bindings with nothing in the TLAS: a vertex buffer, a 1×1 atlas and a
-/// sampler, as the renderer binds them for a pack that names `RAY_ENTITY`.
+/// An entity layer's bindings with nothing in the TLAS: a vertex buffer, a 1×1 atlas, a
+/// sampler and an empty retained block entity store, as the renderer binds them for a pack that
+/// names `RAY_ENTITY`.
 struct EntityLayer {
     vertices: wgpu::Buffer,
     atlas: wgpu::TextureView,
     sampler: wgpu::Sampler,
+    retained: wgpu::Buffer,
 }
 
 impl EntityLayer {
@@ -619,6 +621,12 @@ impl EntityLayer {
             vertices,
             atlas: atlas.create_view(&Default::default()),
             sampler: device.create_sampler(&Default::default()),
+            retained: device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 176,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }),
         }
     }
 
@@ -631,6 +639,8 @@ impl EntityLayer {
                 atlas: &self.atlas,
                 sampler: &self.sampler,
                 bases: [0; 3],
+                retained: &self.retained,
+                retained_instances: 0,
             }),
             ..scene.traced()
         }
