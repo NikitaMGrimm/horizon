@@ -62,6 +62,18 @@ pub enum Primaries {
     Bt2020,
 }
 
+/// `[material] coverage` (0.2): which alpha decides whether a point of solid or cutout terrain is
+/// drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Coverage {
+    /// The engine's alpha test on the sampled texture, as Horizon's own terrain: the returned
+    /// alpha is translucent terrain's opacity only, and the stage may not `discard`.
+    #[default]
+    Engine,
+    /// The returned alpha drives the alpha test, and the stage may `discard`. 0.1 always.
+    Pack,
+}
+
 impl Primaries {
     /// `Frame.luminance`: the weights that give a colour's luminance in these primaries.
     pub const fn luminance(self) -> [f32; 3] {
@@ -123,6 +135,8 @@ pub struct Manifest {
     pub blend: Blend,
     /// 0.2: `[frame] primaries`.
     pub primaries: Primaries,
+    /// 0.2: `[material] coverage`; `Pack` on 0.1, whose returned alpha always decides.
+    pub coverage: Coverage,
     pub options: Vec<PackOption>,
     /// How the settings page lays the options out; the first page is the one it opens on.
     /// Empty: one page with every option.
@@ -151,6 +165,9 @@ pub struct Manifest {
     pub ray_tracing: Option<RayTracing>,
     /// 0.2: kept resources and compute passes. Checked, not yet run.
     pub kept: crate::kept::Kept,
+    /// 0.2: the motion guide the post stage's `motion_at` reads, if the pack asks for it;
+    /// needs `[[post]]`.
+    pub motion: Option<Motion>,
 }
 
 /// `[ray_tracing]` (0.2): the pack's post passes, and its material stage where it calls them,
@@ -160,6 +177,12 @@ pub struct Manifest {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RayTracing {}
+
+/// `[motion]` (0.2): the pack's post passes get `scene_motion`, `motion_at`, `MotionData` and
+/// the `MOTION_` kinds, how each pixel's surface moved since last frame. No keys yet.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Motion {}
 
 /// `[displacement]`: within `distance` of the camera, the faces of solid terrain whose
 /// resource pack textures have LabPBR heights are drawn as a grid of `cells` by `cells`, each
@@ -403,6 +426,9 @@ pub struct Stage {
     /// (true when absent); false for a pack that fogs its surfaces itself.
     #[serde(default)]
     pub fog: Option<bool>,
+    /// The material stage only (0.2): `"engine"` (when absent) or `"pack"`, `Manifest::coverage`.
+    #[serde(default)]
+    pub coverage: Option<String>,
     /// The sky stage only: whether Minecraft's clouds still draw (true when absent); false for
     /// a pack whose sky draws its own.
     #[serde(default)]
@@ -557,6 +583,7 @@ struct Raw {
     resource: Vec<crate::kept::RawResource>,
     #[serde(default)]
     before_world: Vec<Stage>,
+    motion: Option<Motion>,
 }
 
 #[derive(Deserialize)]
@@ -590,8 +617,9 @@ struct RawBudget {
 }
 
 /// Whether `name` is taken from a pack's own WGSL names: by the post prelude's resources or, under
-/// `[ray_tracing]`, by its functions, or as a word WGSL reserves.
-pub(crate) fn taken(name: &str, ray_tracing: bool) -> bool {
+/// `[ray_tracing]`, by its functions, under `[motion]` by the guide's `scene_motion` and
+/// `motion_at`, or as a word WGSL reserves.
+pub(crate) fn taken(name: &str, ray_tracing: bool, motion: bool) -> bool {
     // The post prelude's functions `[ray_tracing]` brings.
     let traced = [
         "trace",
@@ -604,6 +632,7 @@ pub(crate) fn taken(name: &str, ray_tracing: bool) -> bool {
         "hit_specular_map",
         "block_pbr_maps",
     ];
+    let guide = ["scene_motion", "motion_at"];
     let reserved = [
         "frame",
         "scene_color",
@@ -620,6 +649,7 @@ pub(crate) fn taken(name: &str, ray_tracing: bool) -> bool {
     ];
     reserved.contains(&name)
         || (ray_tracing && traced.contains(&name))
+        || (motion && guide.contains(&name))
         || naga::keywords::wgsl::RESERVED.contains(&name)
 }
 
@@ -636,12 +666,14 @@ pub(crate) fn target_name(name: &str) -> bool {
 
 /// `[[post]] scale` and `output`: scales from `POST_SCALES`, below 1 only with an output,
 /// the last pass drawing the picture itself, outputs named as WGSL names no other resource
-/// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'), each at one scale,
+/// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'; under `[motion]`, nor the
+/// guide's `scene_motion` and `motion_at`), each at one scale,
 /// `MAX_POST_TARGETS` at most with the R-relative kept textures, two each. An output naming a
 /// kept texture writes it (`kept::kept_targets`).
 fn check_post_targets(
     post: &[Stage],
     ray_tracing: bool,
+    motion: bool,
     kept: &[crate::kept::Resource],
 ) -> Result<(), String> {
     let kept_targets = crate::kept::kept_targets(post, kept)?;
@@ -669,7 +701,7 @@ fn check_post_targets(
         if kept.iter().any(|r| r.name == *name) {
             continue;
         }
-        if !target_name(name) || taken(name, ray_tracing) {
+        if !target_name(name) || taken(name, ray_tracing, motion) {
             return Err(format!(
                 "{}: output {name:?} is not a free WGSL name ([a-z][a-z0-9_]*, at most 32)",
                 p.file
@@ -729,6 +761,11 @@ impl Manifest {
                     raw.options.iter().any(|o| o.resets.is_some()),
                     "an option's `resets`",
                 ),
+                (raw.motion.is_some(), "[motion]"),
+                (
+                    raw.material.as_ref().is_some_and(|m| m.coverage.is_some()),
+                    "[material] coverage",
+                ),
             ] {
                 if present {
                     return Err(err(format!(
@@ -754,6 +791,12 @@ impl Manifest {
                 ));
             }
             Some(p) => return Err(err(format!("frame.primaries {p:?}: bt709 or bt2020"))),
+        };
+        let coverage = match raw.material.as_ref().and_then(|m| m.coverage.as_deref()) {
+            _ if api == Api::V0_1 => Coverage::Pack,
+            None | Some("engine") => Coverage::Engine,
+            Some("pack") => Coverage::Pack,
+            Some(c) => return Err(err(format!("material.coverage {c:?}: engine or pack"))),
         };
         let id_ok = (1..=64).contains(&raw.id.len())
             && raw
@@ -802,6 +845,18 @@ impl Manifest {
         if raw
             .sky
             .iter()
+            .chain(&raw.vertex)
+            .chain(&raw.weather)
+            .chain(&raw.post)
+            .chain(&raw.tonemap)
+            .chain(&raw.entity)
+            .any(|s| s.coverage.is_some())
+        {
+            return Err(err("`coverage` is a key of [material] only".into()));
+        }
+        if raw
+            .sky
+            .iter()
             .chain(&raw.material)
             .chain(&raw.vertex)
             .chain(&raw.tonemap)
@@ -839,20 +894,27 @@ impl Manifest {
             .filter_map(|o| Some((o.id.clone(), o.resets.clone()?)))
             .collect();
         let traced = raw.ray_tracing.is_some();
+        let motion = raw.motion.is_some();
         let kept = crate::kept::check(
             raw.kept,
             raw.resource,
             raw.before_world,
             &raw.post,
             traced,
+            motion,
             resets,
         )
         .map_err(err)?;
-        check_post_targets(&raw.post, traced, &kept.resources).map_err(err)?;
+        check_post_targets(&raw.post, traced, motion, &kept.resources).map_err(err)?;
         if raw.ray_tracing.is_some() && raw.post.is_empty() && raw.material.is_none() {
             return Err(err(
                 "[ray_tracing] needs a [[post]] pass or a [material] stage: `trace` is theirs"
                     .into(),
+            ));
+        }
+        if raw.motion.is_some() && raw.post.is_empty() {
+            return Err(err(
+                "[motion] needs a [[post]] pass: the motion guide is the post stage's".into(),
             ));
         }
         let passes = raw.post.iter().filter(|p| !p.compute).count();
@@ -1209,6 +1271,7 @@ impl Manifest {
             entity: raw.entity,
             blend,
             primaries,
+            coverage,
             options,
             pages,
             tags: raw.tags,
@@ -1222,6 +1285,7 @@ impl Manifest {
             displacement,
             ray_tracing: raw.ray_tracing,
             kept,
+            motion: raw.motion,
         })
     }
 

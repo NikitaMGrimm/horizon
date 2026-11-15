@@ -71,7 +71,7 @@ fn each_shape_is_made_with_its_size_and_usages_and_fit_remakes_the_scaled_ones()
     let kept = every_shape();
     let mut store = KeptStore::new(&device, &kept, [101, 60]);
     let buffers = [(64, None); 5];
-    let textures = |half| [(0, Some([3, 2])), (0, Some(half))].repeat(3);
+    let textures = |half| [(0, Some([3, 2])), (0, Some(half))].repeat(Format::ALL.len());
     assert_eq!(
         sizes(&store),
         [&buffers[..], &textures([51, 30])[..]].concat()
@@ -263,8 +263,8 @@ fn a_pass_s_kept_bindings_count_toward_its_stage_s_limits() {
     assert_eq!(why, "p.wgsl: 5 storage buffers, the device takes 4");
 }
 
-/// A read 32-bit texture isn't filterable, a written one is write-only storage, and a buffer is
-/// read-only where the pass doesn't write it.
+/// A read 32-bit texture isn't filterable (an `rgba32uint` one is `u32`), a written one is
+/// write-only storage, and a buffer is read-only where the pass doesn't write it.
 #[test]
 fn layout_entries_follow_the_access_and_the_format() {
     let kept = every_shape();
@@ -282,6 +282,21 @@ fn layout_entries_follow_the_access_and_the_format() {
     assert_eq!(ty(at(5, KeptAccess::Previous)), texture(true));
     assert_eq!(ty(at(7, KeptAccess::Read)), texture(false));
     assert_eq!(ty(at(9, KeptAccess::Previous)), texture(false));
+    let uint = wgpu::BindingType::Texture {
+        sample_type: wgpu::TextureSampleType::Uint,
+        view_dimension: wgpu::TextureViewDimension::D2,
+        multisampled: false,
+    };
+    assert_eq!(ty(at(11, KeptAccess::Read)), uint);
+    assert_eq!(ty(at(12, KeptAccess::Previous)), uint);
+    assert_eq!(
+        ty(at(11, KeptAccess::Write)),
+        wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba32Uint,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        }
+    );
     assert_eq!(
         ty(at(8, KeptAccess::Write)),
         wgpu::BindingType::StorageTexture {
@@ -522,7 +537,8 @@ impl Chain {
         frame
     }
 
-    /// The post stage of the pack of `manifest` (after `HEAD`, then `[tonemap]`) and `files`.
+    /// The post stage of the pack of `manifest` (after `HEAD`, then `[tonemap]`) and `files`,
+    /// installed.
     fn post(
         device: &wgpu::Device,
         frame: &super::super::NativeFrame,
@@ -535,7 +551,7 @@ impl Chain {
             (report.stages.into_iter()).partition(|s| s.kind == StageKind::Post);
         let tonemap = others.iter().find(|s| s.kind == StageKind::Tonemap);
         let format = wgpu::TextureFormat::Rgba8Unorm;
-        super::super::NativePost::new(
+        let mut post = super::super::NativePost::new(
             device,
             passes,
             &report.manifest,
@@ -544,7 +560,9 @@ impl Chain {
             frame,
             tonemap,
         )
-        .unwrap()
+        .unwrap();
+        install(device, Some(&mut post), None);
+        post
     }
 
     fn new(device: &wgpu::Device, frame: super::super::NativeFrame, post: NativePost) -> Self {
@@ -701,4 +719,73 @@ fn a_pack_without_kept_resources_makes_the_layouts_and_groups_it_made_before() {
     assert_eq!(plain, [[1, 0], [0, 4], [0, 0]]);
     let kept = made(KEPT_CHAIN, &KEPT_FILES).unwrap();
     assert_eq!(kept, [[4, 0], [0, 8], [0, 0]]);
+}
+
+/// #16011 item 4: a pack's kept resources are made at install (`replace_native`), not while it
+/// builds, so one that fails to build makes none; a reload destroys the old store before it
+/// makes the new one, and a carried store stays. Counted with `Instance::generate_report`.
+#[test]
+fn a_reload_never_holds_two_stores() {
+    let instance = crate::gfx::test_gpu::instance();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        return;
+    };
+    let Ok((device, _)) = pollster::block_on(adapter.request_device(&Default::default())) else {
+        return;
+    };
+    // Live buffers and textures.
+    let count = || {
+        let hub = instance.generate_report()?.hub;
+        Some([hub.buffers.num_allocated, hub.textures.num_allocated])
+    };
+    if count().is_none() {
+        return;
+    }
+    let frame = super::super::NativeFrame::new(
+        &device,
+        None,
+        Vec::new(),
+        Default::default(),
+        None,
+        (horizon_shader_api::Api::V0_2, false),
+    );
+    let post = |resources: &str, colour: &str| {
+        let pass = format!("fn post(input: PostInput) -> vec4<f32> {{ return {colour}; }}\n");
+        let report = report(
+            &format!("{resources}[[post]]\nfile = \"a.wgsl\"\n"),
+            &[("a.wgsl", &pass)],
+        );
+        let stages = (report.stages.into_iter())
+            .filter(|s| s.kind == StageKind::Post)
+            .collect();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        super::super::NativePost::new(&device, stages, &report.manifest, &[], format, &frame, None)
+            .unwrap()
+    };
+    let delta = |from: [usize; 2]| count().map(|c| [c[0] - from[0], c[1] - from[1]]);
+    // Building one makes what building one without resources makes: nothing kept.
+    let before = count().unwrap();
+    let bare = post("", "input.color");
+    let made = delta(before).unwrap();
+    drop(bare);
+    let before = count().unwrap();
+    let mut first = post(BUFFERS, "input.color");
+    assert_eq!(delta(before), Some(made));
+    // Installed: the buffer and the texture's two versions.
+    let built = count().unwrap();
+    install(&device, Some(&mut first), None);
+    assert_eq!(delta(built), Some([1, 2]));
+    // A reload with another file: the first store goes, then the second is made.
+    let mut second = post(BUFFERS, "input.color * 0.5");
+    let built = count().unwrap();
+    install(&device, Some(&mut second), Some(&mut first));
+    assert_eq!(delta(built), Some([0, 0]));
+    assert!(first.kept.as_ref().is_some_and(|k| k.held.is_empty()));
+    // A carried store stays: nothing destroyed, nothing made.
+    let mut third = post(BUFFERS, "input.color * 0.5");
+    third.carry(&mut second);
+    let built = count().unwrap();
+    install(&device, Some(&mut third), Some(&mut second));
+    assert_eq!(delta(built), Some([0, 0]));
+    assert_eq!(third.kept.as_ref().map(|k| k.held.len()), Some(2));
 }

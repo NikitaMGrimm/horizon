@@ -158,21 +158,23 @@ fn prelude_names(composed: &horizon_shader_api::Composed, kind: StageKind) -> BT
     have
 }
 
+fn list_path(list: &str) -> String {
+    format!("{}/tests/names-0.2/{list}.txt", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// The names on `tests/names-0.2/<list>.txt`.
+fn listed(list: &str) -> BTreeSet<String> {
+    let path = list_path(list);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let lines = text.lines().map(str::trim);
+    (lines.filter(|l| !l.is_empty() && !l.starts_with('#')))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// `tests/names-0.2/<stage>.txt`, and where it is.
 fn listed_names(kind: StageKind) -> (BTreeSet<String>, String) {
-    let path = format!(
-        "{}/tests/names-0.2/{}.txt",
-        env!("CARGO_MANIFEST_DIR"),
-        kind.name()
-    );
-    let list = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    let listed = list
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(str::to_owned)
-        .collect();
-    (listed, path)
+    (listed(kind.name()), list_path(kind.name()))
 }
 
 #[test]
@@ -301,6 +303,21 @@ fn kept_resources_bring_the_frame_s_epochs_to_their_pack_only() {
     let post = "fn post(input: PostInput) -> vec4<f32> {\n    \
                 return input.color * f32((frame.reset_reasons & REASON_TELEPORT) == 0u);\n}\n";
     check(&pack_with(resource, Some(("post.wgsl", post)))).unwrap();
+}
+
+/// `[motion]` brings the post stage the motion guide's names, `post_motion.txt`, and no others.
+#[test]
+fn motion_brings_the_post_stage_only_the_motion_names() {
+    let pack = pack_with("[motion]\n", None);
+    for &kind in Api::V0_2.stages() {
+        let composed = compose(&pack, kind, &format!("{}.wgsl", kind.name()));
+        let (mut want, _) = listed_names(kind);
+        if kind == StageKind::Post {
+            want.extend(listed("post_motion"));
+        }
+        assert_eq!(prelude_names(&composed, kind), want, "{kind:?}");
+    }
+    check(&pack).unwrap();
 }
 
 fn messages(result: Result<horizon_shader_api::Report, Vec<Problem>>) -> Vec<String> {

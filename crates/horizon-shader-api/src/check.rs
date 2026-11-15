@@ -280,7 +280,19 @@ fn check_entry(
     if kind == StageKind::Material {
         own.text += crate::stages::PBR_STUB;
     }
-    let module = parse(&own).map_err(|p| undeclared(p, &pack.manifest, kind))?;
+    let module = parse(&own).map_err(|mut problems| {
+        // A motion guide name the pack didn't ask for: say how to ask.
+        let names = ["`scene_motion`", "`motion_at`", "`MotionData`", "`MOTION_"];
+        for p in problems
+            .iter_mut()
+            .filter(|_| pack.manifest.motion.is_none())
+        {
+            if kind == StageKind::Post && names.iter().any(|n| p.message.contains(n)) {
+                p.message += "; the motion guide's names need `[motion]` in the manifest";
+            }
+        }
+        undeclared(problems, &pack.manifest, kind)
+    })?;
     own.text.truncate(entries.1.start);
     let mut problems = signature(&module, kind, file);
     if kind == StageKind::Material && pack.manifest.displacement.is_some() {
@@ -332,6 +344,17 @@ fn check_entry(
     };
     let (expressions, texture_reads) = cost(scene.as_ref().map_or(&module, |s| &s.0));
     let mut problems = Vec::new();
+    let engine = kind == StageKind::Material && pack.manifest.coverage == crate::Coverage::Engine;
+    if engine && let Some(at) = reachable_discard(&module, kind.function()) {
+        problems.push(located(
+                &composed,
+                at.to_range().map(|r| r.start),
+                "`discard` reachable from `material`: under `[material] coverage = \"engine\"` (the \
+                 default) Horizon's alpha test on the texture decides what is drawn; a pack that cuts \
+                 its own holes sets `coverage = \"pack\"`"
+                    .into(),
+            ));
+    }
     if expressions > MAX_EXPRESSIONS {
         problems.push(problem(
             file,
@@ -450,7 +473,8 @@ fn undeclared(mut problems: Vec<Problem>, m: &crate::Manifest, kind: StageKind) 
     problems
 }
 
-/// Where a pass samples or gathers a 32-bit kept texture (`r32float`, `rgba32float`), this
+/// Where a pass samples or gathers a 32-bit kept texture (`r32float`, `rgba32float`; an
+/// `rgba32uint` one, `texture_2d<u32>`, can't be sampled at all), this
 /// frame's or `_previous`, itself or through a function's argument: the API reads them with
 /// `textureLoad` only, unfiltered, which every device does.
 fn sampled_data(
@@ -735,6 +759,7 @@ fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
             COMPUTE_INPUT.name,
             "SurfaceData",
             RAY_HIT.name,
+            "MotionData",
         ])
         .collect();
     let arenas = module
@@ -769,6 +794,53 @@ fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
         }
     }
     problems
+}
+
+/// Where a `discard` is that the function `name` can reach: in its own body, its nested blocks,
+/// or a function it calls, however deep.
+fn reachable_discard(module: &naga::Module, name: &str) -> Option<naga::Span> {
+    fn walk(
+        block: &naga::Block,
+        calls: &mut Vec<naga::Handle<naga::Function>>,
+    ) -> Option<naga::Span> {
+        for (statement, span) in block.span_iter() {
+            let found = match statement {
+                naga::Statement::Kill => return Some(*span),
+                naga::Statement::Block(b) => walk(b, calls),
+                naga::Statement::If { accept, reject, .. } => {
+                    walk(accept, calls).or_else(|| walk(reject, calls))
+                }
+                naga::Statement::Switch { cases, .. } => {
+                    cases.iter().find_map(|c| walk(&c.body, calls))
+                }
+                naga::Statement::Loop {
+                    body, continuing, ..
+                } => walk(body, calls).or_else(|| walk(continuing, calls)),
+                naga::Statement::Call { function, .. } => {
+                    calls.push(*function);
+                    None
+                }
+                _ => None,
+            };
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
+    }
+    let (start, _) = module
+        .functions
+        .iter()
+        .find(|(_, f)| f.name.as_deref() == Some(name))?;
+    let (mut calls, mut seen) = (vec![start], HashSet::new());
+    while let Some(f) = calls.pop() {
+        if seen.insert(f)
+            && let Some(span) = walk(&module.functions[f].body, &mut calls)
+        {
+            return Some(span);
+        }
+    }
+    None
 }
 
 /// Each `override` is an option of its type, or has a default of its own.

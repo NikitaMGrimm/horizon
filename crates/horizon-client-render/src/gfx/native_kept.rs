@@ -1,8 +1,8 @@
 //! A shader pack's kept resources (#16011 item 4): the storage its `[[resource]]`s declare,
-//! made per view, the layout entries a pass binds them with, what a device lacks for them, and
-//! the epochs that say when they start over; the post chain's passes bind them, and each frame
-//! starts by swapping, fitting and clearing them (`KeptStore::begin`). Compute passes don't run
-//! yet, and the game still refuses such a pack.
+//! made per view when the pack is installed, the layout entries a pass binds them with, what a
+//! device lacks for them, and the epochs that say when they start over; the post chain's passes
+//! bind them, and each frame starts by swapping, fitting and clearing them (`KeptStore::begin`).
+//! Compute passes don't run yet, and the game still refuses such a pack.
 use horizon_shader_api::check::{CheckedStage, Report};
 use horizon_shader_api::kept::{self, Dispatch, Format, Keep, Kept, Shape};
 use horizon_shader_api::stages::{GROUP, KeptAccess, KeptBinding, kept_bindings};
@@ -23,7 +23,7 @@ pub(super) struct KeptPass {
     pub(super) pipeline: wgpu::PipelineLayout,
 }
 
-/// A pack's kept resources for one view, in `[[resource]]` order.
+/// A pack's kept resources for one view, in `[[resource]]` order: none made until `allocate`.
 pub(super) struct KeptStore {
     kept: Kept,
     held: Vec<Held>,
@@ -43,22 +43,45 @@ pub(super) struct KeptStore {
 
 impl KeptStore {
     /// Every resource of `kept`, zeros, the R-relative textures at `scale` of `size` (R).
+    #[cfg(test)]
     pub(super) fn new(device: &wgpu::Device, kept: &Kept, size: [u32; 2]) -> Self {
-        let held = (kept.resources.iter())
-            .map(|r| make(device, &r.name, r.shape, size))
-            .collect();
-        let kept = kept.clone();
-        let next = ([1, 1], size);
+        let mut store = Self::declared(kept, size);
+        store.allocate(device);
+        store
+    }
+
+    /// The store of `kept` at `size`, nothing made yet.
+    pub(super) fn declared(kept: &Kept, size: [u32; 2]) -> Self {
         Self {
-            kept,
-            held,
+            kept: kept.clone(),
+            held: Vec::new(),
             size,
-            next,
+            next: ([1, 1], size),
             passes: Vec::new(),
             parity: 0,
             serial: 0,
             begun: 0,
             cleared: [1, 1],
+        }
+    }
+
+    /// Makes every resource, zeros, unless they are made.
+    fn allocate(&mut self, device: &wgpu::Device) {
+        if self.held.is_empty() {
+            let (resources, size) = (&self.kept.resources, self.size);
+            self.held = (resources.iter())
+                .map(|r| make(device, &r.name, r.shape, size))
+                .collect();
+        }
+    }
+
+    /// Destroys every resource now, not when the GPU is done with the last frame.
+    fn free(&mut self) {
+        for held in self.held.drain(..) {
+            match held {
+                Held::Buffer(buffer) => buffer.destroy(),
+                Held::Pair(views) => views.iter().for_each(|v| v.texture().destroy()),
+            }
         }
     }
 
@@ -150,7 +173,7 @@ pub(super) fn chain(
     if manifest.post.iter().any(|p| p.compute) {
         return Err("compute [[post]] passes don't run yet".into());
     }
-    let mut store = KeptStore::new(device, kept, [1, 1]);
+    let mut store = KeptStore::declared(kept, [1, 1]);
     store.passes = (manifest.post.iter())
         .map(|entry| {
             let bindings = kept_bindings(manifest, entry);
@@ -251,6 +274,23 @@ pub(super) fn output(kept: &Option<KeptStore>, r: usize) -> &wgpu::TextureView {
     match kept.as_ref().map(|k| (&k.held[r], k.parity)) {
         Some((Held::Pair(v), parity)) => &v[parity],
         _ => unreachable!("an output is a texture of the chain's store"),
+    }
+}
+
+/// Installs the kept resources of `new`, the post stage of the pack that runs from now on,
+/// where `old`'s ran: a store `new` carried over (`NativePack::carry`, before) stays; else
+/// `old`'s is destroyed before `new`'s is made, so a reload never holds two stores, and a pack
+/// that fails to build never makes one.
+pub(in crate::gfx) fn install(
+    device: &wgpu::Device,
+    new: Option<&mut NativePost>,
+    old: Option<&mut NativePost>,
+) {
+    if let Some(store) = old.and_then(|p| p.kept.as_mut()) {
+        store.free();
+    }
+    if let Some(store) = new.and_then(|p| p.kept.as_mut()) {
+        store.allocate(device);
     }
 }
 
@@ -435,6 +475,7 @@ fn format(format: Format) -> wgpu::TextureFormat {
         Format::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
         Format::R32Float => wgpu::TextureFormat::R32Float,
         Format::Rgba32Float => wgpu::TextureFormat::Rgba32Float,
+        Format::Rgba32Uint => wgpu::TextureFormat::Rgba32Uint,
     }
 }
 
@@ -478,7 +519,8 @@ fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held
 
 /// The layout entries of `bindings` (`kept_bindings`) for `visibility`: a buffer read-only
 /// where the pass doesn't write it, a written texture write-only storage, a read one filterable
-/// only as `rgba16float` (the 32-bit ones are read with `textureLoad`).
+/// only as `rgba16float` (the 32-bit ones are read with `textureLoad`), `rgba32uint` read as
+/// `u32`.
 pub(super) fn layout_entries(
     kept: &Kept,
     bindings: &[KeptBinding],
@@ -501,8 +543,11 @@ pub(super) fn layout_entries(
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     _ => wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float {
-                            filterable: f == Format::Rgba16Float,
+                        sample_type: match f {
+                            Format::Rgba32Uint => wgpu::TextureSampleType::Uint,
+                            f => wgpu::TextureSampleType::Float {
+                                filterable: f == Format::Rgba16Float,
+                            },
                         },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
