@@ -1066,7 +1066,7 @@ mod tests {
                 };
                 let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
                 golem.ai.targets.add(1, DefendVillage);
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,
