@@ -199,12 +199,21 @@ uses the no-pack frame. What it changes from 0.1:
 - **`[motion]`** (no keys, needs `[[post]]`): every post pass gets `fn motion_at(texel: vec2<i32>) -> MotionData`, how
   each pixel's surface moved since last frame, for temporal passes. The check takes it, but **the game doesn't draw
   it yet** and refuses a pack that has it.
+- **`[material] coverage`**: `"engine"` (the default) or `"pack"`, whose alpha decides which points of terrain are
+  drawn. Under `"engine"` solid and cutout terrain keep Horizon's alpha test on the texture's alpha and ignore the
+  returned alpha, translucent terrain is cut on the texture's alpha too and takes the returned alpha as its opacity,
+  and the check refuses a `discard` reachable from `material`. Under `"pack"` the returned alpha drives the alpha
+  test and the stage may `discard`, as in 0.1.
 
 ```toml
 api = "0.2"
 
 [tonemap]                  # optional: the pack's own tone curve
 file = "tonemap.wgsl"
+
+[material]
+file = "material.wgsl"
+coverage = "engine"        # optional: engine (default) or pack, when the material cuts its own holes
 
 [entity]                   # optional: the colour of entities, block entities, items and particles (not drawn yet)
 file = "entity.wgsl"
@@ -257,6 +266,12 @@ draws them itself (the material stage covers terrain only). The first-person han
   `MOTION_OBJECT`, `MOTION_NEW` and `MOTION_NO_HISTORY` kinds: how each pixel's surface moved since last frame, for
   temporal passes. `horizon-shader check` takes it; the game refuses a pack with `[motion]` until it draws the guide.
   A pack without the key is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
+- 2026-11-13: API 0.2 (**breaking**, experimental): the material stage keeps the engine's coverage unless the pack
+  declares it, with `[material] coverage`, `"engine"` (the default) or `"pack"`. Under `"engine"` solid and cutout
+  terrain's alpha test reads the texture's alpha, not the returned one, translucent terrain is cut on the texture's
+  alpha and blends by the returned alpha, and `horizon-shader check` refuses a `discard` that `material` can reach,
+  through its helpers too. A 0.2 material that cuts its own holes sets `coverage = "pack"`, which keeps the old
+  behaviour. API 0.1 is unchanged, and refuses the key.
 - 2026-11-13: API 0.2 (fix, experimental): `MaterialInput.tangent.xyz` now points where `uv.x` grows, as the
   reference says; it pointed the other way, so a normal map turned into world axes by the reference's rule had both
   in-plane components negated. `w` is unchanged. A 0.2 pack that negated the tangent to make up for it must stop.
