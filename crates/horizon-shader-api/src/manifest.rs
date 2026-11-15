@@ -163,6 +163,9 @@ pub struct Manifest {
     /// 0.2: the scene the post and material stages' `trace` reads, if the pack asks for it;
     /// needs `[[post]]` or `[material]`.
     pub ray_tracing: Option<RayTracing>,
+    /// 0.2: the motion guide the post stage's `motion_at` reads, if the pack asks for it;
+    /// needs `[[post]]`.
+    pub motion: Option<Motion>,
 }
 
 /// `[ray_tracing]` (0.2): the pack's post passes, and its material stage where it calls them,
@@ -171,6 +174,12 @@ pub struct Manifest {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RayTracing {}
+
+/// `[motion]` (0.2): the pack's post passes get `scene_motion`, `motion_at`, `MotionData` and
+/// the `MOTION_` kinds, how each pixel's surface moved since last frame. No keys yet.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Motion {}
 
 /// `[displacement]`: within `distance` of the camera, the faces of solid terrain whose
 /// resource pack textures have LabPBR heights are drawn as a grid of `cells` by `cells`, each
@@ -551,6 +560,7 @@ struct Raw {
     shadow: Option<Shadow>,
     displacement: Option<RawDisplacement>,
     ray_tracing: Option<RayTracing>,
+    motion: Option<Motion>,
 }
 
 #[derive(Deserialize)]
@@ -584,10 +594,11 @@ struct RawBudget {
 
 /// `[[post]] scale` and `output`: scales from `POST_SCALES`, below 1 only with an output,
 /// the last pass drawing the picture itself, outputs named as WGSL names no other resource
-/// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'), each at one scale,
-/// `MAX_POST_TARGETS` at most.
-fn check_post_targets(post: &[Stage], ray_tracing: bool) -> Result<(), String> {
+/// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'; under `[motion]`, nor the
+/// guide's `scene_motion` and `motion_at`), each at one scale, `MAX_POST_TARGETS` at most.
+fn check_post_targets(post: &[Stage], ray_tracing: bool, motion: bool) -> Result<(), String> {
     let traced = ["trace", "trace_any"];
+    let guide = ["scene_motion", "motion_at"];
     let reserved = [
         "frame",
         "scene_color",
@@ -629,8 +640,9 @@ fn check_post_targets(post: &[Stage], ray_tracing: bool) -> Result<(), String> {
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
             && !name.starts_with("horizon_");
-        let taken =
-            reserved.contains(&name.as_str()) || (ray_tracing && traced.contains(&name.as_str()));
+        let taken = reserved.contains(&name.as_str())
+            || (ray_tracing && traced.contains(&name.as_str()))
+            || (motion && guide.contains(&name.as_str()));
         if !valid || taken {
             return Err(format!(
                 "{}: output {name:?} is not a free WGSL name ([a-z][a-z0-9_]*, at most 32)",
@@ -679,6 +691,7 @@ impl Manifest {
                 (raw.entity.is_some(), "[entity]"),
                 (raw.frame.is_some(), "[frame]"),
                 (raw.ray_tracing.is_some(), "[ray_tracing]"),
+                (raw.motion.is_some(), "[motion]"),
                 (
                     raw.material.as_ref().is_some_and(|m| m.coverage.is_some()),
                     "[material] coverage",
@@ -781,11 +794,17 @@ impl Manifest {
         {
             return Err(err("`scale` and `output` are keys of [[post]] only".into()));
         }
-        check_post_targets(&raw.post, raw.ray_tracing.is_some()).map_err(err)?;
+        check_post_targets(&raw.post, raw.ray_tracing.is_some(), raw.motion.is_some())
+            .map_err(err)?;
         if raw.ray_tracing.is_some() && raw.post.is_empty() && raw.material.is_none() {
             return Err(err(
                 "[ray_tracing] needs a [[post]] pass or a [material] stage: `trace` is theirs"
                     .into(),
+            ));
+        }
+        if raw.motion.is_some() && raw.post.is_empty() {
+            return Err(err(
+                "[motion] needs a [[post]] pass: the motion guide is the post stage's".into(),
             ));
         }
         if raw.post.len() > MAX_POST_PASSES {
@@ -1154,6 +1173,7 @@ impl Manifest {
             shadow: raw.shadow,
             displacement,
             ray_tracing: raw.ray_tracing,
+            motion: raw.motion,
         })
     }
 
