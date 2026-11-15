@@ -5,6 +5,11 @@ is the guide for pack authors. The design and the pack format are in [api/shader
 signature, input, resource and limit is in the generated
 [api/shaders-reference-0.2.md](api/shaders-reference-0.2.md).
 
+**Shader API 0.1 is retired (#15886).** A 0.1 pack is refused with `needs shader API 0.1; this Horizon serves 0.2`:
+it stays in the list, and the game draws without it. To move one, set `api = "0.2"` and treat colours as linear light,
+as [api/shaders.md](api/shaders.md#shader-api-02-experimental) describes; the example pack Golden Hour 2.0.0 was moved
+that way.
+
 Shader packs in the Iris/OptiFine format are a separate feature with its own loader; this page is only about
 Horizon's own format.
 
@@ -245,7 +250,7 @@ and the check refuses a pack that names one itself.
 | --- | --- |
 | In the scene today | Terrain within 8 chunks of the camera, in two layers: solid terrain (cut-outs and lava included), which `trace` reads, and translucent terrain (water, stained glass, ice), which [`trace_layers`](#layers) reads; `frame.ray_distance` is how far it surely reaches. For a pack that names `RAY_ENTITY`, a third layer: [the entities within that reach](#entities), in view or not |
 | Not in it yet | Block entities at rest (a closed chest) or out of view, the hand, distant terrain tiles |
-| Turning it on | Start the game with `HORIZON_RAY_TRACING=1` on a GPU with hardware ray queries (the device needs them from its creation, so there is no setting yet) |
+| Turning it on | Pick the pack and start the game with it, on a GPU and graphics API with hardware ray queries: the device needs them from its creation, so in a game started without them a pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1` asks for ray queries and keeps the scene with any pack or none; any other value of it turns ray tracing off |
 | Without it | The pack loads and runs as it is: `frame.has_ray_tracing` is 0, `trace` misses and `trace_any` is false. Branch on `has_ray_tracing` and keep a look that works without rays. It is also 0 in a pack none of whose stages calls a trace function |
 
 A hit also reads the resource packs' LabPBR maps, as a drawn surface does: `hit_normal_map(hit)` and
@@ -346,6 +351,18 @@ if input.translucent && frame.has_ray_tracing == 1u {
 
 `crates/horizon-shader-api/packs/traced_water` is the smallest pack that traces from `material`: water that mixes in
 what a reflected ray hits.
+
+## Compute passes and kept resources
+
+Shader API 0.2 has the keys for storage a pack keeps between frames and for compute passes: `[[resource]]` (buffers,
+and textures with this frame's and last frame's versions), `[kept] reach`, `[[before_world]]`, `[[post]]` entries
+with `compute = true`, and an option's `resets`. A compute file defines `fn compute(input: ComputeInput)`.
+`horizon-shader check` takes them now, but **they run in a later Horizon**: this game refuses a pack that declares a
+resource or a compute pass. The keys, their limits and the WGSL each pass sees are in the
+[reference](api/shaders-reference-0.2.md#kept-resources-and-compute-passes).
+
+Two parts come in later steps, not with these keys: a compute or `[[before_world]]` file doesn't get `trace` or the
+other ray functions under `[ray_tracing]`, and `[material]` can't read kept resources.
 
 ## Options
 

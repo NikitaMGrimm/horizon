@@ -15,6 +15,8 @@ use super::Frame;
 
 pub(super) const INTERMEDIATE: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+#[path = "native_kept.rs"]
+mod kept;
 /// The scene the post passes of a pack with `[ray_tracing]` trace.
 #[path = "native_trace.rs"]
 pub(super) mod trace;
@@ -317,6 +319,8 @@ pub struct NativePost {
     /// size.
     scales: Vec<f32>,
     named: Option<([u32; 2], Vec<wgpu::TextureView>)>,
+    /// The pack's `[[resource]]`s, sized to the world (none without).
+    kept: Option<kept::KeptStore>,
     /// The screen's colour format, the world target's too.
     format: wgpu::TextureFormat,
     /// The decode, the picture and the tonemap.
@@ -359,6 +363,10 @@ pub struct NativeFrame {
     /// Whether the pack's material reads `reflection` (`NativePack::new`): else no mirror
     /// is drawn and `has_reflection` stays 0.
     pub reflects: bool,
+    /// Whether the pack's material reads `opaque_depth` or `opaque_color`
+    /// (`NativePack::new`): else they stay 1×1 and unwritten, and the world pass doesn't break
+    /// before translucent terrain to copy them.
+    pub reads_opaque: bool,
     /// Last frame's view-projection, camera and time (`write`).
     last: Option<([[f32; 4]; 4], glam::DVec3, std::time::Instant)>,
     /// The eased eye light (block, sky) and being in water and lava (`write`); NaN until the
@@ -591,6 +599,7 @@ impl NativeFrame {
             shadow_map,
             shadow_camera: shadow.map(super::native_shadow::camera),
             reflects: false,
+            reads_opaque: false,
             linear,
             decoder: Decoder::new(device, linear),
             mirror: None,
@@ -605,9 +614,9 @@ impl NativeFrame {
     }
 
     /// What the shadow camera sees this frame, for the renderer's shadow lists.
-    pub fn shadow_view(&self, frame: &Frame) -> Option<super::pack_post::ShadowView> {
+    pub fn shadow_view(&self, frame: &Frame) -> Option<super::external::ShadowView> {
         let camera = self.shadow_camera.as_ref()?;
-        Some(super::pack_post::ShadowView {
+        Some(super::external::ShadowView {
             cull: super::pack_uniforms::shadow_culling(frame, camera),
             light: super::pack_uniforms::shadow_light(frame, camera),
             // The light's box culls: on the ground it reaches further than `distance` along
@@ -701,13 +710,17 @@ impl NativeFrame {
 
     /// Keeps the opaque copies the size of the world's depth `depth` and, where the world's
     /// colour `color` can be copied (the scaled target, not the window's own), its size and
-    /// format; the group is made again when they change.
+    /// format; the group is made again when they change. Nothing for a pack that doesn't read
+    /// them.
     pub fn fit_opaque(
         &mut self,
         device: &wgpu::Device,
         depth: &wgpu::Texture,
         color: Option<&wgpu::Texture>,
     ) {
+        if !self.reads_opaque {
+            return;
+        }
         let size = [depth.width(), depth.height()];
         let color_size = color.map_or([1, 1], |c| [c.width(), c.height()]);
         let color_fits = [self.opaque_color.width(), self.opaque_color.height()] == color_size;
@@ -991,19 +1004,18 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 }
 
 /// A post pass's pipeline from its checked `module`, with the option values `constants`, drawing
-/// a target of `format`.
+/// a target of `INTERMEDIATE`.
 fn post_pipeline(
     device: &wgpu::Device,
     label: &str,
     layout: &wgpu::PipelineLayout,
     module: naga::Module,
     constants: &[(String, f64)],
-    format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     let present = present_constants(&module, constants);
     let present: Vec<(&str, f64)> = present.iter().map(|(id, v)| (*id, *v)).collect();
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(label),
+        label: Some(&super::dx12_compiler::module_label(label)),
         source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
     });
     let options = wgpu::PipelineCompilationOptions {
@@ -1027,7 +1039,7 @@ fn post_pipeline(
             entry_point: Some("horizon_fs_post"),
             compilation_options: options,
             targets: &[Some(wgpu::ColorTargetState {
-                format,
+                format: INTERMEDIATE,
                 blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -1080,6 +1092,13 @@ impl NativePost {
             .extend((0..targets.len() as u32).map(|j| {
                 texture_entry(horizon_shader_api::stages::POST_TARGET_BINDING + j, float)
             }));
+        let resources = &manifest.kept.resources;
+        if let Some(why) = (!resources.is_empty())
+            .then(|| kept::refusal(&device.limits(), manifest, &stages, &entries))
+            .flatten()
+        {
+            return Err(why);
+        }
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Native shader pack post"),
             entries: &entries,
@@ -1095,8 +1114,7 @@ impl NativePost {
         for stage in stages {
             let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let (label, layout) = (&stage.label, &pipeline_layout);
-            let pipeline =
-                post_pipeline(device, label, layout, stage.module, constants, INTERMEDIATE);
+            let pipeline = post_pipeline(device, label, layout, stage.module, constants);
             if let Some(e) = pollster::block_on(scope.pop()) {
                 return Err(format!("{}: {e}", stage.file));
             }
@@ -1115,12 +1133,12 @@ impl NativePost {
             label: Some("Tonemap"),
             source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
         });
-        let points = (
+        let stages = (
             Some(&pipeline_layout),
             "horizon_vs_tonemap",
             "horizon_fs_tonemap",
         );
-        let pipeline = fullscreen_pipeline(device, "Tonemap", &module, points, format, &present);
+        let pipeline = fullscreen_pipeline(device, "Tonemap", &module, stages, format, &present);
         if let Some(e) = pollster::block_on(scope.pop()) {
             return Err(format!("{file}: {e}"));
         }
@@ -1163,6 +1181,8 @@ impl NativePost {
             scales: targets.iter().map(|t| t.1).collect(),
             named: None,
             plan,
+            kept: (!resources.is_empty())
+                .then(|| kept::KeptStore::new(device, &manifest.kept, [1, 1])),
             format,
             display,
         })
@@ -1199,6 +1219,9 @@ impl NativePost {
         history_reset: bool,
         scene: Option<&trace::Traced<'_>>,
     ) {
+        if let Some(kept) = &mut self.kept {
+            kept.fit(device, size);
+        }
         let d = &mut self.display;
         if d.scene.as_ref().is_none_or(|s| s.0 != size) {
             d.scene = Some((
@@ -1630,7 +1653,11 @@ pub fn frame_inputs(
         has_ray_tracing: 0,
         ray_distance: 0.0,
         luminance: Primaries::Bt709.luminance(),
-        padding: 0,
+        // Kept resources' epochs: no pack with `[[resource]]` runs yet.
+        view_epoch: 0,
+        world_epoch: 0,
+        reset_reasons: 0,
+        padding: [0; 2],
     }
 }
 
