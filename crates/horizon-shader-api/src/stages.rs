@@ -1376,16 +1376,21 @@ pub fn kept_declarations(manifest: &crate::manifest::Manifest, stage: &crate::St
             Shape::Fixed { format, .. } | Shape::Scaled { format, .. } if written => {
                 format!("var {name}: texture_storage_2d<{}, write>", format.wgsl())
             }
-            _ if read => format!("var {name}: texture_2d<f32>"),
+            Shape::Fixed { format, .. } | Shape::Scaled { format, .. } if read => {
+                format!("var {name}: texture_2d<{}>", format.texel())
+            }
             _ => String::new(),
         };
         if !ty.is_empty() {
             out += &format!("@group({GROUP}) @binding({binding}) {ty};\n");
         }
-        if r.is_texture() && stage.reads.contains(&format!("{name}_previous")) {
+        if let Some(format) = r.format()
+            && stage.reads.contains(&format!("{name}_previous"))
+        {
             out += &format!(
-                "@group({GROUP}) @binding({}) var {name}_previous: texture_2d<f32>;\n",
-                binding + 1
+                "@group({GROUP}) @binding({}) var {name}_previous: texture_2d<{}>;\n",
+                binding + 1,
+                format.texel()
             );
         }
     }

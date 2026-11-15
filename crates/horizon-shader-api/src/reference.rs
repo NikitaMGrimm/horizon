@@ -207,9 +207,9 @@ fn kept() -> String {
         "A pass's prelude declares the resources it lists, the pack's resource i at binding {KEPT_BINDING} + 2i of group\n\
          {GROUP} and its `_previous` at {} + 2i: a buffer `var<storage, read_write> x: array<element>` where written,\n\
          `var<storage, read>` where only read (an `atomic<u32>` buffer then reads as `array<u32>`); a texture\n\
-         `texture_storage_2d<format, write>` where written, else `texture_2d<f32>`. An `r32float` or `rgba32float`\n\
-         texture is read with `textureLoad` only: the check refuses sampling or gathering one, also through a function's\n\
-         argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.\n\n",
+         `texture_storage_2d<format, write>` where written, else `texture_2d<f32>` (`texture_2d<u32>` for\n\
+         `rgba32uint`, which only a compute pass writes). An `r32float`, `rgba32float` or `rgba32uint` texture is read\n\
+         with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.\n\n",
         KEPT_BINDING + 1
     );
     out + &format!(

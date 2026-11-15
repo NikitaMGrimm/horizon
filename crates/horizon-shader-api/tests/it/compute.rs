@@ -679,3 +679,32 @@ fn compute_work_is_capped_per_dispatch_and_per_frame() {
          counted at 3840×2160); a pack may run 67108864",
     );
 }
+
+/// An `rgba32uint` kept texture: written by a compute pass as storage, read as
+/// `texture_2d<u32>` with `textureLoad`, `_previous` too.
+#[test]
+fn an_rgba32uint_texture_is_written_by_compute_and_loaded_as_u32() {
+    let manifest = format!(
+        "{}[[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = [4, 4, 1]\n\
+         workgroup = [4, 4, 1]\nwrites = [\"ints\"]\n\
+         [[post]]\nfile = \"last.wgsl\"\nreads = [\"ints\", \"ints_previous\"]\n",
+        resource("ints", "format = \"rgba32uint\"\nsize = [4, 4]")
+    );
+    let write = "fn compute(input: ComputeInput) {\n    \
+                 if input.in_bounds { textureStore(ints, input.cell.xy, vec4<u32>(input.cell.x)); }\n}\n";
+    let read = "fn post(input: PostInput) -> vec4<f32> {\n    \
+                let p = vec2<i32>(input.pixel);\n    \
+                let n = textureLoad(ints, p, 0).x + textureLoad(ints_previous, p, 0).x;\n    \
+                return input.color * f32(n);\n}\n";
+    let p = pack(&manifest, &[("c.wgsl", write), ("last.wgsl", read)]);
+    check(&p).unwrap();
+    let prelude = |kind, file| {
+        let c = compose(&p, kind, file);
+        c.text[c.parts[0].1.clone()].to_owned()
+    };
+    let written = "@group(3) @binding(64) var ints: texture_storage_2d<rgba32uint, write>;";
+    assert!(prelude(StageKind::Compute, "c.wgsl").contains(written));
+    let last = prelude(StageKind::Post, "last.wgsl");
+    assert!(last.contains("@group(3) @binding(64) var ints: texture_2d<u32>;"));
+    assert!(last.contains("@group(3) @binding(65) var ints_previous: texture_2d<u32>;"));
+}

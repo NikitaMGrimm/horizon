@@ -415,9 +415,9 @@ One invocation of a dispatch, for `fn compute(input: ComputeInput)`.
 A pass's prelude declares the resources it lists, the pack's resource i at binding 64 + 2i of group
 3 and its `_previous` at 65 + 2i: a buffer `var<storage, read_write> x: array<element>` where written,
 `var<storage, read>` where only read (an `atomic<u32>` buffer then reads as `array<u32>`); a texture
-`texture_storage_2d<format, write>` where written, else `texture_2d<f32>`. An `r32float` or `rgba32float`
-texture is read with `textureLoad` only: the check refuses sampling or gathering one, also through a function's
-argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.
+`texture_storage_2d<format, write>` where written, else `texture_2d<f32>` (`texture_2d<u32>` for
+`rgba32uint`, which only a compute pass writes). An `r32float`, `rgba32float` or `rgba32uint` texture is read
+with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.
 
 Limits: 8 resources, 8 compute `[[post]]` entries; 32 MiB of buffers and 1024 KiB of
 fixed-size textures, both versions counted; each R-relative kept texture takes two of the post targets `output`s share; a workgroup of up to [256, 256, 64] and

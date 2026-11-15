@@ -101,6 +101,14 @@ impl Format {
         }
     }
 
+    /// The scalar a read of it gives (`texture_2d<_>`).
+    pub const fn texel(self) -> &'static str {
+        match self {
+            Format::Rgba32Uint => "u32",
+            _ => "f32",
+        }
+    }
+
     pub const fn bytes(self) -> u64 {
         match self {
             Format::R32Float => 4,
