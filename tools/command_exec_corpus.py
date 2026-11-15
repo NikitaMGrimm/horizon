@@ -7330,8 +7330,9 @@ def loaded_wolf_taming():
     owner, the flag alone, so its max health stays what the save says (the type's 8 when it says
     nothing). Without an owner it calls `setTame(false, true)`, and `Wolf.applyTamingSideEffects`
     sets the base to 8. Read after summoning and after an unload and reload. The reload is not
-    frozen: under `/tick freeze` vanilla unloads the chunk but keeps its entities, so nothing would
-    be loaded again (the `if entity` read shows the wolves gone). The wolf with a saved base of 40
+    frozen: under `/tick freeze` vanilla can unload the chunk and keep its entities (it did for
+    this group), so nothing would be loaded again. The `if entity` read shows the wolves gone
+    before the chunk comes back. The wolf with a saved base of 40
     and no owner has Health 40 over a max of 8 until that reload's `setHealth` clamps it."""
     x0, y0, z0 = 3968, 260, 3776
     chunk = [[x0 >> 4, z0 >> 4]]
