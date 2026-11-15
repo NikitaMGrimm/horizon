@@ -1839,7 +1839,6 @@ mod seek_shelter_tests {
     use super::*;
     use crate::mobs::sensor_scan_tests::kind;
     use crate::mobs::world::with_built_test_world;
-    use horizon_core::random::LegacyRandom;
     use std::sync::Arc;
 
     /// A village bell at (5, 1, 5), and the section the fox stands in lit as
@@ -1884,7 +1883,7 @@ mod seek_shelter_tests {
             let mut fox = Mob::new(1, kind, Vec3::new(0.5, 1.0, 0.5), 0.0);
             let mut goal = SeekShelter::new(1.25);
             goal.interval = 0;
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,
@@ -1918,7 +1917,6 @@ mod defend_tests {
     use super::*;
     use crate::mobs::sensor_scan_tests::kind;
     use crate::mobs::world::{test_player, with_built_test_world};
-    use horizon_core::random::LegacyRandom;
     use std::sync::Arc;
 
     /// The player the fox trusts, and the zombie that just hit it.
@@ -1951,7 +1949,7 @@ mod defend_tests {
                 add_trusted_entity(&mut fox, TRUSTED);
                 register(&mut fox);
                 let mut targets = std::mem::take(&mut fox.ai.targets);
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,
