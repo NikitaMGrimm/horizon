@@ -583,3 +583,108 @@ fn a_pack_with_every_kept_resource_traces() {
     let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
 }
+
+/// An entity layer's bindings with nothing in the TLAS: a vertex buffer, a 1×1 atlas and a
+/// sampler, as the renderer binds them for a pack that names `RAY_ENTITY`.
+struct EntityLayer {
+    vertices: wgpu::Buffer,
+    atlas: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+}
+
+impl EntityLayer {
+    fn new(device: &wgpu::Device) -> Self {
+        let vertices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            // One quad of 44-byte vertices.
+            size: 176,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        Self {
+            vertices,
+            atlas: atlas.create_view(&Default::default()),
+            sampler: device.create_sampler(&Default::default()),
+        }
+    }
+
+    /// `scene` as a frame with this layer traces it.
+    fn traced<'a>(&'a self, scene: &'a Scene) -> Traced<'a> {
+        use crate::gfx::surface_setup::ray_query::ray_scene::TracedEntities;
+        Traced {
+            entities: Some(TracedEntities {
+                vertices: self.vertices.as_entire_buffer_binding(),
+                atlas: &self.atlas,
+                sampler: &self.sampler,
+                bases: [0, 0],
+            }),
+            ..scene.traced()
+        }
+    }
+}
+
+/// A pack whose `[[before_world]]`, compute and post passes trace with `RAY_ENTITY` in the mask
+/// and read `RayHit::entity`: every pass's layout has the entity layer's bindings beside its kept
+/// ones, compute and fragment alike, and each finds the terrain quad (not an entity), with no
+/// validation error. The layer's own hits are #16254's (`ray_entity_tests`), the same WGSL.
+#[test]
+fn passes_that_name_the_entity_layer_trace_beside_kept_resources() {
+    let Some((_, device, queue)) = ray_device() else {
+        return;
+    };
+    let scene = Scene::new(&device, &queue, 4.0, 1);
+    let layer = EntityLayer::new(&device);
+    let manifest = format!(
+        "{HIT}[[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
+         writes = [\"hit\"]\n[[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = [1, 1, 1]\n\
+         workgroup = [1, 1, 1]\nwrites = [\"hit\"]\n[[post]]\nfile = \"l.wgsl\"\nreads = [\"hit\"]\n"
+    );
+    let ray =
+        "trace_layers(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0, RAY_SOLID | RAY_ENTITY)";
+    // The before-world pass writes the distance, the compute pass adds its own; an entity hit
+    // anywhere would add 100.
+    let world = format!(
+        "fn compute(input: ComputeInput) {{\n    let h = {ray};\n    \
+         hit[0] = h.distance + select(0.0, 100.0, h.entity);\n}}\n"
+    );
+    let compute = format!(
+        "fn compute(input: ComputeInput) {{\n    let h = {ray};\n    \
+         hit[1] = h.distance + select(0.0, 100.0, h.entity);\n}}\n"
+    );
+    let post = format!(
+        "fn post(input: PostInput) -> vec4<f32> {{\n    let h = {ray};\n    \
+         let d = hit[0] + hit[1] + h.distance + select(0.0, 100.0, h.entity);\n    \
+         return vec4<f32>(d / 16.0, f32(frame.has_ray_tracing), 0.0, 1.0);\n}}\n"
+    );
+    let files = [
+        ("w.wgsl", world.as_str()),
+        ("c.wgsl", &compute),
+        ("l.wgsl", &post),
+    ];
+    let world = World::new(&device);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut pack = pack(&device, &queue, &scene, &manifest, &files);
+    assert!(pack.traces_entities(), "the passes read the entity layer");
+    let traced = layer.traced(&scene);
+    for n in 1..=2 {
+        let got = frame((&device, &queue, &world), &mut pack, n, Some(&traced));
+        // Three hits on the quad 4 blocks ahead: 12 / 16.
+        assert!(shows(got, [0.75, 1.0, 0.0]), "frame {n}: {got:?}");
+    }
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
+}
