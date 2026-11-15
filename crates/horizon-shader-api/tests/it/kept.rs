@@ -205,7 +205,7 @@ fn a_resource_has_one_shape() {
         ))
         .unwrap();
     }
-    for format in ["rgba16float", "r32float", "rgba32float"] {
+    for format in ["rgba16float", "r32float", "rgba32float", "rgba32uint"] {
         parse(&resource(
             "r",
             &format!("format = \"{format}\"\nscale = 0.5"),
@@ -253,12 +253,18 @@ fn counts_and_memory_are_bounded() {
         &format!("{}{}", many(2, half), resource("more", small)),
         "buffers take 33554436 bytes",
     );
-    // 1 MiB of fixed textures, both versions counted: two 128² rgba32float, not one 256².
-    parse(&many(2, "format = \"rgba32float\"\nsize = [128, 128]")).unwrap();
-    refused(
-        &many(1, "format = \"rgba32float\"\nsize = [256, 256]"),
-        "fixed-size [[resource]] textures take 2097152 bytes",
-    );
+    // 1 MiB of fixed textures, both versions counted: two 128² of 16-byte texels, not one 256².
+    for format in ["rgba32float", "rgba32uint"] {
+        parse(&many(
+            2,
+            &format!("format = \"{format}\"\nsize = [128, 128]"),
+        ))
+        .unwrap();
+        refused(
+            &many(1, &format!("format = \"{format}\"\nsize = [256, 256]")),
+            "fixed-size [[resource]] textures take 2097152 bytes",
+        );
+    }
     // R-relative textures take two of the four post targets each.
     let scaled = "format = \"rgba16float\"\nscale = 0.5";
     parse(&many(2, scaled)).unwrap();
@@ -302,6 +308,11 @@ fn an_output_writes_a_kept_texture_at_its_size() {
     parse(&output("output = \"tex\"")).unwrap();
     refused(&output("output = \"tex\"\nscale = 0.5"), "with no `scale`");
     refused(&output("output = \"buf\""), "is a kept buffer");
+    let uint = resource("ints", "format = \"rgba32uint\"\nsize = [4, 4]");
+    refused(
+        &format!("{uint}[[post]]\nfile = \"a.wgsl\"\noutput = \"ints\"\n"),
+        "is an rgba32uint texture: a pass draws floats, so only a compute pass writes one",
+    );
     refused(
         &output("output = \"tex_previous\""),
         "is last frame's: nothing writes it",
