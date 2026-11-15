@@ -246,16 +246,25 @@ fn manifest_refused(path: &Path) -> Option<String> {
 }
 
 /// Why the game doesn't draw a pack the check may still pass: `[frame] primaries = "bt2020"`
-/// isn't served yet (#14584), and neither is the `[entity]` stage.
+/// isn't served yet (#14584), and neither are the `[entity]` stage, `[motion]` or compute entries.
 fn not_drawn(m: &Manifest) -> Option<&'static str> {
     if m.primaries == Primaries::Bt2020 {
         return Some(
             "[frame] primaries = \"bt2020\" isn't served yet: leave it out, or set \"bt709\"",
         );
     }
-    m.entity
-        .is_some()
-        .then_some("the [entity] stage isn't drawn yet: leave it out")
+    if m.entity.is_some() {
+        return Some("the [entity] stage isn't drawn yet: leave it out");
+    }
+    if m.motion.is_some() {
+        return Some(
+            "[motion] needs a later Horizon: this one checks the motion guide but doesn't draw it",
+        );
+    }
+    m.computes().then_some(
+        "[[resource]], [[before_world]] and compute [[post]] entries need a later Horizon: \
+         this one checks them but doesn't run them",
+    )
 }
 
 /// A hash of the names, sizes and modification times of the pack's files and of its saved
@@ -443,5 +452,11 @@ mod tests {
         );
         let why = not_drawn(&manifest("[entity]\nfile = \"e.wgsl\"\n"));
         assert!(why.unwrap().contains("[entity] stage isn't drawn yet"));
+        let why = not_drawn(&manifest("[motion]\n")).unwrap();
+        assert!(why.contains("[motion] needs a later Horizon"), "{why}");
+        let kept =
+            "[[resource]]\nname = \"cache\"\nbuffer = 64\nelement = \"u32\"\nkeep = \"view\"\n";
+        let why = not_drawn(&manifest(kept)).unwrap();
+        assert!(why.contains("need a later Horizon"), "{why}");
     }
 }
