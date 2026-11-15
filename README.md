@@ -1,10 +1,12 @@
 <p align="center">
-  <img src="docs/media/banner.webp" alt="Horizon: the game you know, rebuilt in Rust" width="100%">
+  <img src="docs/media/icon-256.png" alt="" width="96">
 </p>
 
+<h1 align="center">Horizon</h1>
+
 <p align="center">
-  <b>Horizon rebuilds Minecraft: Java Edition 26.3 from scratch in Rust: one native program, no Java.</b><br>
-  Vanilla's terrain, mobs, villagers and redstone in every dimension, and your saves open as they are.
+  Minecraft: Java Edition 26.3, rewritten from scratch in Rust.<br>
+  A new game program, not a mod: it opens your worlds, generates the same terrain and plays by the same rules.
 </p>
 
 <p align="center">
@@ -12,37 +14,46 @@
 </p>
 
 <p align="center">
-  You need a Microsoft account that owns Minecraft: Java Edition. The <a href="https://playhorizon.dev/docs/install">install guide</a> has the steps.
-</p>
-
-<p align="center">
-  <a href="https://playhorizon.dev"><b>Website</b></a> ·
+  <a href="https://playhorizon.dev/docs/install"><b>Install guide</b></a> ·
   <a href="https://playhorizon.dev/docs/"><b>Docs</b></a> ·
-  <a href="https://discord.gg/playhorizon"><b>Discord</b></a>
+  <a href="https://playhorizon.dev/mods"><b>Mods</b></a> ·
+  <a href="https://discord.gg/playhorizon"><b>Discord</b></a> ·
+  <a href="https://playhorizon.dev"><b>Website</b></a>
 </p>
 
 <p align="center">
   <img src="docs/media/readme/hero-lookout.webp" alt="A player's view from a wooden lookout over a village: a friend in diamond armour sneaks at the edge while a creeper flashes white behind her, another friend rides a horse between the houses below, and forest, snowy peaks and the sea run to the horizon" width="100%">
 </p>
 
-<p align="center">
-  <b>See farther</b> · terrain up to 1,024 chunks away<br>
-  <b>Play together</b> · vanilla and Horizon servers, LAN, or a code from a friend<br>
-  <b>Built in</b> · HDR and controller support
-</p>
+<table align="center">
+  <tr>
+    <td align="center"><b>3.5×</b><br><sub>faster start</sub></td>
+    <td align="center"><b>up to +38 %</b><br><sub>frames per second</sub></td>
+    <td align="center"><b>1,024 chunks</b><br><sub>of far terrain</sub></td>
+  </tr>
+</table>
 
 <p align="center">
-  <img src="docs/media/readme/signs-row.webp" alt="A voxel dragon in welding goggles points at three wooden signs: 3.5x faster start than modded Java, 38 percent more FPS than Java with Sodium, and a mod API to port your mods to Rust" width="100%">
+  <sub>Start and frame rate against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast on a Ryzen 7 9800X3D with an RTX 5080: the title screen in about 3 seconds instead of 11, and 31 to 38 percent more frames per second across render distances. Other computers are on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
 </p>
 
-<p align="center">
-  The title screen in about 3 seconds instead of 11, and 31 to 38 percent more frames per second.<br>
-  A mod API in Rust: <a href="https://playhorizon.dev/mods">browse the mods</a> or <a href="https://playhorizon.dev/docs/make-a-mod">make your own</a>.
-</p>
+## What you get
 
-<p align="center">
-  <sub>Speed measured against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast on a Ryzen 7 9800X3D with an RTX 5080, across render distances. Other computers are on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
-</p>
+- **The game you know.** Survival, creative and hardcore in every dimension, with vanilla's terrain, mobs, villagers and redstone. Your saves open as they are.
+- **Far terrain.** The world is drawn up to 1,024 chunks away, past the render distance.
+- **Friends.** Join vanilla and Horizon servers, open your world to LAN, or send a friend an invite code. The server runs without Java.
+- **Mods.** Horizon has its own mod system, with zoom, a minimap and shader packs in the [catalogue](https://playhorizon.dev/mods). You can [make your own](https://playhorizon.dev/docs/make-a-mod).
+- **HDR and controllers.** Both are in the settings, with no mod to install.
+
+## What you need
+
+- A Microsoft account that owns Minecraft: Java Edition, and version 26.3 started once. Horizon builds its files from your copy and contains no Minecraft code or assets.
+- Windows (x64 or ARM64), macOS 12 or later, or Linux (x86-64).
+- Mods made for Horizon. Forge, NeoForge, Fabric and Quilt mods do not run in it.
+
+## Build and contribute
+
+Horizon is built in the open, and pull requests are welcome: [build guide](docs/native-client.md#run-from-a-checkout) · [contributing](CONTRIBUTING.md) · [governance](GOVERNANCE.md).
 
 <h2 align="center">Made by the Horizon Team</h2>
 
@@ -67,12 +78,6 @@
 <p align="center">
   <sub>and everyone who has contributed</sub><br><br>
   <a href="https://github.com/horizon-rust/horizon/graphs/contributors"><img src="https://contrib.rocks/image?repo=horizon-rust/horizon&max=72&columns=12" alt="Everyone who has contributed to Horizon"></a>
-</p>
-
-<p align="center">
-  <a href="docs/native-client.md#run-from-a-checkout"><b>Build guide</b></a> ·
-  <a href="CONTRIBUTING.md"><b>Contributing</b></a> ·
-  <a href="GOVERNANCE.md"><b>Governance</b></a>
 </p>
 
 <sub>Horizon is released under the [MIT licence](LICENSE) for the project's original work; dependencies keep their own licences, see the [notices](THIRD_PARTY_NOTICES.md). Founded by [Ludovic Marie](https://lu4ovic.com) and built by the Horizon Team and [its contributors](https://github.com/horizon-rust/horizon/graphs/contributors). You can support it on [GitHub Sponsors](https://github.com/sponsors/ludovic111).</sub>
