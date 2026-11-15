@@ -1047,7 +1047,6 @@ fn entity_coverage_is_the_texture_s_and_the_layer_s_unless_the_pack_declares_its
         eprintln!("entity coverage GPU unavailable");
         return;
     };
-    let hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
     let globals = super::super::Globals {
         filtering: [0.0, 1.0, 0.0, 0.0],
         ..bytemuck::Zeroable::zeroed()
