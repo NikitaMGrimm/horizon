@@ -396,9 +396,9 @@ pub struct PlayerMotion {
     pub last_crystal_sound_play_tick: i32,
     pub needs_sync: bool,
     pub sync_position: bool,
-    /// Moved by an ender pearl (`ServerPlayer.teleport`): a server sends the
-    /// position packet even when the player lands where they stood. The
-    /// server takes it at the end of a guest's turn.
+    /// Moved by a command or an ender pearl (`ServerPlayer.teleport`): a server
+    /// sends the position packet even when the player lands where they stood.
+    /// The server takes it at the end of a guest's turn.
     pub teleported: bool,
     pub events: Vec<MotionEvent>,
     pub attributes: LiveAttributes<Box<dyn horizon_world::attributes::live::Identities>>,
@@ -971,7 +971,7 @@ impl MotionWorld<'_, '_, '_> {
             border: self.player.border.as_ref().map(|b| (b, at)),
         }
     }
-    /// `Level.noCollision(player, bounds)`: blocks and the host's entity boxes.
+    /// `CollisionGetter.noCollision(player, bounds)`: blocks and the host's entity boxes.
     pub fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
         let context = self.context();
         Ok(world_movement::no_world_collision(
