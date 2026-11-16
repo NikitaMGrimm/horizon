@@ -181,8 +181,8 @@ pub struct Report {
 
 impl Report {
     /// Whether the pack reads the terrain's own inputs, which the vertex doesn't hold: a stage
-    /// reads one of `LOOK_FIELDS` (`CheckedStage::reads_looks`) or `shadow_color`. Only then do
-    /// the renderer's sections carry their quads' looks.
+    /// reads one of `LOOK_FIELDS` (`CheckedStage::reads_looks`) or `shadow_color`: what needs
+    /// the renderer's sections to carry their quads' looks.
     pub fn looks(&self) -> bool {
         (self.stages.iter()).any(|s| s.reads_looks() || s.reads("shadow_color"))
     }

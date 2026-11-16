@@ -53,10 +53,12 @@ fn state(f: &Fixture, name: &str, properties: &[(&str, &str)]) -> u32 {
 const BASE: i32 = MIN_Y + 4;
 
 /// The blocks of the emission table, each with vanilla's light level (`None`: drawn as a block
-/// entity, so no terrain quad), one every other block along x and z.
-const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 14] = [
+/// entity, so no terrain quad), one every other block along x and z. The water of a
+/// waterlogged one gives off what water does, nothing.
+const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 16] = [
     ("minecraft:torch", &[], Some(14)),
     ("minecraft:lantern", &[], Some(15)),
+    ("minecraft:lantern", &[("waterlogged", "true")], Some(15)),
     ("minecraft:sea_lantern", &[], Some(15)),
     ("minecraft:glowstone", &[], Some(15)),
     ("minecraft:ochre_froglight", &[], Some(15)),
@@ -69,6 +71,7 @@ const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 14] = [
     ("minecraft:end_portal_frame", &[], Some(1)),
     ("minecraft:ender_chest", &[], None),
     ("minecraft:stone", &[], Some(0)),
+    ("minecraft:water", &[], Some(0)),
 ];
 
 fn place(i: usize) -> (i32, i32) {
@@ -157,8 +160,11 @@ fn emission_is_the_blocks_light_level() {
     for (i, (name, properties, level)) in BLOCKS.iter().enumerate() {
         let (x, z) = place(i);
         let (x, z) = (x as f32, z as f32);
-        let levels: Vec<u32> = quads(&mesh)
-            .filter(|(q, _)| {
+        // Translucent quads here are water's.
+        let levels: Vec<(bool, u32)> = quads(&mesh)
+            .enumerate()
+            .map(|(i, (q, l))| (i >= mesh.solid.len() / 4, q, l))
+            .filter(|(_, q, _)| {
                 let c = q.iter().fold([0.0; 3], |c, v| {
                     [
                         c[0] + v.pos[0] / 4.0,
@@ -170,14 +176,27 @@ fn emission_is_the_blocks_light_level() {
                     && (y - 0.01..y + 1.01).contains(&c[1])
                     && (z - 0.01..z + 1.01).contains(&c[2])
             })
-            .map(|(_, l)| l.0[2])
+            .map(|(translucent, _, l)| (translucent, l.0[2]))
             .collect();
+        let waterlogged = properties.contains(&("waterlogged", "true"))
+            || name.ends_with("sea_pickle") && properties.iter().all(|p| p.0 != "waterlogged");
+        if waterlogged || *name == "minecraft:water" {
+            assert!(
+                levels.iter().any(|q| q.0),
+                "{name} {properties:?} has no water"
+            );
+        }
         match level {
             Some(level) => {
-                assert!(!levels.is_empty(), "{name} {properties:?} has no quads");
+                let block = |water: bool| !water || *name == "minecraft:water";
                 assert!(
-                    levels.iter().all(|&l| l == u32::from(*level)),
-                    "{name} {properties:?}: {levels:?}, not {level}"
+                    levels.iter().any(|q| block(q.0)),
+                    "{name} {properties:?} has no quads"
+                );
+                let want = |water: bool| if block(water) { u32::from(*level) } else { 0 };
+                assert!(
+                    levels.iter().all(|q| q.1 == want(q.0)),
+                    "{name} {properties:?}: {levels:?}, not {level} (its water 0)"
                 );
             }
             None => assert!(levels.is_empty(), "{name} has terrain quads"),

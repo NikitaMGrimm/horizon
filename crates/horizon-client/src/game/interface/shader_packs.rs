@@ -331,9 +331,9 @@ impl Game<'_> {
             self.streaming.separate_ao = separate_ao;
             self.all_sections_changed();
         }
-        // A shader API 0.2 pack that reads the terrain's own inputs (`tint`, `shade`, `ao`,
-        // `face`, `emission`): every quad carries its look, so the world meshes again once when
-        // such a pack starts or stops running, and never for a pack that reads none of them.
+        // A shader API 0.2 pack whose terrain takes the quads' looks (their tint, shade, ambient
+        // occlusion, face and light level apart): every quad carries its look, so the world
+        // meshes again once when such a pack starts or stops running, and never otherwise.
         let looks = self.renderer.as_ref().is_some_and(|r| r.native_looks());
         if self.streaming.looks != looks {
             self.streaming.looks = looks;

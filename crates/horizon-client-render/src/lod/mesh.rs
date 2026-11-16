@@ -222,15 +222,8 @@ impl Mesher {
                     let channel = |shift: u32| (((rgb >> shift) & 255u32) as f32 * shade) as u32;
                     // The colour keeps the Overworld's shades in every dimension; a shader pack's
                     // `shade` is the dimension's.
-                    let look = match looks {
-                        0 => [0; 3],
-                        _ => {
-                            let level = context.tables.facts(span.state).map_or(0, |f| f.emission);
-                            let shade = crate::mesher::cardinal_shade(looks == 2, direction);
-                            let face = direction as u32;
-                            crate::mesher::QuadLook::new(rgb, shade, face, [1.0; 4], level).0
-                        }
-                    };
+                    let level = || context.tables.facts(span.state).map_or(0, |f| f.emission);
+                    let look = far_look(looks, rgb, direction, level);
                     Paint {
                         look,
                         layer: face.layer,
@@ -249,6 +242,16 @@ impl Mesher {
             opaque: styles.opaque,
         }
     }
+}
+
+/// A far face's `QuadLook` words (`Mesher::looks`: 0 none, 1 the Overworld's shades, 2 the
+/// Nether's) for its tint 0xRRGGBB and its block's light `level`: no ambient occlusion.
+fn far_look(looks: u8, rgb: u32, direction: Direction, level: impl Fn() -> u8) -> [u32; 3] {
+    if looks == 0 {
+        return [0; 3];
+    }
+    let shade = crate::mesher::cardinal_shade(looks == 2, direction);
+    crate::mesher::QuadLook::new(rgb, shade, direction as u32, [1.0; 4], level()).0
 }
 
 struct Segment<'a> {
@@ -1418,6 +1421,114 @@ mod tests {
     fn normal(q: &[TerrainVertex; 4]) -> glam::Vec3 {
         let p = |i: usize| glam::Vec3::from(q[i].pos);
         (p(1) - p(0)).cross(p(2) - p(0))
+    }
+    /// A far tile's looks: each face's look gives back its vertex colour (the Overworld's
+    /// shades, no ambient occlusion; the Nether's shades differ only in its look), and the
+    /// looks stay with their quads through the merge, the solid sort and the compact layout.
+    #[test]
+    fn far_looks_follow_their_quads_and_give_back_their_colour() {
+        let shade = |d: Direction| match d {
+            Direction::Up => 1.0,
+            Direction::Down => 0.5,
+            Direction::North | Direction::South => 0.8,
+            Direction::West | Direction::East => 0.6,
+        };
+        for rgb in [0xffffff, 0x91bd59, 0x3f76e4, 0x010203] {
+            for d in Direction::ALL {
+                let [a, ao, level] = far_look(1, rgb, d, || 7);
+                assert_eq!((ao, level, a >> 27 & 7), (u32::MAX, 7, d as u32));
+                let s = crate::mesher::SHADES[(a >> 24 & 7) as usize - 1];
+                let nether = far_look(2, rgb, d, || 7)[0];
+                let n = crate::mesher::SHADES[(nether >> 24 & 7) as usize - 1];
+                assert_eq!(n, crate::mesher::cardinal_shade(true, d));
+                for shift in [0, 8, 16] {
+                    let vertex = (((rgb >> (16 - shift)) & 255) as f32 * shade(d)) as u32;
+                    let look = ((255.0 * s) as u32) * (a >> shift & 255) / 255;
+                    assert!(
+                        vertex.abs_diff(look) <= 1,
+                        "{rgb:06x} {d:?}: {vertex} {look}"
+                    );
+                }
+            }
+            assert_eq!(far_look(0, rgb, Direction::Up, || 7), [0; 3]);
+        }
+        // Each paint's look names its layer and face.
+        let looked = |span: &Span, direction: Direction, _: [i32; 2]| {
+            let water = span.state.0 == 2;
+            let paint = Paint {
+                layer: span.state.0 as u16,
+                light: span.light,
+                color: u32::MAX,
+                translucent: water,
+                look: [span.state.0, direction as u32, u32::from(span.light)],
+            };
+            Material {
+                faces: [Some(paint), None],
+                fluid: u8::from(water),
+                opaque: !water,
+            }
+        };
+        let mut columns = columns();
+        for (i, column) in columns.iter_mut().enumerate() {
+            let (x, z) = (i % CELLS, i / CELLS);
+            let top = 4 + (x as i16 % 5) * 2 + (z as i16 % 3);
+            let state = if (x + z) % 7 == 0 { 3 } else { 1 };
+            let light = if x % 4 == 0 { 16 } else { 240 };
+            column.spans = vec![
+                Span {
+                    light,
+                    ..span(0, top, state)
+                },
+                span(top, 12.max(top + 1), 2),
+            ]
+            .into();
+        }
+        let key = TileKey {
+            x: 0,
+            z: 0,
+            level: 0,
+        };
+        let mut mesh = mesh_columns(key, &columns, &FxHashSet::default(), None, looked);
+        mesh.sort_solid();
+        // As `lod::packed::lay_out` lays a tile out, whatever the switches here.
+        let packed = crate::lod::packed::layout(&mesh.solid);
+        let face = |q: &[TerrainVertex; 4]| {
+            let n = normal(q);
+            let d = [
+                (n.y < 0.0, Direction::Down),
+                (n.y > 0.0, Direction::Up),
+                (n.z < 0.0, Direction::North),
+                (n.z > 0.0, Direction::South),
+                (n.x < 0.0, Direction::West),
+                (n.x > 0.0, Direction::East),
+            ];
+            d.into_iter().find(|(on, _)| *on).unwrap().1 as u32
+        };
+        for (vertices, looks) in [
+            (&mesh.solid, &mesh.solid_looks),
+            (&mesh.translucent, &mesh.translucent_looks),
+        ] {
+            let quads = vertices.as_chunks::<4>().0;
+            assert!(quads.len() > 20 && looks.len() == quads.len());
+            for (q, look) in quads.iter().zip(looks) {
+                let [layer, direction, _] = look.0;
+                assert_eq!(layer, u32::from(q[0].layer));
+                // A quad's winding gives its normal against the face it shows.
+                let n = face(q);
+                assert!(n == direction || n == direction ^ 1, "{n} {direction}");
+            }
+        }
+        // Record r of the compact layout is quad r, which puts quad r's look at slot r.
+        assert!(!packed.is_empty());
+        for (r, words) in packed.iter().take(mesh.solid_looks.len()).enumerate() {
+            if let Some(corners) = crate::lod::packed::corners(*words) {
+                let quad = mesh.solid.as_chunks::<4>().0[r];
+                assert_eq!(
+                    bytemuck::cast::<_, [[u32; 6]; 4]>(corners),
+                    bytemuck::cast::<_, [[u32; 6]; 4]>(quad)
+                );
+            }
+        }
     }
     /// Every solid quad the mesher emits packs into a far record, and the
     /// record gives the quad back bit for bit (`lod::packed`).

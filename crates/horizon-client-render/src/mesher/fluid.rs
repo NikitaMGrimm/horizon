@@ -365,8 +365,14 @@ pub(super) fn tesselate(
     } else {
         (&mut out.solid, &mut out.solid_looks, &mut out.sprite_layers)
     };
-    // A fluid gives off its block's light on every face (lava 15, still or flowing).
-    let level = me.emission;
+    // What the fluid itself gives off, on every face and not the block holding it: lava's block
+    // 15 at every level, water none, also around a waterlogged light; a mod fluid its own
+    // block's (a mod fluid waterlogging another block reads that block's).
+    let level = match kind {
+        FluidKind::Lava | FluidKind::FlowingLava => 15,
+        FluidKind::Mod(_) | FluidKind::ModFlowing(_) => me.emission,
+        _ => 0,
+    };
     let mut quad = |v: [([f32; 3], [f32; 2]); 4],
                     layer: u16,
                     shade: f32,

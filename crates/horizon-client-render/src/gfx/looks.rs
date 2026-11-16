@@ -5,9 +5,32 @@
 
 use super::arena::Arena;
 use super::flat::TRANSLUCENT_KEYS;
+use crate::mesher::QuadLook;
 
 /// The group of a pack's terrain pipelines that holds the looks.
 pub const GROUP: u32 = 2;
+
+/// Whether sections carry their quads' looks while a Horizon pack runs. Only
+/// `HORIZON_TERRAIN_LOOKS=1` asks, for the engine's own tests (no pack input reads them yet),
+/// and only on a device whose vertex stage binds storage buffers; on another the switch says
+/// so once and does nothing.
+pub fn wanted(adapter: &wgpu::Adapter) -> bool {
+    static ASKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ASKED.get_or_init(|| std::env::var("HORIZON_TERRAIN_LOOKS").as_deref() == Ok("1")) {
+        return false;
+    }
+    let flags = adapter.get_downlevel_capabilities().flags;
+    let bound = flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE);
+    if !bound {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| {
+            log::warn!(
+                "HORIZON_TERRAIN_LOOKS: this device's vertex stage binds no storage buffers, so terrain keeps no quad looks"
+            )
+        });
+    }
+    bound
+}
 
 /// The looks as the material and shadow wrappers read them: `horizon_look(slot)`, a slot's
 /// three words (`mesher::QuadLook`), zero past the buffer.
@@ -21,6 +44,22 @@ fn horizon_look(slot: u32) -> vec3<u32> {
         horizon_looks[slot * 3u + 2u]);
 }
 ";
+
+/// A mesh's quad `looks` laid out one a slot of its range of `slots`: a compact record's
+/// (`packed`: records come in quad order, `mesher::packed::place`), or each of a wide quad's
+/// four vertices'; the slots past them (padding, spilled vertices) have none. Nothing for a
+/// mesh without looks, which `Arena::write_looks` clears.
+pub fn per_slot(looks: &[QuadLook], packed: bool, slots: u64) -> Vec<QuadLook> {
+    let mut out = Vec::new();
+    if !looks.is_empty() {
+        match packed {
+            true => out.extend_from_slice(looks),
+            false => out.extend(looks.iter().flat_map(|&l| [l; 4])),
+        }
+        out.resize(slots as usize, QuadLook::default());
+    }
+    out
+}
 
 /// The looks' WGSL for terrain pipelines with the group (`looks`) or without.
 pub fn wgsl(looks: bool) -> &'static str {
@@ -126,5 +165,115 @@ impl LookGroups {
     /// the section arena.
     pub fn page(&self, page: u32, translucent: bool) -> &wgpu::BindGroup {
         self.get(page + if translucent { TRANSLUCENT_KEYS } else { 0 })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mesher::{TerrainVertex, packed};
+
+    /// A mesh's looks as the renderer uploads them (`per_slot`, `Arena::write_looks`) sit at
+    /// its quads' slots, compact record by record or wide vertex by vertex, with none past
+    /// them, also after the page grows; a range written again without looks reads none.
+    #[test]
+    fn uploaded_looks_sit_at_their_quads_slots() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((_, device, queue)) = crate::gfx::test_gpu::optional_device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        // Quads that pack into a record each, and one off the block grid that spills.
+        let mut records: Vec<Option<[u32; 6]>> = (0..9u32)
+            .map(|i| {
+                Some([
+                    i << 4,
+                    (i * 7) << 4,
+                    3 << 4,
+                    0xffff,
+                    0x00ff_ffff,
+                    (i % 3) << 12,
+                ])
+            })
+            .collect();
+        let mut quads: Vec<[TerrainVertex; 4]> = records
+            .iter()
+            .map(|r| std::array::from_fn(|c| packed::packed_vertex(&r.unwrap(), c)))
+            .collect();
+        let mut spill = quads[2];
+        spill[0].pos[1] = 8.5;
+        quads.insert(4, spill);
+        records.insert(4, None);
+        let layout = packed::place(&records, &quads);
+        assert!(!layout.is_empty());
+        let looks: Vec<QuadLook> = (0..quads.len() as u32)
+            .map(|q| QuadLook([0x0400_0000 | q, 0x8040_2010 + q, q % 16]))
+            .collect();
+        // Record r stands for quad r, which is what puts quad r's look at slot r.
+        for (r, quad) in quads.iter().enumerate() {
+            if layout[r][5] & packed::FULL == 0 {
+                let v = packed::packed_vertex(&layout[r], 0);
+                assert_eq!(bytemuck::bytes_of(&v), bytemuck::bytes_of(&quad[0]));
+            }
+        }
+        let mut arena = Arena::new(&device, 24, 256, true);
+        arena.set_looks(&device, true);
+        let mut uploads = super::super::upload::Uploads::new(&device);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let compact = (
+            layout.len() as u64,
+            per_slot(&looks, true, layout.len() as u64),
+        );
+        let wide = (
+            4 * looks.len() as u64,
+            per_slot(&looks, false, 4 * looks.len() as u64),
+        );
+        let mut at = Vec::new();
+        for (slots, looks) in [&compact, &wide] {
+            let (page, start) = arena.alloc(&device, &mut encoder, *slots).unwrap();
+            arena.write_looks(&mut encoder, &mut uploads, page, start, *slots, looks);
+            at.push((page, start));
+        }
+        // A range written with looks, freed and taken again by a mesh without them.
+        let (page, start) = arena.alloc(&device, &mut encoder, wide.0).unwrap();
+        arena.write_looks(&mut encoder, &mut uploads, page, start, wide.0, &wide.1);
+        arena.release(page, start, wide.0);
+        let again = arena.alloc(&device, &mut encoder, wide.0).unwrap();
+        assert_eq!(again, (page, start));
+        arena.write_looks(&mut encoder, &mut uploads, page, start, wide.0, &[]);
+        // The page grows, its looks copied over.
+        let grown = arena.alloc(&device, &mut encoder, 4096).unwrap();
+        assert_eq!(grown.0, at[0].0, "the page grew in place");
+        uploads.finish(&encoder);
+        queue.submit([encoder.finish()]);
+        let buffer = arena.looks(at[0].0).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        wgpu::util::DownloadBuffer::read_buffer(&device, &queue, &buffer.slice(..), move |r| {
+            tx.send(r.unwrap().to_vec()).unwrap()
+        });
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let bytes = rx.recv().unwrap();
+        let entry = |slot: u64| {
+            let at = (slot * 12) as usize;
+            QuadLook(bytemuck::pod_read_unaligned(&bytes[at..at + 12]))
+        };
+        let none = QuadLook::default();
+        let (compact_at, wide_at) = (at[0].1, at[1].1);
+        for (q, &look) in looks.iter().enumerate() {
+            assert_eq!(entry(compact_at + q as u64), look, "record {q}");
+            for i in 0..4 {
+                assert_eq!(
+                    entry(wide_at + 4 * q as u64 + i),
+                    look,
+                    "quad {q} corner {i}"
+                );
+            }
+        }
+        for slot in looks.len() as u64..compact.0 {
+            assert_eq!(entry(compact_at + slot), none, "padding or spill {slot}");
+        }
+        for slot in 0..wide.0 {
+            assert_eq!(entry(start + slot), none, "a range taken again {slot}");
+        }
     }
 }

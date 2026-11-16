@@ -382,13 +382,14 @@ impl TerrainSource {
 }
 
 /// What a shader pack's terrain inputs need beside the vertex, whose colour holds vanilla's
-/// product of them: one per quad while the running pack reads them (`Mesher::looks`), and in the
+/// product of them: one per quad while the running pack takes them (`Mesher::looks`), and in the
 /// arena one per slot (a compact record's, or each of a quad's four vertices).
 ///
 /// - word 0: the tint (0xBBGGRR, as the vertex colour holds it), bits 24..27 the face's shade
 ///   (`SHADES`' index + 1; 0: no look), bits 27..30 the face (`Direction` order);
 /// - word 1: each corner's ambient occlusion before the shade (`floor(ao * 255)`), corner 0 low;
-/// - word 2: the light level the quad gives off (the block's, or a model face's own), 0..15.
+/// - word 2: the light level the surface gives off, 0..15: its block's, raised to a model
+///   face's own, or a fluid's own (lava 15, water 0, also around a waterlogged light).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct QuadLook(pub [u32; 3]);

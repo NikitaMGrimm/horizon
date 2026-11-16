@@ -334,7 +334,7 @@ pub(super) struct SectionLists<'a> {
     /// The flat draws' lists, where they are made.
     pub flat: Option<&'a flat::Flat>,
     multi_draw: bool,
-    /// The pages' quad looks, bound beside them while a pack reads them.
+    /// The pages' quad looks, bound beside them while the pack's pipelines take them.
     looks: Option<&'a looks::LookGroups>,
 }
 
@@ -1371,11 +1371,11 @@ pub struct Renderer {
     /// Sections upload their solid quads in the compact layout (`mesher::packed`): the solid
     /// passes read the arena themselves (`flat`) and no shader pack reads it as vertices.
     packed_quads: bool,
-    /// The running 0.2 pack reads the terrain's own inputs: sections upload their quads' looks
-    /// (`set_terrain_looks`).
+    /// The running 0.2 pack's terrain pipelines take the quads' looks (`looks::wanted`):
+    /// sections upload them (`set_terrain_looks`).
     terrain_looks: bool,
     /// Their groups, while they are on, and the layout the pack's terrain pipelines read them
-    /// with (`looks`), made for the first pack that reads them.
+    /// with (`looks`), made for the first pack that takes them.
     look_groups: Option<looks::LookGroups>,
     looks_layout: Option<wgpu::BindGroupLayout>,
     /// The terrain's acceleration structures, with ray tracing on (`ray_scene`).
@@ -5816,18 +5816,7 @@ impl Renderer {
                 );
         }
         if self.terrain_looks {
-            // One look a slot: a record's, or each of a quad's four vertices'.
-            let slots = |looks: &[crate::mesher::QuadLook], packed: bool, slots: u64| {
-                let mut out = Vec::new();
-                if !looks.is_empty() {
-                    match packed {
-                        true => out.extend_from_slice(looks),
-                        false => out.extend(looks.iter().flat_map(|&l| [l; 4])),
-                    }
-                    out.resize(slots as usize, crate::mesher::QuadLook::default());
-                }
-                out
-            };
+            let slots = looks::per_slot;
             let uploads = &mut self.section_uploads;
             let looks = slots(&mesh.solid_looks, packed, solid_slots);
             (self.arena).write_looks(encoder, uploads, page, start, solid_slots, &looks);
@@ -6857,7 +6846,7 @@ impl Renderer {
             _ => None,
         }
     }
-    /// Whether the running Horizon pack reads the terrain's own inputs (`Report::looks`).
+    /// Whether the running Horizon pack's terrain takes the quads' looks (`looks::wanted`).
     pub fn native_looks(&self) -> bool {
         self.native.as_ref().is_some_and(|pack| pack.looks)
     }
@@ -7082,7 +7071,8 @@ impl Renderer {
             self.replace_native(None);
             return Ok(Vec::new());
         };
-        if report.looks() && self.looks_layout.is_none() {
+        let terrain_looks = looks::wanted(&self.adapter);
+        if terrain_looks && self.looks_layout.is_none() {
             self.looks_layout = Some(looks::layout(&self.device));
         }
         let terrain = native_material::TerrainShape {
@@ -7098,7 +7088,7 @@ impl Renderer {
             retained_entities: &self.static_entity_pipeline.get_bind_group_layout(1),
             weather_groups: [&self.weather.entity_layout, &self.weather.time_layout],
             pbr: self.pbr_maps.as_ref().and_then(|arrays| arrays.first()),
-            looks: self.looks_layout.as_ref().filter(|_| report.looks()),
+            looks: self.looks_layout.as_ref().filter(|_| terrain_looks),
         };
         let (pack, labels) = native_pack::NativePack::new(
             &self.device,
