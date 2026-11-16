@@ -357,16 +357,17 @@ impl Arena {
     /// again either way (`Renderer::set_terrain_looks`). While looks are on, pages hold at most
     /// the slots whose looks fit the device's largest storage binding (`look_limit`: a
     /// translucent page of up to `LARGE_PAGE_BYTES` would not); without them, what they held.
-    /// False when the ranges in the arena no longer hold: the most a page holds changed while
-    /// pages exist (a page may be past it), or a page got no looks for want of memory. The
-    /// caller drops them all (`clear`), and new pages keep to the limit.
+    /// False when the arena's ranges, or what is sized by its pages, no longer hold: the most a
+    /// page holds changed (a page may be past it, and flat draws size a translucent page's
+    /// table by it, empty arena or not), or a page got no looks for want of memory. The caller
+    /// drops them all (`clear`), and new pages keep to the limit.
     pub fn set_looks(&mut self, device: &wgpu::Device, on: bool) -> bool {
         self.looks_enabled = on;
         let limit = match on {
             true => self.plain_limit.min(self.look_limit),
             false => self.plain_limit,
         };
-        let mut holds = limit == self.page_limit || self.pages.iter().all(Option::is_none);
+        let mut holds = limit == self.page_limit;
         self.page_limit = limit;
         for i in 0..self.pages.len() {
             let Some(capacity) = self.pages[i].as_ref().map(|p| p.capacity) else {
@@ -1894,6 +1895,15 @@ mod tests {
             return;
         };
         let limit = 8 * GRAIN;
+        // An empty arena's most changes too: what is sized by it follows.
+        let mut empty = Arena::translucent(&device, 24, GRAIN);
+        empty.look_limit = limit;
+        assert!(
+            !empty.set_looks(&device, true),
+            "an empty arena's limit changed"
+        );
+        assert!(empty.set_looks(&device, true), "the same limit");
+        assert!(!empty.set_looks(&device, false), "back to its own");
         let mut arena = Arena::translucent(&device, 24, GRAIN);
         arena.look_limit = limit;
         // Made without looks, past the limit.

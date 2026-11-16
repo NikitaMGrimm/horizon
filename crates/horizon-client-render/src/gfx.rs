@@ -6893,7 +6893,8 @@ impl Renderer {
             self.sections_dropped |=
                 self.sections.len() > 0 || !self.lods.is_empty() || self.lod_pending.is_some();
             self.clear_sections(self.layout);
-            // A table names its page's blocks, so it goes with `clear_sections`.
+            // Flat draws size a translucent page's table by it when they make the table: it
+            // changes with `clear_sections`, which drops the tables.
             if let (Some(flat), Some(arena)) = (&mut self.flat, &self.translucent_arena) {
                 flat.set_translucent_page_vertices(arena.page_vertices());
             }
