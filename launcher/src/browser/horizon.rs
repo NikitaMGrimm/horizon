@@ -1320,6 +1320,10 @@ fn install_version_guarded(
     if let Some(r) = index.revoked(&p.id, &v.file.sha256) {
         return Err(format!("{} was taken down: {}", p.name, r.reason));
     }
+    // Every install comes here, a modpack's pinned ones too: refused before the download.
+    if index::needs_other_shader_api(p, v) {
+        return Err(format!("{} {}.", p.name, other_shader_api(&v.api)));
+    }
     let native = p.kind == index::Kind::NativeMod;
     let relative = match native {
         true => format!(
