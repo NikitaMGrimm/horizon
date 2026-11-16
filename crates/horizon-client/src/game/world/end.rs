@@ -1834,9 +1834,14 @@ impl Game<'_> {
         match arrival.traveller {
             Arriving::Live(id) => {
                 if let Some(target) = self.level_entity(id as i32) {
-                    // Entity.teleportSameDimension keeps the live entity and
-                    // its motion, and moves every passenger in the same operation.
+                    // Entity.teleportSameDimension keeps the live entity and moves every
+                    // passenger in the same operation. The gateway's transition has
+                    // `Relative.DELTA`: the motion `/tp`'s rule in there stops is put back.
+                    let motion = self.transition_motion(target);
                     self.teleport_to_in_level(target, [at.x, at.y, at.z], None, [false; 3], false);
+                    if let Some(motion) = motion {
+                        self.restore_transition_motion(target, motion);
+                    }
                     self.set_portal_cooldown(id);
                     self.place_portal_ticket(key);
                 }
