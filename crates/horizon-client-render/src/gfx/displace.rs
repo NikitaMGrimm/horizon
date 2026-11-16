@@ -115,6 +115,9 @@ struct HorizonDisplacePoint {
     layer: u32,
     light: vec2<f32>,
     color: vec4<f32>,
+    // The quad's look (`horizon_look`), and the point's ambient occlusion (`horizon_look_ao`).
+    look: vec3<u32>,
+    ao: f32,
     // The face's normal, and how much of the relief the point has by its distance.
     normal: vec3<f32>,
     near: f32,
@@ -217,8 +220,9 @@ fn horizon_displace_step(v: u32, q: HorizonDisplaceQuad) -> HorizonDisplacePoint
     p.color = mix(mix(q.c0.color, q.c1.color, s), mix(q.c3.color, q.c2.color, s), t);
     p.layer = q.c0.layer;
     p.normal = q.normal;
+    p.ao = 1.0;
     p.base = horizon_material_displace(position, p.uv, q.c0.layer, p.color,
-        vec2<u32>(p.light + 0.5));
+        vec2<u32>(p.light + 0.5), p.look, p.ao);
     p.near = 1.0 - smoothstep(0.75 * horizon_displace_distance, horizon_displace_distance - 0.1,
         length(p.base));
     p.position = p.base - p.normal * depth;
@@ -249,8 +253,9 @@ fn horizon_displace_point(v: u32, instance: u32) -> HorizonDisplacePoint {
     p.color = mix(mix(c0.color, c1.color, s), mix(c3.color, c2.color, s), t);
     p.layer = c0.layer;
     p.normal = normalize(cross(c1.position - c0.position, c2.position - c0.position));
+    p.ao = 1.0;
     p.base = horizon_material_displace(position + section.origin.xyz, p.uv, c0.layer, p.color,
-        vec2<u32>(p.light + 0.5));
+        vec2<u32>(p.light + 0.5), p.look, p.ao);
     let layer = c0.layer & 0x7fffu;
     // The heights at about a texel a cell.
     let lods = i32(textureNumLevels(horizon_pbr_normals)) - 1;

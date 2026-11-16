@@ -7109,7 +7109,7 @@ impl Renderer {
             self.replace_native(None);
             return Ok(Vec::new());
         };
-        let terrain_looks = looks::wanted(&self.adapter);
+        let terrain_looks = looks::wanted(&self.adapter, report.looks())?;
         if terrain_looks && self.looks_layout.is_none() {
             self.looks_layout = Some(looks::layout(&self.device));
         }

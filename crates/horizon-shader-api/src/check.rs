@@ -9,7 +9,7 @@
 //! defaults, minimums and maximums. A post stage of a pack with `[ray_tracing]`, and its
 //! material stage where that traces, is checked twice: as every device runs it, where `trace`
 //! misses, and against the scene.
-use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT};
+use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT, SHADED_TINT};
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
 use crate::stages::{
@@ -93,6 +93,19 @@ impl CheckedStage {
                     .as_ref()
                     .is_some_and(|b| b.group == GROUP && b.binding == RAY_ENTITY_STORE_BINDING)
             })
+        })
+    }
+
+    /// Whether the stage's inputs end with `shaded_tint` (`SHADED_TINT`): its pack's files name
+    /// it (`stages::names_shaded_tint`), so the renderer's constructors of them pass it.
+    pub fn shaded_tint(&self) -> bool {
+        let inputs = ["MaterialInput", "VertexInput", "RayHit"];
+        self.module.types.iter().any(|(_, t)| match &t.inner {
+            naga::TypeInner::Struct { members, .. } => {
+                t.name.as_deref().is_some_and(|n| inputs.contains(&n))
+                    && (members.iter()).any(|m| m.name.as_deref() == Some(SHADED_TINT.name))
+            }
+            _ => false,
         })
     }
 
