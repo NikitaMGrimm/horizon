@@ -1380,6 +1380,12 @@ pub struct Renderer {
     /// with (`looks`), made for the first pack that takes them.
     look_groups: Option<looks::LookGroups>,
     looks_layout: Option<wgpu::BindGroupLayout>,
+    /// The world taken from a renderer that ran one of Horizon's packs (`take_world`) keeps
+    /// the looks and layouts that pack had until the game gives this renderer a pack again or
+    /// drops it (`set_native_shader_pack`, `drop_shader_packs`): a renderer made again for
+    /// another frame draws before its pack is back, and following no pack then would mesh the
+    /// world twice.
+    world_held: bool,
     /// The terrain's acceleration structures, with ray tracing on (`ray_scene`).
     ray_scene: Option<surface_setup::ray_query::ray_scene::RayScene>,
     /// The compact layout is allowed (`HORIZON_PACKED_QUADS`, `set_packed_layout`).
@@ -4901,6 +4907,7 @@ impl Renderer {
             packed_quads,
             terrain_looks: false,
             look_groups: None,
+            world_held: false,
             packed_on: packed_wanted(),
             cull_on: cull.is_some(),
             sides_on: true,
@@ -6285,6 +6292,9 @@ impl Renderer {
     /// them (large pages beside the translucent arena, else pages flat draws bind):
     /// the game meshes them again (`take_dropped_sections`).
     fn follow_translucent_layout(&mut self) {
+        if self.world_held {
+            return;
+        }
         let pack = self.pack_post.as_ref().and_then(|p| p.1.as_ref());
         let split = translucent_split(
             self.translucent_batching,
@@ -6315,6 +6325,9 @@ impl Renderer {
     /// programs outside flat draws (flat ones unpack the records, `pack_atlas::PULL_FLAT`).
     /// Leaving it drops every section and far tile for the game to mesh again.
     fn follow_packed_layout(&mut self) {
+        if self.world_held {
+            return;
+        }
         let pack = self.pack_post.as_ref().and_then(|p| p.1.as_ref()).is_some();
         let want = self.flat.is_some() && (!pack || self.pack_terrain_flat) && self.packed_on;
         if want == self.packed_quads {
@@ -6866,6 +6879,9 @@ impl Renderer {
     /// another that takes them too (the picker drops one and loads the other in a frame) leaves
     /// them as they are.
     fn follow_terrain_looks(&mut self) {
+        if self.world_held {
+            return;
+        }
         let want = self.native_looks();
         if want != self.terrain_looks {
             self.set_terrain_looks(want);
@@ -7063,6 +7079,7 @@ impl Renderer {
     }
     /// Drops the running shader pack, of either kind.
     pub fn drop_shader_packs(&mut self) {
+        self.world_held = false;
         self.pack_loading = None;
         self.pack_post = None;
         self.replace_native(None);
@@ -7095,6 +7112,7 @@ impl Renderer {
             block_light::LightTable,
         )>,
     ) -> std::result::Result<Vec<String>, String> {
+        self.world_held = false;
         let linear = pack.is_some();
         if (linear || self.output.frame.format == LINEAR_FRAME)
             && linear != (self.output.frame.format == LINEAR_FRAME)

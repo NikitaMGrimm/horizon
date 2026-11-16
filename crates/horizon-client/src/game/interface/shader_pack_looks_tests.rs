@@ -179,7 +179,9 @@ fn terrain_looks_stay_with_their_quads_through_pack_changes() {
 
 /// A renderer made again on the same device for another frame takes the world
 /// (`Renderer::take_world`, the game's `rebuild_renderer`): the sections' looks go with it,
-/// and the pack loaded in it, which takes them too, keeps them as they are.
+/// stay, with the layouts the pack had, through the frames drawn before the game loads its
+/// pack again, and the pack, which takes them too, keeps them as they are: the world isn't
+/// meshed again.
 #[test]
 #[ignore = "daily"]
 fn terrain_looks_go_with_the_world_to_a_new_renderer() {
@@ -202,6 +204,11 @@ fn terrain_looks_go_with_the_world_to_a_new_renderer() {
         let mut renderer = game.new_renderer(std::sync::Arc::new(window)).unwrap();
         assert!(renderer.take_world(game.renderer.as_mut().unwrap()));
         game.renderer = Some(renderer);
+        frame(game);
+        frame(game);
+        assert!(!game.renderer.as_mut().unwrap().take_dropped_sections(), "kept for the pack");
+        assert!(game.renderer.as_ref().unwrap().terrain_looks(), "held for the pack");
+        assert!(game.streaming.looks, "the game meshes with looks still");
         install(game, true);
         frame(game);
         frame(game);
