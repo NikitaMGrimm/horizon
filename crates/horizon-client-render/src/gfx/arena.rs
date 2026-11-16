@@ -120,6 +120,10 @@ pub struct Arena {
     pages: Vec<Option<Page>>,
     stride: u64,
     page_limit: u64,
+    /// `page_limit` without looks, and the most slots a page's looks hold in the device's
+    /// largest storage binding (`set_looks`).
+    plain_limit: u64,
+    look_limit: u64,
     initial_capacity: u64,
     usage: wgpu::BufferUsages,
     /// A page being emptied (`Arena::close`): nothing is placed in it.
@@ -216,6 +220,8 @@ impl Arena {
             pages: Vec::new(),
             stride,
             page_limit,
+            plain_limit: page_limit,
+            look_limit: limits.max_storage_buffer_binding_size / LOOK_BYTES / GRAIN * GRAIN,
             initial_capacity: capacity,
             usage,
             closing: None,
@@ -334,30 +340,53 @@ impl Arena {
         self.pages[page as usize].as_ref()?.looks.as_ref()
     }
 
-    /// A page's buffer of looks, while they are on.
-    fn look_buffer(&self, device: &wgpu::Device, capacity: u64) -> Option<wgpu::Buffer> {
-        let bytes = capacity * LOOK_BYTES;
-        if !self.looks_enabled || bytes > device.limits().max_storage_buffer_binding_size {
-            return None;
+    /// A page's buffer of looks while they are on (`Some(None)` while off), for a page of
+    /// `capacity` within `page_limit`. `None` when there is no memory for it: then the page
+    /// isn't made or grown either, so every live page has its looks while they are on.
+    fn look_buffer(&self, device: &wgpu::Device, capacity: u64) -> Option<Option<wgpu::Buffer>> {
+        if !self.looks_enabled {
+            return Some(None);
         }
         let usage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC;
-        try_create(device, "Terrain quad looks", bytes, usage)
+        try_create(device, "Terrain quad looks", capacity * LOOK_BYTES, usage).map(Some)
     }
 
     /// Every page gets a zeroed buffer of looks (`on`), or loses it: what is drawn is meshed
-    /// again either way (`Renderer::set_terrain_looks`).
-    pub fn set_looks(&mut self, device: &wgpu::Device, on: bool) {
+    /// again either way (`Renderer::set_terrain_looks`). While looks are on, pages hold at most
+    /// the slots whose looks fit the device's largest storage binding (`look_limit`: a
+    /// translucent page of up to `LARGE_PAGE_BYTES` would not); without them, what they held.
+    /// False when the ranges in the arena no longer hold: the most a page holds changed while
+    /// pages exist (a page may be past it), or a page got no looks for want of memory. The
+    /// caller drops them all (`clear`), and new pages keep to the limit.
+    pub fn set_looks(&mut self, device: &wgpu::Device, on: bool) -> bool {
         self.looks_enabled = on;
-        let capacities: Vec<_> = self.pages.iter().flatten().map(|p| p.capacity).collect();
-        let looks: Vec<_> = capacities
-            .into_iter()
-            .map(|c| self.look_buffer(device, c))
-            .collect();
-        for (page, looks) in self.pages.iter_mut().flatten().zip(looks) {
-            page.looks = looks;
+        let limit = match on {
+            true => self.plain_limit.min(self.look_limit),
+            false => self.plain_limit,
+        };
+        let mut holds = limit == self.page_limit || self.pages.iter().all(Option::is_none);
+        self.page_limit = limit;
+        for i in 0..self.pages.len() {
+            let Some(capacity) = self.pages[i].as_ref().map(|p| p.capacity) else {
+                continue;
+            };
+            // A page past the limit gets none: its looks may not fit a binding.
+            let looks = match capacity <= limit {
+                true => self.look_buffer(device, capacity),
+                false => None,
+            };
+            holds &= looks.is_some();
+            self.pages[i].as_mut().unwrap().looks = looks.flatten();
         }
+        holds
+    }
+
+    /// Tests: `slots` stands in for the device's limit on the slots of a page with looks.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn limit_looks(&mut self, slots: u64) {
+        self.look_limit = slots;
     }
 
     /// Writes `looks`, one a slot of the range at `start`, into `page`'s looks; a range without
@@ -482,6 +511,7 @@ impl Arena {
             None if capacity > len => (self.create(device, len, true)?, len),
             None => return None,
         };
+        let looks = self.look_buffer(device, capacity)?;
         let mut free = FreeList::new(capacity);
         let start = free.take(len).expect("a new page fits one section");
         let page = Page {
@@ -490,7 +520,7 @@ impl Arena {
                 .sources_enabled
                 .then(|| Self::source_buffer(device, capacity))
                 .flatten(),
-            looks: self.look_buffer(device, capacity),
+            looks,
             capacity,
             free,
             host,
@@ -600,11 +630,13 @@ impl Arena {
     /// nothing changes, when video memory has no room for it: in system memory it
     /// would slow every frame that draws it.
     pub fn open_page(&mut self, device: &wgpu::Device, capacity: u64) -> bool {
+        let Some(looks) = self.look_buffer(device, capacity) else {
+            return false;
+        };
         let Some((buffer, host)) = self.create(device, capacity, false) else {
             return false;
         };
         let free = FreeList::new(capacity);
-        let looks = self.look_buffer(device, capacity);
         self.pages.push(Some(Page {
             buffer,
             sources: self
@@ -730,6 +762,9 @@ impl Arena {
     ) -> bool {
         let capacity = capacity.next_multiple_of(GRAIN).min(self.page_limit);
         let spill = capacity * self.stride <= PAGE_BYTES;
+        let Some(looks) = self.look_buffer(device, capacity) else {
+            return false;
+        };
         let Some((buffer, host)) = self.create(device, capacity, spill) else {
             return false;
         };
@@ -737,7 +772,6 @@ impl Arena {
             .sources_enabled
             .then(|| Self::source_buffer(device, capacity))
             .flatten();
-        let looks = self.look_buffer(device, capacity);
         let old = self.pages[page].as_mut().expect("live arena page");
         // Copies recorded for the old buffer run before this one.
         encoder.copy_buffer_to_buffer(&old.buffer, 0, &buffer, 0, old.capacity * self.stride);
@@ -1844,5 +1878,62 @@ mod tests {
         assert_eq!(arena.bytes(), GRAIN * 4);
         arena.release(0, 0, GRAIN);
         assert_eq!(alloc(&mut arena, &device, &queue, GRAIN), Some((0, 0)));
+    }
+
+    /// While looks are on, a page holds at most the slots whose looks fit the device's largest
+    /// storage binding (here a stand-in of 8 grains, `look_limit`): the newest page grows up
+    /// to it and ranges past it take a new page, each page with its looks, which read back.
+    /// A page past the limit when looks turn on (a translucent page made without them) makes
+    /// the arena say its ranges no longer hold; dropped, its new pages keep to the limit.
+    #[test]
+    fn pages_with_looks_keep_within_the_storage_binding() {
+        use crate::mesher::QuadLook;
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let limit = 8 * GRAIN;
+        let mut arena = Arena::translucent(&device, 24, GRAIN);
+        arena.look_limit = limit;
+        // Made without looks, past the limit.
+        let (page, _) = alloc(&mut arena, &device, &queue, 12 * GRAIN).unwrap();
+        assert!(arena.looks(page).is_none() && arena.used(page) == 12 * GRAIN);
+        assert!(!arena.set_looks(&device, true), "a page past the limit");
+        assert_eq!(arena.page_vertices(), limit);
+        drop(arena.clear());
+        let mut uploads = super::super::upload::Uploads::new(&device);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut ranges = Vec::new();
+        for i in 0..12u32 {
+            let (page, start) = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
+            let looks = vec![QuadLook([0x0400_0000 | i, i, i % 16]); GRAIN as usize];
+            arena.write_looks(&mut encoder, &mut uploads, page, start, GRAIN, &looks);
+            ranges.push((page, start, looks[0]));
+        }
+        uploads.finish(&encoder);
+        queue.submit([encoder.finish()]);
+        let pages: Vec<u32> = (0..arena.pages.len() as u32).collect();
+        assert_eq!(pages, [0, 1], "the ranges past the limit took a new page");
+        for &page in &pages {
+            let p = arena.pages[page as usize].as_ref().unwrap();
+            assert!(p.capacity <= limit, "page {page}: {} slots", p.capacity);
+            let looks = arena.looks(page).expect("every page has its looks");
+            assert_eq!(looks.size(), p.capacity * LOOK_BYTES);
+        }
+        for (page, start, look) in ranges {
+            let buffer = arena.looks(page).unwrap();
+            let range = start * LOOK_BYTES..(start + GRAIN) * LOOK_BYTES;
+            let (tx, rx) = std::sync::mpsc::channel();
+            wgpu::util::DownloadBuffer::read_buffer(&device, &queue, &buffer.slice(range), {
+                move |r| tx.send(r.unwrap().to_vec()).unwrap()
+            });
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let held: Vec<QuadLook> = bytemuck::pod_collect_to_vec(&rx.recv().unwrap());
+            assert!(held.iter().all(|&l| l == look), "page {page} at {start}");
+        }
+        // Without looks again, pages are as large as before.
+        assert!(!arena.set_looks(&device, false));
+        assert_eq!(arena.page_vertices(), arena.plain_limit);
     }
 }

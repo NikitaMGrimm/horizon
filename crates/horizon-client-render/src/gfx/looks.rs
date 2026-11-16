@@ -180,6 +180,13 @@ pub struct PartLooks {
 
 #[cfg(any(test, feature = "test-support"))]
 impl super::Renderer {
+    /// `slots` stands in for the device's limit on the slots of a translucent page with looks
+    /// (`Arena::set_looks`): the only arena whose pages may be past the real one.
+    pub fn limit_translucent_look_pages(&mut self, slots: u64) {
+        if let Some(arena) = &mut self.translucent_arena {
+            arena.limit_looks(slots);
+        }
+    }
     /// Section `key`'s looks, solid then translucent, read back from its arenas, beside its
     /// mesh's as handed over (`keep_capture_copies` on before it was uploaded), and whether
     /// translucent quads have an arena of their own.

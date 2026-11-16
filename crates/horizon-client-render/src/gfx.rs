@@ -6872,7 +6872,10 @@ impl Renderer {
         }
     }
     /// Sections uploaded from now on carry their quads' looks (`on`), or none; the arenas'
-    /// pages get or lose their buffers of looks. The game meshes the world again.
+    /// pages get or lose their buffers of looks. The game meshes the world again. Where an
+    /// arena's pages no longer hold (`Arena::set_looks`: their most changes, as a translucent
+    /// page's does with looks, or a page got no looks), every section goes now, as on a change
+    /// of layout, and new pages keep to the limit.
     fn set_terrain_looks(&mut self, on: bool) {
         log::info!(
             "Horizon renderer: terrain quad looks {}",
@@ -6882,9 +6885,18 @@ impl Renderer {
         self.look_groups = (self.looks_layout.clone())
             .filter(|_| on)
             .map(|layout| looks::LookGroups::new(&self.device, layout));
-        self.arena.set_looks(&self.device, on);
+        let mut holds = self.arena.set_looks(&self.device, on);
         if let Some(arena) = &mut self.translucent_arena {
-            arena.set_looks(&self.device, on);
+            holds &= arena.set_looks(&self.device, on);
+        }
+        if !holds {
+            self.sections_dropped |=
+                self.sections.len() > 0 || !self.lods.is_empty() || self.lod_pending.is_some();
+            self.clear_sections(self.layout);
+            // A table names its page's blocks, so it goes with `clear_sections`.
+            if let (Some(flat), Some(arena)) = (&mut self.flat, &self.translucent_arena) {
+                flat.set_translucent_page_vertices(arena.page_vertices());
+            }
         }
     }
     /// The running Horizon pack's name, from its manifest.
