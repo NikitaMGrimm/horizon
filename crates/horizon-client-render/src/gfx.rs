@@ -6853,6 +6853,10 @@ impl Renderer {
     /// Sections uploaded from now on carry their quads' looks (`on`), or none; the arenas'
     /// pages get or lose their buffers of looks. The game meshes the world again.
     pub(in crate::gfx) fn set_terrain_looks(&mut self, on: bool) {
+        log::info!(
+            "Horizon renderer: terrain quad looks {}",
+            if on { "on" } else { "off" }
+        );
         self.terrain_looks = on;
         self.look_groups = (self.looks_layout.clone())
             .filter(|_| on)
