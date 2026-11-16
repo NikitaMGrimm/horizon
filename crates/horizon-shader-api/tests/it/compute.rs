@@ -510,6 +510,17 @@ fn an_indirect_entry_reads_this_frame_s_size() {
         ),
         f
     );
+    // The name is Horizon's: a file of the pack that declares it is refused, as any `horizon_`.
+    let own = "var<private> horizon_dispatch: vec4<u32>;\n\
+               fn compute(input: ComputeInput) { if input.in_bounds { let n = buf[3]; } }\n";
+    let mut files = files.to_vec();
+    files[1].1 = own;
+    let named = pack(&manifest("{ buffer = \"buf\", max = [64, 1, 1] }"), &files);
+    let found = problems(&named).join("\n");
+    assert!(
+        found.contains("`horizon_dispatch`: names starting with horizon_ are Horizon's"),
+        "{found}"
+    );
     for (kind, file) in [
         (StageKind::BeforeWorld, "mark.wgsl"),
         (StageKind::Post, "last.wgsl"),

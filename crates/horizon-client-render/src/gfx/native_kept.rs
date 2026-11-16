@@ -1001,14 +1001,54 @@ fn unmade(device: &wgpu::Device, kept: &Kept) -> Option<String> {
     None
 }
 
-/// `refusal` for `device`, then whether it makes every kept texture's format (`unmade`).
+#[cfg(test)]
+thread_local! {
+    /// Usages the indirect probe asks for besides `INDIRECT`: a test's stand-in for a device
+    /// that can't dispatch indirectly.
+    pub(super) static INDIRECT_PROBE_EXTRA: std::cell::Cell<wgpu::BufferUsages> =
+        const { std::cell::Cell::new(wgpu::BufferUsages::empty()) };
+}
+
+/// The first indirect pass of `manifest`, if the device can't dispatch indirectly: a device with
+/// compute shaders may lack it (OpenGL below 4.3 with `GL_ARB_compute_shader` alone, some Metal
+/// GPUs), and wgpu refuses an `INDIRECT` buffer then. One made and dropped under an error scope
+/// of its own while the pack builds says which.
+fn undispatched(device: &wgpu::Device, manifest: &Manifest) -> Option<String> {
+    let indirect =
+        |s: &&horizon_shader_api::Stage| matches!(s.dispatch, Some(Dispatch::Indirect { .. }));
+    let (post, before) = (manifest.post.iter(), manifest.kept.before_world.iter());
+    let pass = post.chain(before).find(indirect)?;
+    #[cfg(not(test))]
+    let usage = wgpu::BufferUsages::INDIRECT;
+    #[cfg(test)]
+    let usage = wgpu::BufferUsages::INDIRECT | INDIRECT_PROBE_EXTRA.get();
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    device
+        .create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Indirect dispatch probe"),
+            size: 12,
+            usage,
+            mapped_at_creation: false,
+        })
+        .destroy();
+    let e = pollster::block_on(scope.pop())?;
+    Some(format!(
+        "{}: the device can't dispatch a pass indirectly: {e}",
+        pass.file
+    ))
+}
+
+/// `refusal` for `device`, then whether it makes every kept texture's format (`unmade`) and
+/// dispatches indirectly where a pass asks (`undispatched`).
 pub(super) fn unmet(
     device: &wgpu::Device,
     manifest: &Manifest,
     stages: &[CheckedStage],
     shared: &[wgpu::BindGroupLayoutEntry],
 ) -> Option<String> {
-    refusal(&device.limits(), manifest, stages, shared).or_else(|| unmade(device, &manifest.kept))
+    refusal(&device.limits(), manifest, stages, shared)
+        .or_else(|| unmade(device, &manifest.kept))
+        .or_else(|| undispatched(device, manifest))
 }
 
 fn make(device: &wgpu::Device, name: &str, shape: Shape, size: [u32; 2]) -> Held {

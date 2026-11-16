@@ -5,7 +5,7 @@ use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT, SURFACE, 
 use crate::kept::{
     Element, Format, MAX_BEFORE_WORLD, MAX_BUFFER_BYTES, MAX_COMPUTE_POST,
     MAX_DISPATCH_INVOCATIONS, MAX_FIXED_TEXTURE_BYTES, MAX_FRAME_INVOCATIONS, MAX_RESOURCES,
-    MAX_WORKGROUP, MAX_WORKGROUP_INVOCATIONS, PIXELS_COUNTED_AS, REASONS,
+    MAX_WORKGROUP, MAX_WORKGROUP_INVOCATIONS, MAX_WORKGROUPS, PIXELS_COUNTED_AS, REASONS,
 };
 use crate::manifest::{
     API, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES, MAX_POST_TARGETS, POST_TARGET_BUDGET,
@@ -219,7 +219,8 @@ fn kept() -> String {
          cells, as `[x, y, z]`, which Horizon makes workgroups. A count of 0 runs none, as on the first frame and after a\n\
          reset. `input.size` is this frame's clamped count, from `horizon_dispatch` at binding {DISPATCH_BINDING}, so the\n\
          pass may clear the counter for the next frame. A pass of the pack must write `b`: an earlier one gives this\n\
-         frame's count, a later one last frame's. The limits count `max`.\n\n\
+         frame's count, a later one last frame's. The limits count `max`: a list as long as 3840×2160 pixels, `[8294400, 1,\n\
+         1]`, needs a workgroup of 128 or more along x (`[128, 1, 1]`) to stay within {MAX_WORKGROUPS} workgroups a side.\n\n\
          Rays traced from a few lanes of each workgroup cost about twice what the same rays cost from full ones, and a\n\
          `trace` call that a run-time condition skips still slows the others: append sparse work to a list (an\n\
          `atomic<u32>` counter) and trace over the list with an indirect `dispatch`, and put an optional trace path\n\

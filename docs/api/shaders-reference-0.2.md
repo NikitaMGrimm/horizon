@@ -431,7 +431,8 @@ may trace (see Ray tracing); a `[[before_world]]` pass traces this frame's scene
 cells, as `[x, y, z]`, which Horizon makes workgroups. A count of 0 runs none, as on the first frame and after a
 reset. `input.size` is this frame's clamped count, from `horizon_dispatch` at binding 15, so the
 pass may clear the counter for the next frame. A pass of the pack must write `b`: an earlier one gives this
-frame's count, a later one last frame's. The limits count `max`.
+frame's count, a later one last frame's. The limits count `max`: a list as long as 3840×2160 pixels, `[8294400, 1,
+1]`, needs a workgroup of 128 or more along x (`[128, 1, 1]`) to stay within 65535 workgroups a side.
 
 Rays traced from a few lanes of each workgroup cost about twice what the same rays cost from full ones, and a
 `trace` call that a run-time condition skips still slows the others: append sparse work to a list (an

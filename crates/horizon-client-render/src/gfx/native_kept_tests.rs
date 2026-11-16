@@ -1428,3 +1428,38 @@ fn a_device_short_of_an_indirect_pass_s_max_refuses_it() {
         Some("c.wgsl: 1 uniform buffers, the device takes 0")
     );
 }
+
+/// A device that can't dispatch indirectly (`INDIRECT_PROBE_EXTRA` stands in for one: a usage
+/// wgpu refuses beside `INDIRECT`) refuses an indirect pack while it builds, with the reason, its
+/// error caught there; a pack without an indirect pass builds on it.
+#[test]
+fn a_device_without_indirect_dispatch_refuses_an_indirect_pack() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let frame = Chain::frame(&device, &queue);
+    let build = |manifest: &str, files: &[(&str, &str)]| {
+        let report = report(manifest, files);
+        let stages = (report.stages.into_iter())
+            .filter(|s| s.kind != StageKind::Tonemap)
+            .collect();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        super::super::NativePost::new(&device, stages, &report.manifest, &[], format, &frame, None)
+    };
+    let (manifest, files) = indirect(&counts("1u", "1u", "1u"), "");
+    let files: Vec<_> = files.iter().map(|(n, t)| (*n, t.as_str())).collect();
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    INDIRECT_PROBE_EXTRA.set(wgpu::BufferUsages::MAP_READ);
+    let refused = build(&manifest, &files).err();
+    let (fixed, fixed_files) = SUMMING;
+    let plain = build(fixed, &fixed_files);
+    INDIRECT_PROBE_EXTRA.set(wgpu::BufferUsages::empty());
+    let refused = refused.unwrap();
+    assert!(
+        refused.starts_with("c.wgsl: the device can't dispatch a pass indirectly"),
+        "{refused}"
+    );
+    assert!(plain.is_ok());
+    assert!(pollster::block_on(scope.pop()).is_none());
+    assert!(build(&manifest, &files).is_ok());
+}
