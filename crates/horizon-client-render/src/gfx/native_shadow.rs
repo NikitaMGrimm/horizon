@@ -654,7 +654,10 @@ impl NativeShadow {
             // The vertex stage's (`DISPLACE_PACK`): a fluid of this pass is water.
             let mut constants = constants.clone();
             if staged {
-                constants.push(("horizon_material_translucent", f64::from(u8::from(translucent))));
+                constants.push((
+                    "horizon_material_translucent",
+                    f64::from(u8::from(translucent)),
+                ));
             }
             let options = wgpu::PipelineCompilationOptions {
                 constants: &constants,

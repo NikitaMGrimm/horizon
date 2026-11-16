@@ -440,7 +440,10 @@ fn fog_is_no_stage_s_key() {
     };
     for stage in ["[material]", "[sky]", "[[post]]"] {
         let e = horizon_shader_api::Manifest::parse(&with_fog(stage)).unwrap_err();
-        assert!(e.contains("[material] fog is gone: [frame] fog = \"pack\""), "{e}");
+        assert!(
+            e.contains("[material] fog is gone: [frame] fog = \"pack\""),
+            "{e}"
+        );
     }
 }
 

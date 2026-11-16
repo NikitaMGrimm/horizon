@@ -620,7 +620,12 @@ fn an_entity_hit_has_vanilla_s_shade_and_says_when_the_ray_met_its_back() {
         }
         q
     };
-    let normals = [[0, 0, 127, 127], [0, 127, 0, 127], [0, 76, 102, -127], [0, 0, 127, 1]];
+    let normals = [
+        [0, 0, 127, 127],
+        [0, 127, 0, 127],
+        [0, 76, 102, -127],
+        [0, 0, 127, 1],
+    ];
     let stream: Vec<Vertex> = [
         face(0.0, normals[0], false),
         face(10.0, normals[1], true),
@@ -655,7 +660,8 @@ fn an_entity_hit_has_vanilla_s_shade_and_says_when_the_ray_met_its_back() {
     let mut encoder = Some(device.create_command_encoder(&Default::default()));
     let sizes = entities.built_sizes();
     let builds = [entities.build(&sizes, &indices)];
-    (encoder.as_mut().unwrap()).build_acceleration_structures(builds.iter(), std::iter::once(&tlas));
+    (encoder.as_mut().unwrap())
+        .build_acceleration_structures(builds.iter(), std::iter::once(&tlas));
     let (store, layers) = (empty(&device, 24), empty(&device, 8));
     // entity.wgsl's `entity_light` for unit normal `n`, decoded as the stage's colours are.
     let light = |n: [f32; 3], nether: bool| {

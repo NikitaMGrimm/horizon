@@ -61,7 +61,11 @@ const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 22] = [
     ("minecraft:lantern", &[("waterlogged", "true")], Some(15)),
     ("minecraft:lantern", &[("hanging", "true")], Some(15)),
     ("minecraft:candle", &[("lit", "true")], Some(3)),
-    ("minecraft:candle", &[("lit", "true"), ("candles", "4")], Some(12)),
+    (
+        "minecraft:candle",
+        &[("lit", "true"), ("candles", "4")],
+        Some(12),
+    ),
     ("minecraft:candle", &[("candles", "4")], Some(0)),
     ("minecraft:candle_cake", &[("lit", "true")], Some(3)),
     ("minecraft:fire", &[], Some(15)),

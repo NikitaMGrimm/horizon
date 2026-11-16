@@ -632,7 +632,11 @@ impl Displacement {
         });
         let looks = looks.map(|layout| {
             let size = MAX_LOOKS * super::arena::LOOK_BYTES;
-            let looks = buffer("Displacement looks", size, U::STORAGE | U::COPY_DST | U::COPY_SRC);
+            let looks = buffer(
+                "Displacement looks",
+                size,
+                U::STORAGE | U::COPY_DST | U::COPY_SRC,
+            );
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Displacement looks"),
                 layout,
@@ -939,10 +943,22 @@ mod tests {
         let all: Vec<QuadLook> = (0..expected.len() as u32 / 4).map(look).collect();
         let (na, nb) = (a.len() / 4, b.len() / 4);
         let mut looks_one = vec![QuadLook::default(); 8];
-        looks_one.extend(super::super::looks::per_slot(&all[..na], true, compact(&a).len() as u64));
-        looks_one.extend(super::super::looks::per_slot(&all[na + nb..], true, compact(&c).len() as u64));
+        looks_one.extend(super::super::looks::per_slot(
+            &all[..na],
+            true,
+            compact(&a).len() as u64,
+        ));
+        looks_one.extend(super::super::looks::per_slot(
+            &all[na + nb..],
+            true,
+            compact(&c).len() as u64,
+        ));
         let mut looks_two = vec![QuadLook::default(); 4];
-        looks_two.extend(super::super::looks::per_slot(&all[na..na + nb], false, b.len() as u64));
+        looks_two.extend(super::super::looks::per_slot(
+            &all[na..na + nb],
+            false,
+            b.len() as u64,
+        ));
         let mut tested = false;
         for (adapter, name) in crate::gfx::test_gpu::each_adapter() {
             let (device, queue) =

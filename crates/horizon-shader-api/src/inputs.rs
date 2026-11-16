@@ -264,7 +264,9 @@ impl Frame {
             (!ray_tracing && Self::RAY_FIELDS.contains(&i))
                 || (!kept && Self::KEPT_FIELDS.contains(&i))
         };
-        (0..Self::WGSL.fields.len()).filter(|&i| !skipped(i)).collect()
+        (0..Self::WGSL.fields.len())
+            .filter(|&i| !skipped(i))
+            .collect()
     }
 
     /// The fields the prelude declares (`declared_at`).
@@ -519,9 +521,12 @@ pub fn shaded(input: &Struct, shaded: bool) -> String {
     let mut out = input.wgsl();
     if shaded {
         out.truncate(out.len() - 2);
-        out += &format!("    {}: {},
+        out += &format!(
+            "    {}: {},
 }}
-", SHADED_TINT.name, SHADED_TINT.ty);
+",
+            SHADED_TINT.name, SHADED_TINT.ty
+        );
     }
     out
 }
@@ -572,7 +577,11 @@ mod tests {
         let untraced = names(Frame::declared(false, false));
         assert_eq!(untraced.len(), 56);
         assert!(!untraced.iter().any(|n| n.contains("ray")));
-        assert!(!untraced.iter().any(|n| *n == "fog_start" || *n == "fog_end"));
+        assert!(
+            !untraced
+                .iter()
+                .any(|n| *n == "fog_start" || *n == "fog_end")
+        );
         let epochs = ["view_epoch", "world_epoch", "reset_reasons"];
         let fog = ["fog_environment", "fog_render"];
         for ray_tracing in [false, true] {

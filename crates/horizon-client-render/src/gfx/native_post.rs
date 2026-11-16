@@ -1928,15 +1928,7 @@ api = \"0.2\"
         let red = |post: &mut NativePost| {
             let mut encoder = device.create_command_encoder(&Default::default());
             let world = (&color, &depth, &frame.surface_view);
-            post.run(
-                &device,
-                &mut encoder,
-                world,
-                &view,
-                [4, 4],
-                None,
-                None,
-            );
+            post.run(&device, &mut encoder, world, &view, [4, 4], None, None);
             encoder.copy_texture_to_buffer(
                 screen.as_image_copy(),
                 wgpu::TexelCopyBufferInfo {
@@ -2527,15 +2519,7 @@ api = \"0.2\"
             }));
             let view = screen.create_view(&Default::default());
             let world = (&color, &depth, &frame.surface_view);
-            post.run(
-                &device,
-                &mut encoder,
-                world,
-                &view,
-                [4, 4],
-                None,
-                None,
-            );
+            post.run(&device, &mut encoder, world, &view, [4, 4], None, None);
             let buffer = crate::gfx::copy_frame(&device, &mut encoder, &screen, [4, 4]);
             queue.submit([encoder.finish()]);
             buffer
@@ -2690,15 +2674,7 @@ api = \"0.2\"
             }));
             let view = screen.create_view(&Default::default());
             let world = (&color, &depth, &frame.surface_view);
-            post.run(
-                &device,
-                &mut encoder,
-                world,
-                &view,
-                [4, 4],
-                None,
-                None,
-            );
+            post.run(&device, &mut encoder, world, &view, [4, 4], None, None);
             // The renderer's rule, then its curve, as it runs them after the pack's chain.
             if crate::gfx::horizon_tone_curve(hdr, true, post.tonemaps()) {
                 display.begin(&queue, true);

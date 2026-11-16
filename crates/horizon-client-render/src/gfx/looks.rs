@@ -15,7 +15,8 @@ pub const GROUP: u32 = 2;
 /// switch (`decide`).
 pub fn wanted(adapter: &wgpu::Adapter, pack: bool) -> Result<bool, String> {
     static ASKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let switch = *ASKED.get_or_init(|| std::env::var("HORIZON_TERRAIN_LOOKS").as_deref() == Ok("1"));
+    let switch =
+        *ASKED.get_or_init(|| std::env::var("HORIZON_TERRAIN_LOOKS").as_deref() == Ok("1"));
     let flags = adapter.get_downlevel_capabilities().flags;
     let storage = flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE);
     if switch && !pack && !storage {
@@ -34,9 +35,11 @@ pub fn wanted(adapter: &wgpu::Adapter, pack: bool) -> Result<bool, String> {
 /// them is refused, and the switch alone does nothing.
 pub fn decide(pack: bool, switch: bool, storage: bool) -> Result<bool, String> {
     if pack && !storage {
-        return Err("the device's vertex stage reads no storage buffers, which the terrain's \
+        return Err(
+            "the device's vertex stage reads no storage buffers, which the terrain's \
                     `tint`, `shade`, `ao`, `face` and `emission` need (`shaded_tint` doesn't)"
-            .into());
+                .into(),
+        );
     }
     Ok((pack || switch) && storage)
 }

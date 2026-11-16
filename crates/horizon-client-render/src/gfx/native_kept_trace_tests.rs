@@ -252,15 +252,8 @@ fn frame(
     let screen = &world.screen;
     let view = screen.create_view(&Default::default());
     let world = (&world.color, &world.depth, &pack.frame.surface_view);
-    pack.post.run(
-        device,
-        &mut encoder,
-        world,
-        &view,
-        [4, 4],
-        None,
-        scene,
-    );
+    pack.post
+        .run(device, &mut encoder, world, &view, [4, 4], None, scene);
     let buffer = crate::gfx::copy_frame(device, &mut encoder, screen, [4, 4]);
     queue.submit([encoder.finish()]);
     (buffer.slice(..)).map_async(wgpu::MapMode::Read, |r| r.unwrap());
@@ -433,11 +426,7 @@ fn a_traced_pack_makes_its_layouts_and_groups_once() {
                 n as u32 + 1,
                 Some(scene),
             );
-            let chain = pack
-                .post
-                .groups
-                .iter()
-                .flat_map(|(_, g)| g.iter().cloned());
+            let chain = pack.post.groups.iter().flat_map(|(_, g)| g.iter().cloned());
             let worlds = pack.post.kept.iter().flat_map(|k| k.worlds.iter().cloned());
             held.extend(chain.chain(worlds));
             counts.push(count()?);

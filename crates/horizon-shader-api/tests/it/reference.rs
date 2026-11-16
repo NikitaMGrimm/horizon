@@ -3,7 +3,9 @@
 //! key, and docs/api/shaders-reference-0.2.md is up to date. Rewrite the reference with
 //! `HORIZON_WRITE_DOCS=1 cargo test -p horizon-shader-api --test it reference::`.
 use horizon_shader_api::{
-    Frame, Pack, StageKind, compose, package::sha256_hex, reference,
+    Frame, Pack, StageKind, compose,
+    package::sha256_hex,
+    reference,
     stages::{Tracing, shaded_entries},
 };
 use naga::valid::Capabilities;

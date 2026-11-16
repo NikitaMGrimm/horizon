@@ -633,7 +633,10 @@ impl NativeMaterial {
             let mut constants = constants.clone();
             if staged {
                 let translucent = fragment == "horizon_material_fs_translucent";
-                constants.push(("horizon_material_translucent", f64::from(u8::from(translucent))));
+                constants.push((
+                    "horizon_material_translucent",
+                    f64::from(u8::from(translucent)),
+                ));
             }
             let options = wgpu::PipelineCompilationOptions {
                 constants: &constants,
@@ -1384,7 +1387,8 @@ mod tests {
              fn material(input: MaterialInput) -> Surface { return Surface(input.albedo * gain); }\n",
         );
         let source = stage.source.clone() + crate::gfx::looks::NO_LOOK_WGSL;
-        let pack = shader_source(&source, &[], &[], (false, false, false), false) + &entries(PREFIX);
+        let pack =
+            shader_source(&source, &[], &[], (false, false, false), false) + &entries(PREFIX);
         let instance = crate::gfx::test_gpu::instance();
         let mut tested = Vec::new();
         for adapter in pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all())) {

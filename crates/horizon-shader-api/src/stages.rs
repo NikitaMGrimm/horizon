@@ -1791,7 +1791,10 @@ pub const SHADED_TINT_ARGUMENT: &str = "@shaded_tint@";
 
 /// `entries` with `SHADED_TINT_ARGUMENT` filled in for a pack that names `shaded_tint` or not.
 pub fn shaded_entries(entries: &str, shaded: bool) -> String {
-    entries.replace(SHADED_TINT_ARGUMENT, if shaded { ", horizon_shaded" } else { "" })
+    entries.replace(
+        SHADED_TINT_ARGUMENT,
+        if shaded { ", horizon_shaded" } else { "" },
+    )
 }
 
 /// Whether a material stage's files, `texts`, name a trace function: only then does its prelude
