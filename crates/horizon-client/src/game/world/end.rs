@@ -2020,6 +2020,38 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
+    fn an_entity_keeps_its_motion_through_a_gateway() {
+        use super::super::native_entity_refs::tests::with_game;
+
+        with_game(|game| {
+            game.spawn_item_own(
+                horizon_client::items::ItemStack::new("minecraft:stick", 1),
+                [2.5, 100.0, 2.5],
+                0,
+            );
+            let motion = Vec3::new(0.117, 0.25, -0.05);
+            game.dropped[0].velocity = motion;
+            let id = game.dropped[0].id;
+            let arrival = GatewayArrival {
+                traveller: Arriving::Live(id),
+                job: GatewayJob::Known {
+                    exit: [12, 100, 12],
+                    exact: true,
+                },
+                target: Vec3::new(12.5, 100.0, 12.5),
+            };
+            assert!(game.arrive_through_gateway(arrival).is_none());
+            // Entity.teleportSameDimension with the gateway's Relative.DELTA: the
+            // entity is at the exit and its motion is kept.
+            let item = &game.dropped[0];
+            assert_eq!(item.id, id);
+            assert!((item.position.x - 12.5).abs() < 1.0, "{:?}", item.position);
+            assert_eq!(item.velocity, motion);
+        });
+    }
+
+    #[test]
     fn leaving_the_end_without_a_point_of_its_own_goes_to_the_world_spawn() {
         let world = Some([220, 63, -41]);
         assert_eq!(fallback_spawn(None, world), Vec3::new(220.5, 63.0, -40.5));
