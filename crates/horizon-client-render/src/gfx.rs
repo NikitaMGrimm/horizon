@@ -8449,6 +8449,7 @@ impl Renderer {
                 let s = self.sections.get(v.slot);
                 (s.solid > 0).then(|| displace::Near {
                     buffer: self.arena.buffer(s.page),
+                    looks: self.arena.looks(s.page),
                     base: s.solid_base(),
                     quads: s.solid,
                     origin: v.origin,
