@@ -405,6 +405,7 @@ fn rays_reach_the_entity_layer_through_its_three_bases() {
         }),
         generation: 0,
         camera: [0.0; 3],
+        nether: false,
         distance: 100.0,
     };
     let device_queue = (&device, &queue);
@@ -552,6 +553,7 @@ fn rays_reach_retained_block_entities_through_their_sections() {
             }),
             generation: 0,
             camera: [0.0; 3],
+            nether: false,
             distance: 100.0,
         };
         let device_queue = (&device, &queue);

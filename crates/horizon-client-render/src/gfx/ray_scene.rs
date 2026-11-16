@@ -156,6 +156,7 @@ impl Renderer {
         let Some(rt) = &mut self.ray_scene else {
             return;
         };
+        rt.nether = frame.nether_lighting;
         crate::spans::time("ray scene", || {
             rt.prepare(
                 &self.device,
@@ -440,6 +441,8 @@ pub(in crate::gfx) struct RayScene {
     entities: Option<Entities>,
     /// Where the entity layer's instances of retained block entities start, after the stream's.
     retained_instances: u32,
+    /// The frame lights entities as in the Nether (`Frame::nether_lighting`, `ray_prepare`).
+    nether: bool,
 }
 
 /// What a trace reads this frame (spec #15624).
@@ -460,6 +463,8 @@ pub(in crate::gfx) struct Traced<'a> {
     /// The camera in the TLAS's space: from the anchor column's corner along x and z, the
     /// world's y.
     pub camera: [f32; 3],
+    /// Entities are lit as in the Nether: the entity layer's `RayHit.shade`.
+    pub nether: bool,
     /// Blocks from the camera, along x and along z, the TLAS spans whichever way one goes.
     pub distance: f32,
 }
@@ -510,6 +515,7 @@ impl RayScene {
             translucent_instances: 0,
             entities: None,
             retained_instances: 0,
+            nether: false,
         })
     }
 
@@ -547,6 +553,7 @@ impl RayScene {
             entities,
             generation: self.generation,
             camera,
+            nether: self.nether,
             distance,
         })
     }

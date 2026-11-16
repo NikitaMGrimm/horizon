@@ -774,7 +774,7 @@ fn post(input: PostInput) -> vec4<f32> {
     // maps are read from either.
     let built = "fn post(input: PostInput) -> vec4<f32> {
     let hit = RayHit(1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), input.color, input.color,
-        vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, vec4<f32>(0.0), 7u);
+        1.0, 1.0, vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, false, vec4<f32>(0.0), 7u);
     return hit_normal_map(hit);
 }
 ";

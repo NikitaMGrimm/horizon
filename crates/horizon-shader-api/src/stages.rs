@@ -503,8 +503,9 @@ pub const RAY_STORE_BINDING: u32 = 49;
 /// array holds (a `u32`), how many of the scene's instances, its first ones, are solid
 /// terrain's (a `u32`), where the translucent terrain's end (a `u32`: the entity layer's
 /// instance is the next), where the retained block entities' instances start (a `u32`, after
-/// the stream's), then at byte 32 the first quad of each of the stream instance's three
-/// geometries (three `u32`), 48 bytes in all.
+/// the stream's), 1 in the Nether else 0 (a `u32`, for the entity layer's shade), then at byte
+/// 32 the first quad of each of the stream instance's three geometries (three `u32`), 48 bytes
+/// in all.
 pub const RAY_SPACE_BINDING: u32 = 50;
 /// Two words per sprite layer: the pack's `[[materials]]` id, then its `[[tags]]` bits.
 pub const RAY_LAYERS_BINDING: u32 = 51;
@@ -572,9 +573,11 @@ const RAY_STUB: &str = "\
 // `direction`, within `max_distance` blocks. The scene isn't there (`frame.has_ray_tracing` is
 // 0): a miss.
 fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit {
+    let horizon_shaded = vec4<f32>(0.0);
     return RayHit(-1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0),
--|        vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, vec4<f32>(0.0), 0u);
-+|        vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, false, vec4<f32>(0.0), 0u);
+        vec4<f32>(0.0), 0.0, 0.0, vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, false,
+-|        vec4<f32>(0.0), 0u@shaded_tint@);
++|        false, vec4<f32>(0.0), 0u@shaded_tint@);
 }
 // Whether anything of `layers` lies within `max_distance` blocks of `origin` along `direction`.
 fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool {
@@ -695,6 +698,8 @@ struct horizon_RaySpace {
 +|    // The first instance of the block entities kept on the GPU, after the stream's: their quads
 +|    // are in `horizon_ray_retained`.
 +|    retained_instances: u32,
++|    // 1 in the Nether, where vanilla's entity shade lights from below (entity.wgsl's).
++|    nether: u32,
 +|    // The first quad of each of the entity layer's three geometries in `horizon_ray_entities`.
 +|    entity_bases: vec3<u32>,
 }
@@ -833,9 +838,11 @@ fn horizon_ray_cast(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, 
 fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit {
     let hit = horizon_ray_cast(origin, direction, max_distance, layers, false);
     if hit.kind == RAY_QUERY_INTERSECTION_NONE {
+        let horizon_shaded = vec4<f32>(0.0);
         return RayHit(-1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0),
--|            vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, vec4<f32>(0.0), 0u);
-+|            vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, false, vec4<f32>(0.0), 0u);
+            vec4<f32>(0.0), 0.0, 0.0, vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, false,
+-|            vec4<f32>(0.0), 0u@shaded_tint@);
++|            false, vec4<f32>(0.0), 0u@shaded_tint@);
     }
 +|    if hit.instance_index >= horizon_ray_space.translucent_instances {
 +|        return horizon_ray_entity_hit(hit, origin, direction);
@@ -845,7 +852,8 @@ fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, laye
     let e1 = horizon_ray_corner(t.corners.y) - a;
     let e2 = horizon_ray_corner(t.corners.z) - a;
     var normal = normalize(cross(e1, e2));
-    if dot(normal, direction) > 0.0 {
+    let back = dot(normal, direction) > 0.0;
+    if back {
         normal = -normal;
     }
     let words = vec3<u32>(horizon_ray_word(t.corners.x, 4u), horizon_ray_word(t.corners.y, 4u),
@@ -876,11 +884,12 @@ fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, laye
     let code = 15u - (flags & 15u);
     let tier = select(code, code - 4u, code > 4u);
     let emission = select(min(f32(tier) * 7.0 / 15.0, 1.0), 0.0, tier == 0u);
+    let horizon_shaded = vec4<f32>(horizon_decode(color.rgb), 1.0);
     return RayHit(hit.t, origin + direction * hit.t, normal, uv,
-        horizon_decode_rgba(horizon_ray_texel(layer, uv)), vec4<f32>(horizon_decode(color.rgb), 1.0),
+        horizon_decode_rgba(horizon_ray_texel(layer, uv)), horizon_shaded, 1.0, 1.0,
         min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)), material, tags, emission, fluid,
--|        translucent, horizon_ray_tangent(t, e1, e2, normal), layer);
-+|        translucent, false, horizon_ray_tangent(t, e1, e2, normal), layer);
+-|        translucent, back, horizon_ray_tangent(t, e1, e2, normal), layer@shaded_tint@);
++|        translucent, back, false, horizon_ray_tangent(t, e1, e2, normal), layer@shaded_tint@);
 }
 // Whether anything of `layers` lies within `max_distance` blocks of `origin` along `direction`.
 fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool {
@@ -978,15 +987,31 @@ fn horizon_ray_entity_tangent(d1: vec2<f32>, d2: vec2<f32>, e1: vec3<f32>, e2: v
     let tangent = normalize(along);
     return vec4<f32>(tangent, select(-1.0, 1.0, dot(cross(normal, tangent), dv) >= 0.0));
 }
+// Vanilla's entity shade (entity.wgsl's `entity_light`), linear, on the side of the quad of `t`
+// the ray along `direction` meets: from its first corner's normal in the stream, turned for the
+// back of a quad drawn on both sides (`w` below 0); 1 for a quad vanilla doesn't shade (`w` 0:
+// a block drawn as an entity, its shade in its colour).
+fn horizon_ray_entity_shade(t: horizon_RayTriangle, direction: vec3<f32>) -> f32 {
+    let n = unpack4x8snorm(horizon_ray_entity_word(t.corners.x, 8u));
+    if abs(n.w) < 0.5 {
+        return 1.0;
+    }
+    let normal = select(n.xyz, -n.xyz, n.w < 0.0 && dot(n.xyz, direction) > 0.0);
+    let l0 = normalize(vec3<f32>(0.2, 1.0, -0.7));
+    let l1 = normalize(vec3<f32>(-0.2, select(1.0, -1.0, horizon_ray_space.nether != 0u), 0.7));
+    let shade = min(1.0, (max(0.0, dot(l0, normal)) + max(0.0, dot(l1, normal))) * 0.6 + 0.4);
+    return horizon_decode(vec3<f32>(shade)).x;
+}
 // An entity layer hit as `trace_layers` gives it: the texel and the vertices' colour, light and
-// uv, the face's normal against the ray; nothing of a block's.
+// uv, the face's normal against the ray, vanilla's shade for it; nothing of a block's.
 fn horizon_ray_entity_hit(hit: RayIntersection, origin: vec3<f32>, direction: vec3<f32>) -> RayHit {
     let t = horizon_ray_entity_triangle(hit);
     let a = horizon_ray_entity_corner(t.corners.x);
     let e1 = horizon_ray_entity_corner(t.corners.y) - a;
     let e2 = horizon_ray_entity_corner(t.corners.z) - a;
     var normal = normalize(cross(e1, e2));
-    if dot(normal, direction) > 0.0 {
+    let back = dot(normal, direction) > 0.0;
+    if back {
         normal = -normal;
     }
     let uv = horizon_ray_entity_mix(t, 3u);
@@ -998,10 +1023,12 @@ fn horizon_ray_entity_hit(hit: RayIntersection, origin: vec3<f32>, direction: ve
         horizon_ray_entity_word(t.corners.y, 7u), horizon_ray_entity_word(t.corners.z, 7u));
     let sky = dot(vec3<f32>(words & vec3<u32>(0xffu)), t.weights);
     let block = dot(vec3<f32>((words >> vec3<u32>(8u)) & vec3<u32>(0xffu)), t.weights);
+    let horizon_shaded = horizon_decode_rgba(horizon_ray_entity_color(t));
     return RayHit(hit.t, origin + direction * hit.t, normal, uv,
-        horizon_decode_rgba(horizon_ray_entity_texel(uv)), horizon_decode_rgba(horizon_ray_entity_color(t)),
-        min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)), 0u, 0u, 0.0, 0u, false, true,
-        horizon_ray_entity_tangent(d1, d2, e1, e2, normal), 0u);
+        horizon_decode_rgba(horizon_ray_entity_texel(uv)), horizon_shaded,
+        horizon_ray_entity_shade(t, direction), 1.0, min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)),
+        0u, 0u, 0.0, 0u, false, back, true, horizon_ray_entity_tangent(d1, d2, e1, e2, normal),
+        0u@shaded_tint@);
 }
 ";
 
@@ -1383,16 +1410,14 @@ impl StageKind {
             StageKind::Sky | StageKind::Weather | StageKind::Tonemap => {}
         }
         if rays {
-            out += &ray_hit(entities).wgsl();
-            out += &layered(
-                match tracing {
-                    Tracing::Scene => RAY_SCENE,
-                    _ => RAY_STUB,
-                },
-                entities,
-            );
+            out += &crate::inputs::shaded(&ray_hit(entities), shaded);
+            let scene = match tracing {
+                Tracing::Scene => RAY_SCENE,
+                _ => RAY_STUB,
+            };
+            out += &shaded_entries(&layered(scene, entities), shaded);
             if tracing == Tracing::Scene && entities {
-                out += RAY_ENTITY_SCENE;
+                out += &shaded_entries(RAY_ENTITY_SCENE, shaded);
             }
             out += &layered(RAY_LAYERS, entities);
             // The material stage's renderer, or the check's stand-in, reads the LabPBR maps.
@@ -1760,8 +1785,8 @@ pub fn names_shaded_tint(pack: &Pack) -> bool {
     pack.manifest.files().into_iter().any(named)
 }
 
-/// Where an entry point's constructor of a terrain input takes `shaded_tint` (`horizon_shaded`)
-/// in a pack that names it.
+/// Where an entry point's constructor of a terrain input, or the prelude's of `RayHit`, takes
+/// `shaded_tint` (`horizon_shaded`) in a pack that names it.
 pub const SHADED_TINT_ARGUMENT: &str = "@shaded_tint@";
 
 /// `entries` with `SHADED_TINT_ARGUMENT` filled in for a pack that names `shaded_tint` or not.

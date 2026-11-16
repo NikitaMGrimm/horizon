@@ -155,6 +155,7 @@ impl Scene {
             entities: None,
             generation: self.generation,
             camera: [0.0; 3],
+            nether: false,
             distance: 64.0,
         }
     }

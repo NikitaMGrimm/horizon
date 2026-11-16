@@ -458,33 +458,36 @@ pub const WEATHER_INPUT: Struct = Struct {
 /// What `trace` and `trace_layers` return (`[ray_tracing]`): the nearest surface along a ray.
 pub const RAY_HIT: Struct = Struct {
     name: "RayHit",
-    doc: "The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss `distance` is negative and every other field is 0 (`translucent` false).",
+    doc: "The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `tint`, `shade`, `ao`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss, and in every stage while the scene isn't there (`frame.has_ray_tracing` 0), `distance` is negative and every other field is 0 (the `bool`s false).",
     fields: fields! {
         distance: "f32" = "How far along the ray the surface is, in blocks; negative on a miss.",
         position: "vec3<f32>" = "The point, camera-relative, in blocks (as `view_position`).",
         normal: "vec3<f32>" = "The face's normal, a unit vector in world axes, turned toward the ray's origin.",
         uv: "vec2<f32>" = "The texture coordinate inside the block's sprite (as `MaterialInput.uv`).",
         albedo: "vec4<f32>" = "The block texture's colour at the point, at full size (mip level 0), linear light; alpha the texture's.",
-        tint: "vec4<f32>" = "The vertex colour: biome tint, face shade and ambient occlusion, linear light; alpha 1.",
+        tint: "vec4<f32>" = "As `MaterialInput.tint`: the colour vanilla multiplies the texture by (biome tint, a model's colour), without the shade and ambient occlusion, linear light; alpha 1.",
+        shade: "f32" = "As `MaterialInput.shade`: the face's directional shade, linear.",
+        ao: "f32" = "As `MaterialInput.ao`: vanilla's ambient occlusion at the point, linear.",
         light: "vec2<f32>" = "Block and sky light, 0..1, smoothed over the face.",
         material: "u32" = "The `[[materials]]` id of the surface's sprite (0 when no entry names it).",
         tags: "u32" = "The pack's sprite tags the surface's sprite has: bit i for the manifest's i-th `[[tags]]`.",
-        emission: "f32" = "How strongly the block itself shines, 0..1, by its kind of light: a redstone torch or a candle 7/15, a torch or lava 14/15, glowstone 1; 0 for most blocks (as `MaterialInput.emission`).",
+        emission: "f32" = "As `MaterialInput.emission`: the block's light level over 15 (one candle 3/15, four 12/15; a torch 14/15; a lantern, glowstone or lava 1), 0 for a block that gives none.",
         fluid: "u32" = "0 not a fluid, 1 water, 2 lava (as `MaterialInput.fluid`). Water is in the `RAY_TRANSLUCENT` layer, lava in `RAY_SOLID`.",
         translucent: "bool" = "A surface of the translucent pass (water, stained glass, ice), as `MaterialInput.translucent`: a hit in the `RAY_TRANSLUCENT` layer, so false for every hit of `trace`.",
-        entity: "bool" = "Only in a pack whose files name `RAY_ENTITY`: a hit in that layer, an entity's surface. Its `albedo` is the entity texture's texel and `tint`, `light` and `uv` are its vertices' (the colour vanilla multiplies in, alpha included; the atlas position); `material`, `tags`, `emission` and `fluid` are 0, `hit_normal_map` and `hit_specular_map` give their defaults.",
+        back: "bool" = "The ray met the face from behind, against the way it faces (its normal before `normal` is turned toward the ray's origin): every hit from inside a full block, none from outside.",
+        entity: "bool" = "Only in a pack whose files name `RAY_ENTITY`: a hit in that layer, an entity's surface. Its `albedo` is the entity texture's texel and `tint`, `light` and `uv` are its vertices' (the colour vanilla multiplies in, alpha included; the atlas position); `shade` is vanilla's entity shade for the face's normal (as `EntityInput.shade`), `ao` 1; `material`, `tags`, `emission` and `fluid` are 0, `hit_normal_map` and `hit_specular_map` give their defaults.",
         tangent: "vec4<f32>" = "The surface's tangent, as `MaterialInput.tangent`: xyz the unit direction in world axes along which `uv.x` grows, w the sign (1 or -1) that makes `cross(normal, tangent.xyz) * tangent.w` the direction `uv.y` grows along (down the texture). It follows `normal`, which faces the ray's origin. With `normal` it turns `hit_normal_map`'s normals into world axes.",
         horizon_sprite: "u32" = "Horizon's own: where the hit's sprite is kept, for `hit_normal_map` and `hit_specular_map`. Not for packs to read; it changes with the renderer.",
     },
 };
 
 /// Where `RayHit.entity` is: a pack that doesn't name `RAY_ENTITY` has `RayHit` without it.
-const RAY_HIT_ENTITY: usize = 12;
+const RAY_HIT_ENTITY: usize = 15;
 
 /// `RAY_HIT` without `entity`.
-const RAY_HIT_PLAIN: [Field; 14] = {
+const RAY_HIT_PLAIN: [Field; 17] = {
     let all = RAY_HIT.fields;
-    let mut out = [all[0]; 14];
+    let mut out = [all[0]; 17];
     let mut i = 0;
     while i < out.len() {
         out[i] = all[i + (i >= RAY_HIT_ENTITY) as usize];
