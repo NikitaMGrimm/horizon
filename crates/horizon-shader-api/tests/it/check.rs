@@ -1219,12 +1219,14 @@ fn looks_are_read_by_the_terrain_fields_alone() {
     for (pack, looks) in [
         ("packs/golden_hour", false),
         ("packs/traced_shadows", false),
-        ("packs/traced_water", true),
+        ("packs/traced_water", false),
         ("tests/samples/entity-stage", false),
         (
             "../../tools/fixtures/shaderpacks/frame_identity_terrain",
             true,
         ),
+        ("../../tools/fixtures/shaderpacks/frame_identity_world", true),
+        ("../../tools/fixtures/shaderpacks/entity_traced", false),
     ] {
         assert_eq!(report(pack).looks(), looks, "{pack}");
     }

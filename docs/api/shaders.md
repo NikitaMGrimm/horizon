@@ -75,7 +75,7 @@ option = "shadows"         # optional: drawn while this option is not 0 (else al
 resolution_option = "shadow_resolution"   # optional: an int, or a choice of numbers, whose value replaces resolution
 distance_option = "shadow_distance"       # optional: the same for distance
 
-[[post]]                   # full-screen passes, in the order they run (8 at most)
+[[post]]                   # full-screen passes, in the order they run (12 at most)
 file = "post/grade.wgsl"
 name = "Colour grade"      # optional: the GPU time overlay's label
 output = "bloom"           # optional, not on the last pass: writes this target, read by name in later passes

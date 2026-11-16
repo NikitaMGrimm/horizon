@@ -163,9 +163,11 @@ One corner of a block's surface, for `fn vertex(input: VertexInput) -> vec3<f32>
 | `uv` | `vec2<f32>` | The texture coordinate inside the block's sprite. |
 | `material` | `u32` | The `[[materials]]` id of the block's sprite (0 when none matches). |
 | `light` | `vec2<f32>` | Block and sky light, 0..1. |
-| `tint` | `vec4<f32>` | The vertex colour (biome tint, face shade, ambient occlusion); alpha 1. |
-| `face` | `u32` | For a fluid, the face of the block the corner is on (as `MaterialInput.face`), else 0. |
-| `fluid` | `u32` | 1 on a fluid's surface (water or lava), else 0. |
+| `tint` | `vec4<f32>` | As `MaterialInput.tint`: the colour vanilla multiplies the texture by (biome tint, a model's colour), without the shade and ambient occlusion; alpha 1. |
+| `shade` | `f32` | As `MaterialInput.shade`. |
+| `ao` | `f32` | As `MaterialInput.ao`, at this corner. |
+| `face` | `u32` | As `MaterialInput.face`. |
+| `fluid` | `u32` | As `MaterialInput.fluid`: 0 not a fluid, 1 water, 2 lava. |
 
 Resources (bind group 3):
 
@@ -190,8 +192,10 @@ One point of a block's surface, for `fn material(input: MaterialInput) -> Surfac
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `albedo` | `vec4<f32>` | The block texture's colour here (alpha 0..1). |
-| `tint` | `vec4<f32>` | The vertex colour: biome tint, face shade and ambient occlusion. |
-| `light` | `vec2<f32>` | Block and sky light, 0..1, smoothed over the face. |
+| `tint` | `vec4<f32>` | The colour vanilla multiplies the block's texture by: the biome's tint (grass, leaves, water), a model's own colour, else white; alpha 1. Without the face's shade and ambient occlusion (`shade`, `ao`). |
+| `shade` | `f32` | Vanilla's directional shade for this face as a factor on linear light, 0..1 (vanilla's value decoded with the 2.2 power, as `EntityInput.shade`): the shade the face was given, 1 on top, 0.8 north and south, 0.6 east and west, 0.5 below, 0.9 above and below in the Nether. A face with `shade_direction_override` is shaded as that face (a torch is 1 all round, 0.9 in the Nether), one vanilla doesn't shade (a model element with `"shade": false`) is 1, and a fluid's side has the side's shade times the top's. |
+| `ao` | `f32` | Vanilla's ambient occlusion here as a factor on linear light, 0..1 (decoded with the 2.2 power), smoothed over the face: how much the blocks around each corner darken it. 1 where vanilla applies none: Smooth Lighting off, a block that gives off light, a model without ambient occlusion, fluids, distant terrain. |
+| `light` | `vec2<f32>` | Block and sky light, 0..1, smoothed over the face: vanilla's smooth light, without ambient occlusion (`ao`), and Horizon's dynamic block light. |
 | `lightmap` | `vec3<f32>` | Vanilla's light colour for that light this frame. |
 | `position` | `vec3<f32>` | The point, camera-relative, in blocks. |
 | `uv` | `vec2<f32>` | The texture coordinate inside the block atlas. |
@@ -199,9 +203,9 @@ One point of a block's surface, for `fn material(input: MaterialInput) -> Surfac
 | `tags` | `u32` | The pack's sprite tags this surface's sprite has: bit i for the manifest's i-th `[[tags]]`. |
 | `material` | `u32` | The `[[materials]]` id of this surface's sprite (0 when no entry names it). |
 | `screen` | `vec2<f32>` | Where the point is on the screen, 0..1 from the top left (`opaque_depth` and `opaque_color` at `screen * frame.resolution`). |
-| `face` | `u32` | For a fluid, which face of the block the point is on, `Direction` order: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east. 0 elsewhere. |
+| `face` | `u32` | Which way the surface faces, `Direction` order: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east (a model face's own direction; a fluid's face of its block). |
 | `fluid` | `u32` | 0 not a fluid, 1 water, 2 lava. |
-| `emission` | `f32` | How strongly the block itself shines, 0..1, by its kind of light: a redstone torch or a candle 7/15, a torch or lava 14/15, glowstone 1; 0 for most blocks. |
+| `emission` | `f32` | How much light the surface gives off, 0..1: its block's light level over 15 (a torch 14/15; a lantern, glowstone, a froglight or lava 1; a redstone torch or glow lichen 7/15; one lit candle 3/15), 0 for a block that gives none. The same on every face of the block, except a model face with a light level of its own (`light_emission`, as the open eyeblossom's petals), which has the larger of the two. A fluid's surface has the fluid's own (lava 1, water 0, also around a waterlogged lantern). It says how much light the block gives, not which of its texels glow: the resource packs' LabPBR maps say that where they ship (`block_specular_map(uv).a`). |
 | `normal` | `vec3<f32>` | The surface's geometric normal, a unit vector in world axes, facing the camera. A normal within about 3.6 degrees of an axis is that axis exactly, so distant block faces do not shimmer; flowing water's slopes are steeper and keep theirs. |
 | `tangent` | `vec4<f32>` | The surface's tangent: xyz the unit direction in world axes along which `uv.x` grows, w the sign (1 or -1) that makes `cross(normal, tangent.xyz) * tangent.w` the direction `uv.y` grows along (down the texture). With `normal` it turns a normal map's normals into world axes. |
 | `colored_light` | `vec3<f32>` | The frame's coloured lights at this point (`[[particle_lights]]`, held and dropped items in their `[[lights]]` colour while dynamic lights are on, and mods' visual lights), 0..1, to light the surface with as the pack likes; 0 where none reaches. |
@@ -209,7 +213,7 @@ One point of a block's surface, for `fn material(input: MaterialInput) -> Surfac
 
 ### `Surface`
 
-What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; Horizon then applies the alpha test (cutout and translucent; on the texture's alpha unless `[material] coverage = "pack"`) and fog (unless `[frame] fog = "pack"`).
+What `material` returns. Vanilla's own is `albedo * vec4(tint.rgb * shade * ao * lightmap, 1.0)`, which `albedo * vec4(shaded_tint.rgb * lightmap, 1.0)` gives within two steps of 255 for nothing; Horizon then applies the alpha test (cutout and translucent; on the texture's alpha unless `[material] coverage = "pack"`) and fog (unless `[frame] fog = "pack"`).
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -315,7 +319,6 @@ Resources (bind group 3):
 | 5 | `var nearest_sampler: sampler` | Nearest texel, clamped to the edges. |
 | 6 | `var shadow_map: texture_depth_2d` | This frame's shadow map: the depth of the solid terrain and entities the light sees, 0 at the light, 1 away from it (and where nothing is), stored at `shadow_position`'s mapping. Valid while `frame.has_shadow` is 1 (the pack asks for it with `[shadow]`), else a 1×1 map that lights everything. |
 | 7 | `var shadow_sampler: sampler_comparison` | Depth comparison, bilinear (2×2 percentage-closer filtering): `textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy, p.z)` is 1 where the point is lit, 0 in shadow. |
-| 8 | `var history: texture_2d<f32>` | Last frame's input to the last pass (what the pass before it wrote), for temporal passes (TAA, denoising): put such a pass second to last and it reads its own previous output; reproject with `frame.previous_view_projection`. Black on the first frame, after a gap of over half a second, and with a single pass. |
 | 9 | `var shadow_map_translucent: texture_depth_2d` | `shadow_map` with the translucent terrain (water, stained glass, ice) the light passes through drawn in too, read with `shadow_sampler` the same way: a point lit in `shadow_map` but not here lies under such a surface, which `shadow_color` gives the colour of. |
 | 10 | `var shadow_color: texture_2d<f32>` | The texture colour times the vertex colour (rgb: the tint, the face's directional shade and ambient occlusion) of the nearest translucent surface the light passes through at each texel of `shadow_map_translucent`, white where there is none; alpha is 1 on a fluid (water) and the texture's alpha, at most 0.99, on anything else. Read it with `textureLoad` at `shadow_position`'s xy times `textureDimensions(shadow_color)`. |
 | 11 | `var scene_surface: texture_2d<u32>` | What the material stage's `set_surface` stored for the solid terrain at each pixel, unfiltered (`textureLoad`; its texels are the bits of floats, so `bitcast<vec4<f32>>` them): read it through the prelude's `surface_at`, which knows its layout and where it no longer shows. Blank without a material stage that calls `set_surface`. |
@@ -396,7 +399,7 @@ translucent surfaces (`input.translucent`), which leave no surface for a post pa
 
 ### `RayHit`
 
-The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss `distance` is negative and every other field is 0 (`translucent` false).
+The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `tint`, `shade`, `ao`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss, and in every stage while the scene isn't there (`frame.has_ray_tracing` 0), `distance` is negative and every other field is 0 (the `bool`s false).
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -405,14 +408,17 @@ The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `
 | `normal` | `vec3<f32>` | The face's normal, a unit vector in world axes, turned toward the ray's origin. |
 | `uv` | `vec2<f32>` | The texture coordinate inside the block's sprite (as `MaterialInput.uv`). |
 | `albedo` | `vec4<f32>` | The block texture's colour at the point, at full size (mip level 0), linear light; alpha the texture's. |
-| `tint` | `vec4<f32>` | The vertex colour: biome tint, face shade and ambient occlusion, linear light; alpha 1. |
+| `tint` | `vec4<f32>` | As `MaterialInput.tint`: the colour vanilla multiplies the texture by (biome tint, a model's colour), without the shade and ambient occlusion, linear light; alpha 1. |
+| `shade` | `f32` | As `MaterialInput.shade`: the face's directional shade, linear. |
+| `ao` | `f32` | As `MaterialInput.ao`: vanilla's ambient occlusion at the point, linear. |
 | `light` | `vec2<f32>` | Block and sky light, 0..1, smoothed over the face. |
 | `material` | `u32` | The `[[materials]]` id of the surface's sprite (0 when no entry names it). |
 | `tags` | `u32` | The pack's sprite tags the surface's sprite has: bit i for the manifest's i-th `[[tags]]`. |
-| `emission` | `f32` | How strongly the block itself shines, 0..1, by its kind of light: a redstone torch or a candle 7/15, a torch or lava 14/15, glowstone 1; 0 for most blocks (as `MaterialInput.emission`). |
+| `emission` | `f32` | As `MaterialInput.emission`: the block's light level over 15 (one candle 3/15, four 12/15; a torch 14/15; a lantern, glowstone or lava 1), 0 for a block that gives none. |
 | `fluid` | `u32` | 0 not a fluid, 1 water, 2 lava (as `MaterialInput.fluid`). Water is in the `RAY_TRANSLUCENT` layer, lava in `RAY_SOLID`. |
 | `translucent` | `bool` | A surface of the translucent pass (water, stained glass, ice), as `MaterialInput.translucent`: a hit in the `RAY_TRANSLUCENT` layer, so false for every hit of `trace`. |
-| `entity` | `bool` | Only in a pack whose files name `RAY_ENTITY`: a hit in that layer, an entity's surface. Its `albedo` is the entity texture's texel and `tint`, `light` and `uv` are its vertices' (the colour vanilla multiplies in, alpha included; the atlas position); `material`, `tags`, `emission` and `fluid` are 0, `hit_normal_map` and `hit_specular_map` give their defaults. |
+| `back` | `bool` | The ray met the face from behind, against the way it faces (its normal before `normal` is turned toward the ray's origin): every hit from inside a full block, none from outside. |
+| `entity` | `bool` | Only in a pack whose files name `RAY_ENTITY`: a hit in that layer, an entity's surface. Its `albedo` is the entity texture's texel and `tint`, `light` and `uv` are its vertices' (the colour vanilla multiplies in, alpha included; the atlas position); `shade` is vanilla's entity shade for the face's normal (as `EntityInput.shade`), `ao` 1; `material`, `tags`, `emission` and `fluid` are 0, `hit_normal_map` and `hit_specular_map` give their defaults. |
 | `tangent` | `vec4<f32>` | The surface's tangent, as `MaterialInput.tangent`: xyz the unit direction in world axes along which `uv.x` grows, w the sign (1 or -1) that makes `cross(normal, tangent.xyz) * tangent.w` the direction `uv.y` grows along (down the texture). It follows `normal`, which faces the ray's origin. With `normal` it turns `hit_normal_map`'s normals into world axes. |
 | `horizon_sprite` | `u32` | Horizon's own: where the hit's sprite is kept, for `hit_normal_map` and `hit_specular_map`. Not for packs to read; it changes with the renderer. |
 
@@ -579,12 +585,12 @@ One point of the surface of an entity, a block entity, an item or a particle, fo
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `albedo` | `vec4<f32>` | The texture's colour here. |
-| `tint` | `vec4<f32>` | The vertex colour without vanilla's directional shade (dyes, particle colours, fades). |
+| `tint` | `vec4<f32>` | The vertex colour without vanilla's directional shade (dyes, particle colours, fades). A block drawn as an entity (a falling block, a block in a minecart, a block display, a block item) keeps its faces' shade in it, and will: its `shade` is 1. |
 | `overlay` | `vec4<f32>` | The flash vanilla lays over the surface (hurt, TNT, a creeper's swelling): rgb its colour, alpha how much of the surface it replaces. Alpha 0 without one. |
 | `lightmap` | `vec3<f32>` | Vanilla's light colour for `light` this frame. |
 | `shade` | `f32` | Vanilla's directional shade for this face as a factor on linear light, 0..1 (vanilla's value decoded with the 2.2 power, as every 0.2 colour is). 1 where vanilla applies none. |
 | `position` | `vec3<f32>` | The point, camera-relative, in blocks. |
-| `emission` | `f32` | 1 on a layer vanilla draws at full brightness (spider and enderman eyes, the warden's glow), else 0. There `lightmap` is full light; `shade` stays vanilla's, which shades the warden's glow and not the eyes. |
+| `full_light` | `bool` | A layer vanilla draws at full brightness (spider and enderman eyes, the warden's glow). There `lightmap` is full light; `shade` stays vanilla's, which shades the warden's glow and not the eyes. Ender chests and other block entities have no terrain `emission`. |
 | `normal` | `vec3<f32>` | The surface's geometric normal, a unit vector in world axes, facing the camera, from the position's screen derivatives (as `MaterialInput.normal`, without its snap to the axes). |
 | `kind` | `u32` | What is drawn: 0 an entity (mobs, players, armour, vehicles), 1 a block entity (chests, banners, bells, shulker boxes), 2 a dropped or framed item, 3 reserved for the first-person hand, 4 a particle. |
 | `colored_light` | `vec3<f32>` | As `MaterialInput.colored_light`: the frame's coloured lights at this point, 0..1; 0 where none reaches. |
@@ -675,8 +681,6 @@ The frame, as `frame` in every stage. Positions and directions are in world axes
 | `thunder` | `f32` | 332 | Thunder strength, 0..1. |
 | `resolution` | `vec2<f32>` | 336 | The size of the world's picture, in pixels (the resolution scale applied). |
 | `eye_light` | `vec2<f32>` | 344 | Block and sky light at the camera, 0..1 (level / 15). |
-| `fog_start` | `f32` | 352 | Where vanilla's fog starts, in blocks from the camera. |
-| `fog_end` | `f32` | 356 | Where vanilla's fog is full, in blocks. |
 | `render_distance` | `f32` | 360 | The render distance, in blocks. |
 | `far` | `f32` | 364 | The far plane, in blocks. |
 | `night_vision` | `f32` | 368 | Night vision strength, 0..1. |
@@ -720,8 +724,8 @@ The frame, as `frame` in every stage. Positions and directions are in world axes
 | `view_epoch` | `u32` | 796 | Changes when the pack's `keep = "view"` resources are cleared, to zeros (`reset_reasons` says why), and is never 0. Only a pack with `[[resource]]` has this field. |
 | `world_epoch` | `u32` | 800 | The same for its `keep = "world"` resources. `view_epoch` changes with it: what clears the world's clears the view's too. Only a pack with `[[resource]]` has this field. |
 | `reset_reasons` | `u32` | 804 | Why an epoch changed this frame: the prelude's `REASON_*` bits ("Kept resources"); 0 when neither did. Only a pack with `[[resource]]` has this field. |
-| `fog_environment` | `vec2<f32>` | 808 | Where the fog of where the camera is starts and where it is full (x, y), in blocks along the straight line from the camera: the dimension's and the biome's, thickened by rain, or that of water, lava, powder snow, blindness, darkness or a boss. Only a pack with `[frame] fog = "pack"` has this field. |
-| `fog_render` | `vec2<f32>` | 816 | Where the render distance's fog starts and where it is full (x, y), in blocks along the larger of the horizontal distance and the height difference from the camera. Only a pack with `[frame] fog = "pack"` has this field. |
+| `fog_environment` | `vec2<f32>` | 808 | Where the fog of where the camera is starts and where it is full (x, y), in blocks along the straight line from the camera: the dimension's and the biome's, thickened by rain, or that of water, lava, powder snow, blindness, darkness or a boss. |
+| `fog_render` | `vec2<f32>` | 816 | Where the render distance's fog starts and where it is full (x, y), in blocks along the larger of the horizontal distance and the height difference from the camera. Vanilla's fog is the larger of the two (`vanilla_fog`, under `[frame] fog = "pack"`). |
 
 ## Anti-aliasing
 
