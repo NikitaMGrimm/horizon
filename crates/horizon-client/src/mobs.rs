@@ -4470,9 +4470,8 @@ impl Mob {
         visible: bool,
     ) -> bool {
         let effect = horizon_client_core::potions::namespaced(effect);
-        let mut incoming = crate::effects::EffectInstance::new(effect, ticks, amplifier);
-        incoming.ambient = ambient;
-        incoming.visible = visible;
+        let incoming = crate::effects::EffectInstance::new(effect, ticks, amplifier)
+            .with_flags(ambient, visible);
         self.add_effect_instance(effect, incoming)
     }
 
