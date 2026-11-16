@@ -1456,6 +1456,8 @@ pub fn post_target_declarations(manifest: &crate::manifest::Manifest) -> String 
 
 /// The motion guide's binding in group 3, in the 0.2 post passes of a pack with `[motion]`.
 pub const MOTION_BINDING: u32 = 14;
+/// An indirect compute pass's cells this frame (`horizon_dispatch`), as the game clamped them.
+pub const DISPATCH_BINDING: u32 = 15;
 
 /// The motion guide's declarations, at `MOTION_BINDING`. The raw texture holds the engine's
 /// objects (`frame_gen/motion.wgsl`): z 1 a matched one with xy its delta, w 1 one with nothing
@@ -1601,12 +1603,25 @@ pub fn kept_declarations(manifest: &crate::manifest::Manifest, stage: &crate::St
 /// `in_bounds` false beyond the dispatch's size.
 fn compute_entries(stage: &crate::Stage) -> String {
     let [x, y, z] = stage.workgroup.unwrap_or([1, 1, 1]);
-    let size = match stage.dispatch {
-        Some(crate::kept::Dispatch::Cells([a, b, c])) => format!("vec3<u32>({a}u, {b}u, {c}u)"),
-        _ => "vec3<u32>(vec2<u32>(frame.resolution), 1u)".to_owned(),
+    let (declared, size) = match stage.dispatch {
+        Some(crate::kept::Dispatch::Cells([a, b, c])) => {
+            (String::new(), format!("vec3<u32>({a}u, {b}u, {c}u)"))
+        }
+        Some(crate::kept::Dispatch::Indirect { .. }) => (
+            format!(
+                "// This frame's cells: the pass's counts as the game clamped them to `max`.\n\
+                 @group({GROUP}) @binding({DISPATCH_BINDING}) var<uniform> horizon_dispatch: \
+                 vec4<u32>;\n"
+            ),
+            "horizon_dispatch.xyz".to_owned(),
+        ),
+        _ => (
+            String::new(),
+            "vec3<u32>(vec2<u32>(frame.resolution), 1u)".to_owned(),
+        ),
     };
     format!(
-        "@compute @workgroup_size({x}, {y}, {z})\n\
+        "{declared}@compute @workgroup_size({x}, {y}, {z})\n\
          fn horizon_cs_compute(@builtin(global_invocation_id) cell: vec3<u32>, \
          @builtin(local_invocation_index) local: u32) {{\n    \
          let size = {size};\n    \

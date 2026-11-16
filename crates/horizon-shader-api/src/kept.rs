@@ -186,25 +186,60 @@ impl Resource {
 }
 
 /// `dispatch`: how many invocations a compute entry runs.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(try_from = "toml::Value")]
 pub enum Dispatch {
     /// `"pixels"`: one per texel of the render size R.
     Pixels,
     /// `[x, y, z]` cells.
     Cells([u32; 3]),
+    /// `{ buffer, at, max }`: as many cells as kept buffer `buffer` holds in its three `u32`
+    /// from element `at` when the pass runs, each side at most `max`'s.
+    Indirect {
+        buffer: String,
+        at: u32,
+        max: [u32; 3],
+    },
+}
+
+impl Dispatch {
+    /// The most cells it runs, as the caps count it: none for `"pixels"`, which scale with R.
+    pub fn most(&self) -> Option<[u32; 3]> {
+        match *self {
+            Dispatch::Pixels => None,
+            Dispatch::Cells(cells) | Dispatch::Indirect { max: cells, .. } => Some(cells),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawIndirect {
+    buffer: String,
+    #[serde(default)]
+    at: u32,
+    max: [u32; 3],
 }
 
 impl TryFrom<toml::Value> for Dispatch {
     type Error = String;
 
     fn try_from(v: toml::Value) -> Result<Self, String> {
+        let shapes = "dispatch is \"pixels\", [x, y, z] cells, or { buffer, at, max } for as many \
+                      as a kept buffer holds";
         match v {
             toml::Value::String(s) if s == "pixels" => Ok(Dispatch::Pixels),
-            v => v
-                .try_into()
-                .map(Dispatch::Cells)
-                .map_err(|_| "dispatch is \"pixels\" or [x, y, z] cells".into()),
+            toml::Value::Table(t) => {
+                let raw: RawIndirect = toml::Value::Table(t)
+                    .try_into()
+                    .map_err(|e| format!("{shapes}: {}", e.message()))?;
+                Ok(Dispatch::Indirect {
+                    buffer: raw.buffer,
+                    at: raw.at,
+                    max: raw.max,
+                })
+            }
+            v => v.try_into().map(Dispatch::Cells).map_err(|_| shapes.into()),
         }
     }
 }
@@ -330,14 +365,11 @@ fn resource(r: RawResource, ray_tracing: bool, motion: bool) -> Result<Resource,
 /// The invocations a compute entry of a valid shape runs, as whole workgroups (every invocation
 /// of a partly filled one runs `compute`), its `"pixels"` at `PIXELS_COUNTED_AS`.
 pub fn invocations(s: &Stage) -> u64 {
-    let (Some(workgroup), Some(dispatch)) = (s.workgroup, s.dispatch) else {
+    let (Some(workgroup), Some(dispatch)) = (s.workgroup, &s.dispatch) else {
         return 0;
     };
     let [w, h] = PIXELS_COUNTED_AS;
-    let cells = match dispatch {
-        Dispatch::Pixels => [w, h, 1],
-        Dispatch::Cells(cells) => cells,
-    };
+    let cells = dispatch.most().unwrap_or([w, h, 1]);
     (cells.iter().zip(workgroup))
         .map(|(c, w)| u64::from(c.div_ceil(w)) * u64::from(w))
         .product()
@@ -358,7 +390,7 @@ fn frame_invocations<'a>(computes: impl Iterator<Item = &'a Stage>) -> Result<()
 
 /// A compute entry's `workgroup` and `dispatch`.
 fn compute_shape(s: &Stage) -> Result<(), String> {
-    let (Some(workgroup), Some(dispatch)) = (s.workgroup, s.dispatch) else {
+    let (Some(workgroup), Some(dispatch)) = (s.workgroup, &s.dispatch) else {
         return Err(format!(
             "{}: a compute pass needs `dispatch` and `workgroup`",
             s.file
@@ -375,11 +407,15 @@ fn compute_shape(s: &Stage) -> Result<(), String> {
             s.file
         ));
     }
-    if let Dispatch::Cells(cells) = dispatch {
+    if let Some(cells) = dispatch.most() {
         let groups = cells.iter().zip(workgroup).map(|(c, w)| c.div_ceil(w));
         if cells.contains(&0) || groups.clone().any(|g| g > MAX_WORKGROUPS) {
+            let what = match dispatch {
+                Dispatch::Indirect { .. } => "dispatch max",
+                _ => "dispatch",
+            };
             return Err(format!(
-                "{}: dispatch {cells:?}: at least 1 cell a side, at most {MAX_WORKGROUPS} \
+                "{}: {what} {cells:?}: at least 1 cell a side, at most {MAX_WORKGROUPS} \
                  workgroups a side",
                 s.file
             ));
@@ -436,6 +472,47 @@ fn access(s: &Stage, resources: &[Resource]) -> Result<(), String> {
         return Err(format!(
             "{}: {output:?} is its output: a pass's attachment is no texture it reads, and \
              the output is its write",
+            s.file
+        ));
+    }
+    Ok(())
+}
+
+/// An indirect `dispatch`'s buffer: a kept `u32` or `atomic<u32>` buffer with room for its three
+/// counts from `at`, which a pass of the pack writes (`written`). Any pass: a buffer has one
+/// version, so a writer later in the frame gives last frame's counts.
+fn indirect(s: &Stage, resources: &[Resource], written: &[&String]) -> Result<(), String> {
+    let Some(Dispatch::Indirect { buffer, at, .. }) = &s.dispatch else {
+        return Ok(());
+    };
+    let shape = resources
+        .iter()
+        .find(|r| &r.name == buffer)
+        .map(|r| r.shape);
+    let Some(Shape::Buffer { bytes, element }) = shape else {
+        return Err(format!(
+            "{}: dispatch from {buffer:?}, no [[resource]] buffer",
+            s.file
+        ));
+    };
+    if !matches!(element, Element::U32 | Element::AtomicU32) {
+        return Err(format!(
+            "{}: dispatch from {buffer:?}, a buffer of {}: its counts are u32 or atomic<u32>",
+            s.file,
+            element.wgsl()
+        ));
+    }
+    if (u64::from(*at) + 3) * 4 > bytes {
+        return Err(format!(
+            "{}: dispatch from {buffer:?} at {at}: its three counts end past its {} elements",
+            s.file,
+            bytes / 4
+        ));
+    }
+    if !written.contains(&buffer) {
+        return Err(format!(
+            "{}: dispatch from {buffer:?}, which no pass writes: its counts stay 0 and the pass \
+             never runs",
             s.file
         ));
     }
@@ -576,6 +653,12 @@ pub(crate) fn check(
     frame_invocations(before_world.iter().chain(post.iter().filter(|p| p.compute)))?;
     for s in before_world.iter().chain(post) {
         access(s, &resources)?;
+    }
+    let written: Vec<_> = (before_world.iter().chain(post))
+        .flat_map(|s| &s.writes)
+        .collect();
+    for s in before_world.iter().chain(post) {
+        indirect(s, &resources, &written)?;
     }
     let mut kept_resets = Vec::new();
     for (id, value) in resets {

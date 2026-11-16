@@ -371,6 +371,23 @@ a `[[before_world]]` pass traces this frame's scene. The four trace names are fo
 stage, so under `[ray_tracing]` don't give them to anything of the pack's own. One part comes in a later step: `[material]` can't read kept
 resources.
 
+### Sparse work
+
+A pass that does costly work for a few cells (a cache that updates the cells marked this frame) shouldn't run over
+every cell and leave at once where there is nothing to do. With one live lane in each group of 32 or 64, a traced ray
+costs about twice what it costs from full ones, and a `trace` behind a condition that is never true still slows the
+rest. Make a list instead:
+
+1. A one-cell pass clears a counter: element 0 of an `atomic<u32>` buffer, with 1 and 1 at elements 1 and 2.
+2. A pass over the cells appends each live one: `let k = atomicAdd(&marked[0], 1u);`, then writes the cell at `k`
+   in a second buffer (below its length).
+3. The pass that does the work runs over the list with `dispatch = { buffer = "marked", max = [n, 1, 1] }`: as many
+   cells as the counter holds, at most `n`. Each reads its cell from the list at `input.cell.x`.
+
+The counter must come before the work in the frame for this frame's count: in a `[[before_world]]` pass, or an earlier
+`[[post]]` entry. Put an optional trace path behind an option, which leaves it out of the pipeline, not behind a value
+in a buffer.
+
 ## Options
 
 A picked pack with options gets a Shader Options... button at the top of the Shader Packs page. Float and int options

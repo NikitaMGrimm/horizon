@@ -378,6 +378,149 @@ fn the_entry_runs_every_invocation_with_in_bounds() {
     );
 }
 
+/// `dispatch = { buffer, at, max }`: as many cells as a kept `u32` buffer holds, at most `max`.
+#[test]
+fn an_indirect_dispatch_runs_what_a_kept_buffer_counts() {
+    let entry = |dispatch: &str, extra: &str| {
+        format!(
+            "{RES}{}[[before_world]]\nfile = \"mark.wgsl\"\ndispatch = [1, 1, 1]\n\
+             workgroup = [1, 1, 1]\nwrites = [\"buf\"]\n[[post]]\nfile = \"c.wgsl\"\ncompute = true\n\
+             dispatch = {dispatch}\nworkgroup = [64, 1, 1]\n{extra}",
+            resource("f", "buffer = 64\nelement = \"f32\""),
+        )
+    };
+    let m = parse(&entry(
+        "{ buffer = \"buf\", at = 13, max = [100, 1, 1] }",
+        "",
+    ))
+    .unwrap();
+    assert_eq!(
+        m.post[0].dispatch,
+        Some(Dispatch::Indirect {
+            buffer: "buf".into(),
+            at: 13,
+            max: [100, 1, 1]
+        })
+    );
+    // `at` is 0 unless given; the pass may also list the buffer, to clear it for the next frame.
+    let m = parse(&entry(
+        "{ buffer = \"buf\", max = [100, 1, 1] }",
+        "writes = [\"buf\"]\n",
+    ))
+    .unwrap();
+    assert!(matches!(
+        m.post[0].dispatch,
+        Some(Dispatch::Indirect { at: 0, .. })
+    ));
+    // The limits count `max`, in whole workgroups.
+    assert_eq!(horizon_shader_api::kept::invocations(&m.post[0]), 128);
+    let max = |max: &str| entry(&format!("{{ buffer = \"buf\", max = {max} }}"), "");
+    refused(&max("[0, 1, 1]"), "c.wgsl: dispatch max [0, 1, 1]");
+    refused(&max("[4194304, 1, 1]"), "at most 65535 workgroups");
+    refused(&max("[4096, 4096, 4]"), "a dispatch may run 33554432");
+    refused(&entry("{ buffer = \"buf\" }", ""), "missing field `max`");
+    refused(
+        &entry("{ buffer = \"buf\", max = [1, 1, 1], count = 1 }", ""),
+        "unknown field `count`",
+    );
+    // The buffer: a kept u32 or atomic<u32> buffer, three counts from `at`, which a pass writes.
+    let from = |buffer: &str, at: u32| {
+        entry(
+            &format!("{{ buffer = \"{buffer}\", at = {at}, max = [64, 1, 1] }}"),
+            "",
+        )
+    };
+    parse(&from("buf", 13)).unwrap();
+    refused(
+        &from("buf", 14),
+        "dispatch from \"buf\" at 14: its three counts end past its 16",
+    );
+    refused(
+        &from("tex", 0),
+        "dispatch from \"tex\", no [[resource]] buffer",
+    );
+    refused(
+        &from("nothing", 0),
+        "dispatch from \"nothing\", no [[resource]] buffer",
+    );
+    refused(
+        &from("f", 0),
+        "a buffer of f32: its counts are u32 or atomic<u32>",
+    );
+    let unwritten = from("buf", 0).replace("writes = [\"buf\"]\n", "");
+    refused(&unwritten, "which no pass writes");
+    // A later writer is accepted: it gives last frame's count.
+    parse(&format!(
+        "{RES}[[post]]\nfile = \"c.wgsl\"\ncompute = true\n\
+         dispatch = {{ buffer = \"buf\", max = [64, 1, 1] }}\nworkgroup = [64, 1, 1]\n\
+         [[post]]\nfile = \"d.wgsl\"\ncompute = true\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
+         writes = [\"buf\"]\n"
+    ))
+    .unwrap();
+}
+
+/// An indirect pass's entry reads its size from `horizon_dispatch`; every other module of the
+/// pack composes as before.
+#[test]
+fn an_indirect_entry_reads_this_frame_s_size() {
+    let manifest = |dispatch: &str| {
+        format!(
+            "{RES}[[before_world]]\nfile = \"mark.wgsl\"\ndispatch = [1, 1, 1]\n\
+             workgroup = [1, 1, 1]\nwrites = [\"buf\"]\n[[post]]\nfile = \"c.wgsl\"\ncompute = true\n\
+             dispatch = {dispatch}\nworkgroup = [64, 1, 1]\nreads = [\"buf\"]\n{LAST}"
+        )
+    };
+    let files = [
+        (
+            "mark.wgsl",
+            "fn compute(input: ComputeInput) { buf[0] = 5u; buf[1] = 1u; buf[2] = 1u; }\n",
+        ),
+        (
+            "c.wgsl",
+            "fn compute(input: ComputeInput) { if input.in_bounds { let n = buf[3]; } }\n",
+        ),
+        (
+            "last.wgsl",
+            "fn post(input: PostInput) -> vec4<f32> { return input.color; }\n",
+        ),
+    ];
+    let indirect = pack(&manifest("{ buffer = \"buf\", max = [64, 1, 1] }"), &files);
+    let fixed = pack(&manifest("[64, 1, 1]"), &files);
+    check(&indirect).unwrap();
+    let c = compose(&indirect, StageKind::Compute, "c.wgsl").text;
+    assert!(
+        c.contains(
+            "@group(3) @binding(15) var<uniform> horizon_dispatch: vec4<u32>;\n\
+             @compute @workgroup_size(64, 1, 1)"
+        ),
+        "{c}"
+    );
+    assert!(c.contains("let size = horizon_dispatch.xyz;"), "{c}");
+    let f = compose(&fixed, StageKind::Compute, "c.wgsl").text;
+    assert!(!f.contains("horizon_dispatch"), "{f}");
+    assert_eq!(
+        c.replace(
+            "let size = horizon_dispatch.xyz;",
+            "let size = vec3<u32>(64u, 1u, 1u);"
+        )
+        .replace(
+            "// This frame's cells: the pass's counts as the game clamped them to `max`.\n\
+                 @group(3) @binding(15) var<uniform> horizon_dispatch: vec4<u32>;\n",
+            ""
+        ),
+        f
+    );
+    for (kind, file) in [
+        (StageKind::BeforeWorld, "mark.wgsl"),
+        (StageKind::Post, "last.wgsl"),
+    ] {
+        assert_eq!(
+            compose(&indirect, kind, file).text,
+            compose(&fixed, kind, file).text
+        );
+    }
+}
+
 #[test]
 fn an_atomic_buffer_is_atomic_only_where_written() {
     let manifest = format!(
@@ -601,7 +744,7 @@ fn a_compute_entry_is_a_dispatch_in_the_chain() {
     parse(&shaped("[70000, 1, 1]", "[2, 1, 1]")).unwrap();
     refused(
         &shaped("\"rows\"", "[1, 1, 1]"),
-        "dispatch is \"pixels\" or [x, y, z] cells",
+        "dispatch is \"pixels\", [x, y, z] cells, or { buffer, at, max }",
     );
     // An ordinary pass writes its output only.
     for key in [

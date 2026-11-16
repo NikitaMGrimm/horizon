@@ -271,6 +271,12 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-16: API 0.2 (additions, experimental): an indirect `dispatch` (#16545):
+  `dispatch = { buffer = "b", at = 0, max = [x, y, z] }` runs as many cells as the kept `u32` or `atomic<u32>`
+  buffer `b` holds in its three elements from `at` when the pass runs, each side at most `max`'s; the entry's
+  `input.size` is that count (`horizon_dispatch`, group 3 binding 15). The check refuses a buffer that isn't a kept
+  `u32` or `atomic<u32>` one, has no room for the three counts, or that no pass writes; the limits count `max`. Every
+  other pass composes as before. The [guide](../shaders.md#sparse-work) shows the pattern it serves.
 - 2026-11-15: API 0.2 (experimental): `frame.light_direction` is the sun by day and the moon by night also for a pack
   without a `[shadow]` stage, where it now equals the frame's `sun_direction` or `moon_direction`; it read straight up
   (0, 1, 0) at every time of day until now, so a pack that traced its shadows along it got them straight down. Packs

@@ -1206,6 +1206,13 @@ fn a_pack_without_kept_resources_makes_the_layouts_and_groups_it_made_before() {
     let (manifest, files) = BEFORE_SUMMING;
     let before = made(manifest, &files).unwrap();
     assert_eq!(before, [[3, 0, 1], [0, 6, 0], [0, 0, 0]]);
+    // An indirect pass: a layout a pass and its clamp's pipeline (whose layout is derived) while
+    // the pack builds, and the clamp's group on the first frame, once: a kept buffer has one
+    // version.
+    let (manifest, files) = indirect(&counts("1u", "1u", "1u"), "");
+    let files: Vec<_> = files.iter().map(|(n, t)| (*n, t.as_str())).collect();
+    let indirect = made(&manifest, &files).unwrap();
+    assert_eq!(indirect, [[4, 0, 3], [0, 9, 0], [0, 0, 0]]);
 }
 
 /// #16011 item 4: a pack's kept resources are made at install (`replace_native`), not while it
@@ -1285,4 +1292,139 @@ fn a_reload_never_holds_two_stores() {
     assert_eq!(delta(built), Some([0, 0]));
     assert!(pollster::block_on(scope.pop()).is_none());
     assert_eq!(third.kept.as_ref().map(|k| k.held.len()), Some(2));
+}
+
+/// An indirect pass (#16545) over the kept `atomic<u32>` buffer `n`: its counts at 0..3, and
+/// what the pass counts, the lanes in bounds at 3, every lane at 4 and `input.size.x` at 5,
+/// which the last pass shows /128 in red, green and blue. `mark` writes the counts in a
+/// `[[before_world]]` pass, the indirect pass runs `[8, 1, 1]` workgroups at most 100 cells.
+fn indirect(mark: &str, extra: &str) -> (String, [(&'static str, String); 3]) {
+    let manifest = String::from(
+        "[[resource]]\nname = \"n\"\nbuffer = 64\nelement = \"atomic<u32>\"\nkeep = \"view\"\n\
+         [[before_world]]\nfile = \"m.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
+         writes = [\"n\"]\n[[post]]\nfile = \"c.wgsl\"\ncompute = true\n\
+         dispatch = { buffer = \"n\", max = [100, 1, 1] }\nworkgroup = [8, 1, 1]\n\
+         writes = [\"n\"]\n[[post]]\nfile = \"l.wgsl\"\nreads = [\"n\"]\n",
+    );
+    let mark = format!(
+        "fn compute(input: ComputeInput) {{\n    {mark}\n    \
+         atomicStore(&n[3], 0u);\n    atomicStore(&n[4], 0u);\n}}\n"
+    );
+    let count = format!(
+        "fn compute(input: ComputeInput) {{\n    \
+         atomicAdd(&n[4], 1u);\n    \
+         if input.in_bounds {{\n        atomicAdd(&n[3], 1u);\n    }}\n    \
+         if input.cell.x == 0u {{\n        atomicStore(&n[5], input.size.x);\n{extra}    }}\n}}\n"
+    );
+    let show = "fn post(input: PostInput) -> vec4<f32> {\n    \
+                return vec4<f32>(f32(n[3]), f32(n[4]), f32(n[5]), 128.0) / 128.0;\n}\n";
+    (
+        manifest,
+        [("m.wgsl", mark), ("c.wgsl", count), ("l.wgsl", show.into())],
+    )
+}
+
+fn run_indirect(mark: &str, extra: &str, want: [f32; 3]) {
+    let (manifest, files) = indirect(mark, extra);
+    let files: Vec<_> = files.iter().map(|(n, t)| (*n, t.as_str())).collect();
+    computes(
+        &manifest,
+        &files,
+        &[([1, 1], [4, 4], want), ([1, 1], [4, 4], want)],
+    );
+}
+
+fn counts(x: &str, y: &str, z: &str) -> String {
+    format!("atomicStore(&n[0], {x});\n    atomicStore(&n[1], {y});\n    atomicStore(&n[2], {z});")
+}
+
+/// An indirect pass runs the cells its kept buffer counts, in whole workgroups: 37 cells are 5
+/// workgroups of 8, 40 lanes, 37 of them in bounds, and `input.size` is the count. The pass
+/// clears the counter as it runs (`extra`), and its size and lanes stay this frame's. Run with
+/// `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12 WGPU_DX12_COMPILER=dxc`.
+#[test]
+fn an_indirect_pass_runs_the_cells_its_buffer_counts() {
+    let want = [37.0 / 128.0, 40.0 / 128.0, 37.0 / 128.0];
+    run_indirect(&counts("37u", "1u", "1u"), "", want);
+    let clear = "        atomicStore(&n[0], 0u);\n";
+    run_indirect(&counts("37u", "1u", "1u"), clear, want);
+}
+
+/// Whatever the buffer holds, the pass runs at most `max`: 200 or 0xffffffff cells run 100 (13
+/// workgroups, 104 lanes), and a count of 0 on any side runs none. 200 comes first: without the
+/// clamp it fails at 25 workgroups, before 0xffffffff would ask for half a billion. Run with
+/// `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12 WGPU_DX12_COMPILER=dxc`.
+#[test]
+fn an_indirect_pass_runs_at_most_its_max() {
+    let most = [100.0 / 128.0, 104.0 / 128.0, 100.0 / 128.0];
+    run_indirect(&counts("200u", "1u", "1u"), "", most);
+    run_indirect(&counts("0xffffffffu", "1u", "1u"), "", most);
+    run_indirect(&counts("0u", "1u", "1u"), "", [0.0; 3]);
+    run_indirect(&counts("37u", "0u", "1u"), "", [0.0; 3]);
+    run_indirect(&counts("37u", "1u", "0u"), "", [0.0; 3]);
+}
+
+/// The counts from a pass later in the frame are last frame's: the pass runs none on the first
+/// frame, and none again in the frame after a reset clears the buffer. Red adds up the lanes in
+/// bounds /64. Run with `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12 WGPU_DX12_COMPILER=dxc`.
+#[test]
+fn an_indirect_pass_counted_later_in_the_frame_runs_last_frame_s_count() {
+    let manifest = "[[resource]]\nname = \"n\"\nbuffer = 16\nelement = \"u32\"\nkeep = \"view\"\n\
+                    [[post]]\nfile = \"c.wgsl\"\ncompute = true\n\
+                    dispatch = { buffer = \"n\", max = [64, 1, 1] }\nworkgroup = [8, 1, 1]\n\
+                    writes = [\"n\"]\n[[post]]\nfile = \"w.wgsl\"\ncompute = true\n\
+                    dispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\nwrites = [\"n\"]\n\
+                    [[post]]\nfile = \"l.wgsl\"\nreads = [\"n\"]\n";
+    let files = [
+        (
+            "c.wgsl",
+            "fn compute(input: ComputeInput) {\n    \
+             if input.cell.x == 0u { n[3] = n[3] + input.size.x; }\n}\n",
+        ),
+        (
+            "w.wgsl",
+            "fn compute(input: ComputeInput) { n[0] = 9u; n[1] = 1u; n[2] = 1u; }\n",
+        ),
+        (
+            "l.wgsl",
+            "fn post(input: PostInput) -> vec4<f32> {\n    \
+             return vec4<f32>(f32(n[3]) / 64.0, 0.0, 0.0, 1.0);\n}\n",
+        ),
+    ];
+    let frames = [
+        ([1, 1], [4, 4], [0.0, 0.0, 0.0]),
+        ([1, 1], [4, 4], [9.0 / 64.0, 0.0, 0.0]),
+        ([1, 1], [4, 4], [18.0 / 64.0, 0.0, 0.0]),
+        ([2, 1], [4, 4], [0.0, 0.0, 0.0]),
+        ([2, 1], [4, 4], [9.0 / 64.0, 0.0, 0.0]),
+    ];
+    computes(manifest, &files, &frames);
+}
+
+/// The device's limit on workgroups along an axis bounds an indirect pass's `max`, as it does
+/// a fixed dispatch, and its size binding counts toward the stage's uniform buffers.
+#[test]
+fn a_device_short_of_an_indirect_pass_s_max_refuses_it() {
+    let (manifest, files) = indirect(&counts("1u", "1u", "1u"), "");
+    let manifest = manifest.replace("max = [100, 1, 1]", "max = [8192, 1, 1]");
+    let files: Vec<_> = files.iter().map(|(n, t)| (*n, t.as_str())).collect();
+    let pack = report(&manifest, &files);
+    let fits = wgpu::Limits::default();
+    assert_eq!(refused(&pack, fits.clone()), None);
+    let short = wgpu::Limits {
+        max_compute_workgroups_per_dimension: 1000,
+        ..fits.clone()
+    };
+    assert_eq!(
+        refused(&pack, short).as_deref(),
+        Some("c.wgsl: 1024 workgroups along an axis, the device takes 1000")
+    );
+    let uniforms = wgpu::Limits {
+        max_uniform_buffers_per_shader_stage: 0,
+        ..fits
+    };
+    assert_eq!(
+        refused(&pack, uniforms).as_deref(),
+        Some("c.wgsl: 1 uniform buffers, the device takes 0")
+    );
 }

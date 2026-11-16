@@ -12,9 +12,9 @@ use crate::manifest::{
 };
 use crate::package::{MAX_TOTAL, MAX_WGSL};
 use crate::stages::{
-    GROUP, KEPT_BINDING, MOTION_BINDING, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING,
-    RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING, RAY_SCENE_BINDING, RAY_SPRITE_ARRAYS,
-    RAY_SPRITES_BINDING, StageKind,
+    DISPATCH_BINDING, GROUP, KEPT_BINDING, MOTION_BINDING, PBR_NORMALS_BINDING,
+    PBR_SPECULAR_BINDING, RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING, RAY_SCENE_BINDING,
+    RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
 };
 
 fn table(s: &Struct, offsets: Option<&[usize]>) -> String {
@@ -196,7 +196,8 @@ fn kept() -> String {
          blocks, clears it). A texture has this frame's version, `<name>`, and last frame's, `<name>_previous`; a buffer\n  \
          has one. Both names are free WGSL names, as an `output`'s, and no word WGSL reserves.\n\
          - `[[before_world]]`: a compute pass once a frame, before the world draws: `file`, `dispatch` (`[x, y, z]`\n  \
-         cells, or `\"pixels\"`, one per texel of the render size), `workgroup = [x, y, z]`, `reads` and `writes`.\n\
+         cells, `\"pixels\"`, one per texel of the render size, or `{{ buffer, at, max }}`, below), `workgroup = [x, y, z]`,\n  \
+         `reads` and `writes`.\n\
          - `[[post]]` with `compute = true` and the same keys: a dispatch in the chain where it stands. It has no `output`\n  \
          or `scale`, isn't the last entry and doesn't advance `previous`. An ordinary pass lists what it `reads`, and its\n  \
          `output` may name a kept texture, which it draws at that texture's size.\n\
@@ -213,6 +214,16 @@ fn kept() -> String {
          `[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`; a `[[before_world]]` pass has\n\
          the frame, the samplers and the shadow maps (bindings below) with `shadow_position`. Under `[ray_tracing]` either\n\
          may trace (see Ray tracing); a `[[before_world]]` pass traces this frame's scene, built before it runs.\n\n\
+         `dispatch = {{ buffer = \"b\", at = 0, max = [x, y, z] }}` runs as many cells as the kept buffer `b` (`u32` or\n\
+         `atomic<u32>`) holds in its three elements from `at` (default 0) when the pass runs, each side at most `max`'s:\n\
+         cells, as `[x, y, z]`, which Horizon makes workgroups. A count of 0 runs none, as on the first frame and after a\n\
+         reset. `input.size` is this frame's clamped count, from `horizon_dispatch` at binding {DISPATCH_BINDING}, so the\n\
+         pass may clear the counter for the next frame. A pass of the pack must write `b`: an earlier one gives this\n\
+         frame's count, a later one last frame's. The limits count `max`.\n\n\
+         Rays traced from a few lanes of each workgroup cost about twice what the same rays cost from full ones, and a\n\
+         `trace` call that a run-time condition skips still slows the others: append sparse work to a list (an\n\
+         `atomic<u32>` counter) and trace over the list with an indirect `dispatch`, and put an optional trace path\n\
+         behind an option, which leaves it out of the pipeline.\n\n\
          **Not yet, in a later step:** `[material]` can't read kept resources.\n\n"
     );
     out += &table(&COMPUTE_INPUT, None);
@@ -254,7 +265,8 @@ fn kept() -> String {
          `[[post]]` entries; {} MiB of buffers and {} MiB of fixed-size textures, both versions counted; each R-relative\n\
          kept texture takes 2 of the post targets' budget (Limits); a workgroup of up to {MAX_WORKGROUP:?} and\n\
          {MAX_WORKGROUP_INVOCATIONS} invocations; {MAX_DISPATCH_INVOCATIONS} invocations a dispatch and {MAX_FRAME_INVOCATIONS} a frame over every\n\
-         compute pass, `[[before_world]]` and `[[post]]` together, counted as whole workgroups, a `\"pixels\"` dispatch as {}×{} (R isn't known at load).\n\n",
+         compute pass, `[[before_world]]` and `[[post]]` together, counted as whole workgroups, a `\"pixels\"` dispatch as {}×{} (R isn't known at load)\n\
+         and an indirect one at its `max`.\n\n",
         MAX_BUFFER_BYTES >> 20,
         MAX_FIXED_TEXTURE_BYTES >> 20,
         PIXELS_COUNTED_AS[0],

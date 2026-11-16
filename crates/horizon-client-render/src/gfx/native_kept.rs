@@ -7,7 +7,7 @@
 //! a pass that traces binds the scene besides (`trace_scene`).
 use horizon_shader_api::check::{CheckedStage, Report};
 use horizon_shader_api::kept::{self, Dispatch, Format, Keep, Kept, Shape};
-use horizon_shader_api::stages::{GROUP, KeptAccess, KeptBinding, kept_bindings};
+use horizon_shader_api::stages::{DISPATCH_BINDING, GROUP, KeptAccess, KeptBinding, kept_bindings};
 use horizon_shader_api::{Manifest, StageKind};
 
 use super::{NativePost, Writes};
@@ -27,7 +27,120 @@ pub(super) struct ComputePass {
     pipeline: wgpu::ComputePipeline,
     workgroup: [u32; 3],
     dispatch: Dispatch,
+    indirect: Option<Indirect>,
     pub(super) scene: Option<naga::Module>,
+}
+
+/// An indirect pass's own side: a 1-lane clamp pass reads the pack's counts each frame and
+/// writes `args`, the workgroups the pass runs, and `size`, its cells (`horizon_dispatch`), each
+/// side at most `max`'s. The pack's buffer is never an indirect argument, so whatever it holds,
+/// the pass runs no more than the check and the device allowed.
+struct Indirect {
+    /// The kept buffer of the counts, its index in `[[resource]]`.
+    resource: usize,
+    pipeline: wgpu::ComputePipeline,
+    /// `max` and `at` (`w`), and the workgroup.
+    params: wgpu::Buffer,
+    args: wgpu::Buffer,
+    size: wgpu::Buffer,
+    /// The clamp's group, made in `begin`, again after the kept buffers are remade.
+    group: Option<wgpu::BindGroup>,
+}
+
+/// The clamp of an indirect pass (`Indirect`).
+const CLAMP: &str = "struct Params { max: vec4<u32>, workgroup: vec4<u32> }
+@group(0) @binding(0) var<storage, read> counts: array<u32>;
+@group(0) @binding(1) var<uniform> params: Params;
+@group(0) @binding(2) var<storage, read_write> args: array<u32, 3>;
+@group(0) @binding(3) var<storage, read_write> size: vec4<u32>;
+
+@compute @workgroup_size(1)
+fn clamp() {
+    let at = params.max.w;
+    let count = vec3<u32>(counts[at], counts[at + 1u], counts[at + 2u]);
+    let cells = min(count, params.max.xyz);
+    let groups = (cells + params.workgroup.xyz - 1u) / params.workgroup.xyz;
+    args = array<u32, 3>(groups.x, groups.y, groups.z);
+    size = vec4<u32>(cells, 0u);
+}
+";
+
+impl Indirect {
+    /// The clamp of a pass with `workgroup` that `dispatch`es indirectly, if it does.
+    fn new(
+        device: &wgpu::Device,
+        kept: &Kept,
+        dispatch: &Dispatch,
+        workgroup: [u32; 3],
+    ) -> Option<Self> {
+        use wgpu::util::DeviceExt;
+        let Dispatch::Indirect { buffer, at, max } = dispatch else {
+            return None;
+        };
+        let resource = kept.resources.iter().position(|r| &r.name == buffer)?;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Native shader pack indirect clamp"),
+            source: wgpu::ShaderSource::Wgsl(CLAMP.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Native shader pack indirect clamp"),
+            layout: None,
+            module: &module,
+            entry_point: Some("clamp"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let [x, y, z] = *max;
+        let words = [x, y, z, *at, workgroup[0], workgroup[1], workgroup[2], 0];
+        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Native shader pack indirect clamp"),
+            contents: &words.map(u32::to_le_bytes).concat(),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let buffer = |label, size, usage| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::STORAGE | usage,
+                mapped_at_creation: false,
+            })
+        };
+        Some(Self {
+            resource,
+            pipeline,
+            params,
+            args: buffer(
+                "Native shader pack indirect args",
+                12,
+                wgpu::BufferUsages::INDIRECT,
+            ),
+            size: buffer(
+                "Native shader pack indirect size",
+                16,
+                wgpu::BufferUsages::UNIFORM,
+            ),
+            group: None,
+        })
+    }
+}
+
+/// Binding `DISPATCH_BINDING`'s layout entry where `entry` dispatches indirectly: its cells.
+fn dispatch_entry(
+    entry: &horizon_shader_api::Stage,
+    visibility: wgpu::ShaderStages,
+) -> Option<wgpu::BindGroupLayoutEntry> {
+    matches!(entry.dispatch, Some(Dispatch::Indirect { .. })).then_some(
+        wgpu::BindGroupLayoutEntry {
+            binding: DISPATCH_BINDING,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(16),
+            },
+            count: None,
+        },
+    )
 }
 
 /// A post pass's kept bindings, and its layouts: the chain's shared entries and those, which
@@ -102,7 +215,7 @@ impl KeptStore {
     /// Makes every resource, zeros, unless they are made.
     fn allocate(&mut self, device: &wgpu::Device) {
         if self.held.is_empty() {
-            self.worlds.clear();
+            self.forget();
             let (resources, size) = (&self.kept.resources, self.size);
             self.held = (resources.iter())
                 .map(|r| make(device, &r.name, r.shape, size))
@@ -112,11 +225,22 @@ impl KeptStore {
 
     /// Destroys every resource now, not when the GPU is done with the last frame.
     fn free(&mut self) {
-        self.worlds.clear();
+        self.forget();
         for held in self.held.drain(..) {
             match held {
                 Held::Buffer(buffer) => buffer.destroy(),
                 Held::Pair(views) => views.iter().for_each(|v| v.texture().destroy()),
+            }
+        }
+    }
+
+    /// Drops the groups that bind the kept buffers: the `[[before_world]]` passes' and the
+    /// clamps'.
+    fn forget(&mut self) {
+        self.worlds.clear();
+        for p in &mut self.computes {
+            if let Some(indirect) = &mut p.indirect {
+                indirect.group = None;
             }
         }
     }
@@ -154,6 +278,24 @@ impl KeptStore {
         size: [u32; 2],
     ) -> bool {
         let remade = self.fit(device, size);
+        for p in &mut self.computes {
+            let Some(i) = p.indirect.as_mut().filter(|i| i.group.is_none()) else {
+                continue;
+            };
+            let Some(Held::Buffer(counts)) = self.held.get(i.resource) else {
+                continue;
+            };
+            let resources = [counts, &i.params, &i.args, &i.size].map(|b| b.as_entire_binding());
+            let entries: Vec<_> = (0..)
+                .zip(resources)
+                .map(|(binding, resource)| wgpu::BindGroupEntry { binding, resource })
+                .collect();
+            i.group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Native shader pack indirect clamp"),
+                layout: &i.pipeline.get_bind_group_layout(0),
+                entries: &entries,
+            }));
+        }
         if self.begun == self.serial {
             return remade;
         }
@@ -247,6 +389,7 @@ pub(super) fn chain(
                 .map(|e| wgpu::BindGroupLayoutEntry { visibility, ..*e })
                 .collect();
             entries.extend(layout_entries(kept, &bindings, visibility));
+            entries.extend(dispatch_entry(entry, visibility));
             let label = Some("Native shader pack post, kept");
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label,
@@ -293,12 +436,15 @@ pub(super) fn chain(
         if let Some(e) = pollster::block_on(scope.pop()) {
             return Err(format!("{}: {e}", stage.file));
         }
+        let workgroup = entry.workgroup.unwrap_or([1, 1, 1]);
+        let dispatch = entry.dispatch.clone().unwrap_or(Dispatch::Pixels);
         store.computes.push(ComputePass {
             label: stage.label,
             at,
             pipeline,
-            workgroup: entry.workgroup.unwrap_or([1, 1, 1]),
-            dispatch: entry.dispatch.unwrap_or(Dispatch::Pixels),
+            workgroup,
+            indirect: Indirect::new(device, kept, &dispatch, workgroup),
+            dispatch,
             scene: stage.scene,
         });
     }
@@ -349,7 +495,6 @@ pub(super) fn order(
 /// frame's `groups` (`order`'s) at R `size`, on the frame's first run of the chain only
 /// (`begin`): `"pixels"` covers R in whole workgroups, the prelude's `in_bounds` false past it.
 /// With `traced` (a frame with the scene), a pass that traces runs its pipeline against it.
-/// An indirect dispatch (#16545's follow-up) would take its workgroups from a buffer here.
 pub(super) fn dispatch(
     kept: &Option<KeptStore>,
     encoder: &mut wgpu::CommandEncoder,
@@ -369,24 +514,37 @@ pub(super) fn dispatch(
     }
 }
 
-/// Records compute pass `p` in `encoder` with its `group` and `pipeline` at R `size`.
+/// Records compute pass `p` in `encoder` with its `group` and `pipeline` at R `size`; an
+/// indirect one after its clamp, in a pass of its own, so its arguments are written first.
 fn record(
     p: &ComputePass,
     encoder: &mut wgpu::CommandEncoder,
     (group, pipeline): (&wgpu::BindGroup, &wgpu::ComputePipeline),
     size: [u32; 2],
 ) {
-    let cells = match p.dispatch {
-        Dispatch::Cells(cells) => cells,
-        Dispatch::Pixels => [size[0], size[1], 1],
-    };
-    let [x, y, z] = [0, 1, 2].map(|i| cells[i].div_ceil(p.workgroup[i]));
+    if let Some(i) = &p.indirect
+        && let Some(clamp) = &i.group
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Native shader pack indirect clamp"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&i.pipeline);
+        pass.set_bind_group(0, clamp, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
         label: Some(&p.label),
         timestamp_writes: None,
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(GROUP, group, &[]);
+    let cells = match (&p.dispatch, &p.indirect) {
+        (_, Some(i)) => return pass.dispatch_workgroups_indirect(&i.args, 0),
+        (Dispatch::Cells(cells), None) => *cells,
+        _ => [size[0], size[1], 1],
+    };
+    let [x, y, z] = [0, 1, 2].map(|i| cells[i].div_ceil(p.workgroup[i]));
     pass.dispatch_workgroups(x, y, z);
 }
 
@@ -430,6 +588,13 @@ pub(super) fn entries(
     let (Some(k), Some(p)) = (kept, self::pass(kept, pass)) else {
         return Vec::new();
     };
+    // The passes' order: the ordinary ones, then the compute ones in `computes`' order.
+    let compute = pass.and_then(|i| i.checked_sub(k.passes.len() - k.computes.len()));
+    let indirect = compute.and_then(|c| k.computes[c].indirect.as_ref());
+    let size = indirect.map(|i| wgpu::BindGroupEntry {
+        binding: DISPATCH_BINDING,
+        resource: i.size.as_entire_binding(),
+    });
     (p.bindings.iter())
         .map(|b| wgpu::BindGroupEntry {
             binding: b.binding,
@@ -441,6 +606,7 @@ pub(super) fn entries(
                 (Held::Pair(v), _) => wgpu::BindingResource::TextureView(&v[parity]),
             },
         })
+        .chain(size)
         .collect()
 }
 
@@ -988,6 +1154,7 @@ pub(super) fn refusal(
             &kept_bindings(manifest, entry),
             visibility,
         ));
+        entries.extend(dispatch_entry(entry, visibility));
         if let Some(over) = super::trace::over_limits(&entries, &[], limits, visibility) {
             return why(over);
         }
@@ -1015,7 +1182,7 @@ pub(super) fn refusal(
                 limits.max_compute_workgroup_storage_size
             ));
         }
-        if let Some(Dispatch::Cells(cells)) = entry.dispatch {
+        if let Some(cells) = entry.dispatch.as_ref().and_then(Dispatch::most) {
             let groups = cells.iter().zip(workgroup).map(|(c, w)| c.div_ceil(w));
             let most = limits.max_compute_workgroups_per_dimension;
             if let Some(n) = groups.max().filter(|n| *n > most) {

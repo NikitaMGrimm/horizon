@@ -405,7 +405,8 @@ Bindings 48 to 59 of group 3 hold the scene while the game traces (60 to
   blocks, clears it). A texture has this frame's version, `<name>`, and last frame's, `<name>_previous`; a buffer
   has one. Both names are free WGSL names, as an `output`'s, and no word WGSL reserves.
 - `[[before_world]]`: a compute pass once a frame, before the world draws: `file`, `dispatch` (`[x, y, z]`
-  cells, or `"pixels"`, one per texel of the render size), `workgroup = [x, y, z]`, `reads` and `writes`.
+  cells, `"pixels"`, one per texel of the render size, or `{ buffer, at, max }`, below), `workgroup = [x, y, z]`,
+  `reads` and `writes`.
 - `[[post]]` with `compute = true` and the same keys: a dispatch in the chain where it stands. It has no `output`
   or `scale`, isn't the last entry and doesn't advance `previous`. An ordinary pass lists what it `reads`, and its
   `output` may name a kept texture, which it draws at that texture's size.
@@ -424,6 +425,18 @@ reductions stay uniform: one beyond the dispatch has `in_bounds` false and touch
 `[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`; a `[[before_world]]` pass has
 the frame, the samplers and the shadow maps (bindings below) with `shadow_position`. Under `[ray_tracing]` either
 may trace (see Ray tracing); a `[[before_world]]` pass traces this frame's scene, built before it runs.
+
+`dispatch = { buffer = "b", at = 0, max = [x, y, z] }` runs as many cells as the kept buffer `b` (`u32` or
+`atomic<u32>`) holds in its three elements from `at` (default 0) when the pass runs, each side at most `max`'s:
+cells, as `[x, y, z]`, which Horizon makes workgroups. A count of 0 runs none, as on the first frame and after a
+reset. `input.size` is this frame's clamped count, from `horizon_dispatch` at binding 15, so the
+pass may clear the counter for the next frame. A pass of the pack must write `b`: an earlier one gives this
+frame's count, a later one last frame's. The limits count `max`.
+
+Rays traced from a few lanes of each workgroup cost about twice what the same rays cost from full ones, and a
+`trace` call that a run-time condition skips still slows the others: append sparse work to a list (an
+`atomic<u32>` counter) and trace over the list with an indirect `dispatch`, and put an optional trace path
+behind an option, which leaves it out of the pipeline.
 
 **Not yet, in a later step:** `[material]` can't read kept resources.
 
@@ -479,7 +492,8 @@ Limits: 8 resources, 4 `[[before_world]]` entries, 8 compute
 `[[post]]` entries; 32 MiB of buffers and 32 MiB of fixed-size textures, both versions counted; each R-relative
 kept texture takes 2 of the post targets' budget (Limits); a workgroup of up to [256, 256, 64] and
 256 invocations; 33554432 invocations a dispatch and 67108864 a frame over every
-compute pass, `[[before_world]]` and `[[post]]` together, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160 (R isn't known at load).
+compute pass, `[[before_world]]` and `[[post]]` together, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160 (R isn't known at load)
+and an indirect one at its `max`.
 
 ### Motion guide
 

@@ -351,6 +351,66 @@ fn a_before_world_pass_traces_the_scene_into_a_kept_buffer() {
     traces(&manifest, &files, hit_shown);
 }
 
+/// An indirect pass traces too, from the chain or before the world: a `[[before_world]]` pass
+/// counts one cell, and the pass that traces runs it, its hit's distance times `input.size.x`.
+/// Its size binding is in the layouts and groups made with the scene. Run with
+/// `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12 WGPU_DX12_COMPILER=dxc`.
+#[test]
+fn an_indirect_pass_traces_the_scene() {
+    let mark = "[[resource]]
+name = \"n\"
+buffer = 16
+element = \"u32\"
+keep = \"view\"
+                [[before_world]]
+file = \"m.wgsl\"
+dispatch = [1, 1, 1]
+workgroup = [1, 1, 1]
+                writes = [\"n\"]
+";
+    let traced = "dispatch = { buffer = \"n\", max = [4, 1, 1] }
+workgroup = [1, 1, 1]
+                  writes = [\"hit\"]
+";
+    let files = [
+        (
+            "m.wgsl",
+            "fn compute(input: ComputeInput) { n[0] = 1u; n[1] = 1u; n[2] = 1u; }
+",
+        ),
+        (
+            "c.wgsl",
+            "fn compute(input: ComputeInput) {
+    if input.in_bounds {
+                     let d = trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0).distance;
+                     hit[0] = d * f32(input.size.x);
+    }
+}
+",
+        ),
+        ("l.wgsl", SHOW),
+    ];
+    let last = "[[post]]
+file = \"l.wgsl\"
+reads = [\"hit\"]
+";
+    for pass in [
+        format!(
+            "[[post]]
+file = \"c.wgsl\"
+compute = true
+{traced}"
+        ),
+        format!(
+            "[[before_world]]
+file = \"c.wgsl\"
+{traced}"
+        ),
+    ] {
+        traces(&format!("{HIT}{mark}{pass}{last}"), &files, hit_shown);
+    }
+}
+
 /// A post pass of a pack that keeps resources reads its kept texture's `_previous` and traces
 /// in one shader: red counts the frames by a quarter, green the hit's distance / 8 (0 on a
 /// miss). Run with `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12 WGPU_DX12_COMPILER=dxc`.
