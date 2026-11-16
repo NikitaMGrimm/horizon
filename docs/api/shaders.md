@@ -245,12 +245,19 @@ linear light: decode a constant written for display values with a 2.2 power, com
 `packs/traced_water` are the smallest packs that trace rays, from a post pass and from the material stage
 ([the guide](../shaders.md#ray-tracing)).
 
+A 0.2 pack from before 2026-11-16 moves to the terrain's own inputs so: where it drew vanilla's colour with
+`input.tint` or `hit.tint`, it reads `shaded_tint` (the old value, the shade and ambient occlusion in it), or lights
+with `tint`, `shade` and `ao` apart; `[material] fog = false` becomes `[frame] fog = "pack"`; `frame.fog_start` and
+`fog_end` become `fog_environment` and `fog_render`; the post stage's `history` becomes a
+`[[resource]]` with `keep = "view"` that a pass writes as its `output` and reads as `<name>_previous` next frame; and
+`EntityInput.emission` is `full_light`.
+
 ## Testing a pack frame by frame
 
 `horizon-ctl screenshot-sequence FRAMES STEP_MS PATH`, under `HORIZON_STILL`, starts the running pack over and draws
 its first FRAMES frames on a set clock: frame n has `frame_index` n, `time` (n - 1) × STEP_MS / 1000 and `delta_time`
-STEP_MS / 1000 (0 on frame 1; STEP_MS may be a decimal, `16.666667` for 60 fps), and `history` and the eased values
-start as in a pack just loaded. The last frame is written as a PNG, the same bytes every run on the same build, GPU
+STEP_MS / 1000 (0 on frame 1; STEP_MS may be a decimal, `16.666667` for 60 fps), and the eased values start as in
+a pack just loaded. The last frame is written as a PNG, the same bytes every run on the same build, GPU
 and driver. Packs in the `shaders/` format get the same (`frameCounter`, `frameTimeCounter`, `frameTime`). How to use
 it: [the guide](../shaders.md#testing-a-pack-frame-by-frame).
 
@@ -277,6 +284,17 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-16: API 0.2 (**breaking**, experimental): the terrain's own inputs. `MaterialInput` and `VertexInput` have
+  the quad's `tint` without its shade and ambient occlusion, the face's `shade`, the corner's `ao`, its `face`, and
+  `emission`, the block state's light level over 15 (one candle 3/15, four 12/15); `VertexInput.fluid` is 2 for
+  lava. A pack that reads `tint`, `shade`, `ao`, `face` or `emission` makes the world load again when it starts, and
+  terrain takes half again its memory; a device whose vertex stage reads no storage buffers refuses it. A pack that
+  names `shaded_tint` gets the old `tint` last in `MaterialInput`, `VertexInput` and `RayHit`, free. `RayHit` gains
+  `shade`, `ao` and `back` and is ordered as the reference lists it; an entity hit has vanilla's entity shade, the
+  Nether's in the Nether. `EntityInput.emission` is `full_light: bool`. Gone: the post stage's `history`, `[material] fog`
+  (a check error naming `[frame] fog`), and `frame.fog_start` and `fog_end`; the fog's fields are declared for every
+  pack. [Moving a pack](#shader-api-02-experimental) says what to read instead. A pack that reads none of these is
+  built and draws as before.
 - 2026-11-15: API 0.2 (addition, experimental): `[frame] fog = "pack"` turns Horizon's fog off on what the material
   and entity stages return, and gives every stage `fn vanilla_fog(position: vec3<f32>) -> f32` and the frame's
   `fog_environment` and `fog_render`, the two distances vanilla's fog takes the larger of, which `fog_start` and

@@ -78,6 +78,7 @@ Unjittered motion excludes both frames' jitter; add their sampling offsets only 
 
 `frame_index`, `delta_time`, compute dispatches, named-target swaps and histories advance once per **real** frame.
 Generated frames and an extra SDR capture must not run an accumulating post chain again.
+(2026-11-16: `history` is gone from API 0.2; a `[[resource]]` with `keep = "view"` keeps a pass's previous frame.)
 Keep today's `history` meaning: the previous real frame's input to the last ordinary post pass, at R, black when
 invalid. It stays black when no ordinary pass precedes the last one (a single pass, or only named-target passes
 before it), as today; a pack that needs its own previous frame keeps a named target or, later, a typed kept target.

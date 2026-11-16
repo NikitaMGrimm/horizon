@@ -78,7 +78,7 @@ options are saved to `shaderpacks/<pack>.txt` (`NAME=value` lines), and the pack
 
 ## Testing a pack frame by frame
 
-A pack that keeps something from frame to frame (`history`, eased values) draws a little differently in every run,
+A pack that keeps something from frame to frame (kept resources, eased values) draws a little differently in every run,
 as frames come when they come. With `HORIZON_STILL=1` and the world frozen the scene holds still
 ([agent-control.md](agent-control.md#repeatable-screenshots)), and
 
@@ -86,7 +86,7 @@ as frames come when they come. With `HORIZON_STILL=1` and the world frozen the s
 horizon-ctl screenshot-sequence 64 50 frame64.png
 ```
 
-starts the pack over as if just loaded (black `history`, eased values from the start) and draws 64 frames 50 ms
+starts the pack over as if just loaded (eased values from the start) and draws 64 frames 50 ms
 apart on its clock: frame n has `frame_index` n, `time` (n - 1) × 0.05 and `delta_time` 0.05 (0 on frame 1). The
 64th is written to `frame64.png` (and `frame64-hdr.png` with HDR output on) before the reply. STEP_MS may be a
 decimal: `16.666667` steps a 60 fps clock. The same build, GPU
@@ -134,7 +134,8 @@ by Horizon: a pack changes how things look, not how they are drawn.
 | `[tonemap]` | `fn tonemap(input: TonemapInput) -> vec3<f32>` | the post chain's picture for the display, from 0 to `frame.headroom`; without it Horizon's curve runs |
 
 A pack has at least one stage; a stage it leaves out keeps vanilla's look. Each input says what vanilla would draw
-(`input.color` in the sky and post stages; `albedo * tint * vec4(lightmap, 1.0)` for a material), so a pack can start
+(`input.color` in the sky and post stages; `albedo * shaded_tint * vec4(lightmap, 1.0)` for a material, `shaded_tint`
+being vanilla's vertex colour, the quad's `tint` times its `shade` and `ao`), so a pack can start
 from vanilla and change only what it means to.
 
 Every colour a stage reads or returns is linear light: 1.0 is vanilla's white, and more is brighter, on SDR and HDR
@@ -243,8 +244,8 @@ let hit = trace(position * 0.99, direction, 64.0);   // hit.distance < 0.0: noth
 ```
 
 `trace` returns the nearest solid surface along a ray, with what the material stage would get for that point (`albedo`,
-`tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent`, `tangent`) and its `position`, `normal`
-and `distance`; `trace_any` only says whether something is in the way, which is all a shadow needs. Origins are camera-relative, as `view_position` gives them, and
+`tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent`, `tangent`) and its `position`, `normal`,
+`back` and `distance`; `trace_any` only says whether something is in the way, which is all a shadow needs. Origins are camera-relative, as `view_position` gives them, and
 rays pass through the clear texels of leaves and plants, and through water, stained glass and ice, which are in a
 [layer of their own](#layers). `frame.ray_distance` is the distance the scene covers in every direction; a longer ray
 is allowed and may still hit geometry toward the corners, and no clamp is needed. Horizon keeps the scene; the look is the pack's: Horizon
@@ -324,7 +325,7 @@ Every other pack is built and runs as without it.
 | --- | --- |
 | In it | Within the scene's reach, mobs, players (third person, and the others), armour stands, item frames, paintings, projectiles, vehicles, falling blocks and block displays, whether the camera draws them this frame or not (behind it, beside it, hidden behind terrain), so turning the camera changes nothing; the block entities at rest that the block entity cache keeps (on in every graphics preset: closed chests, shulker boxes, bells, decorated pots, banners, within vanilla's 64 blocks), in view or not; and the other block entities the camera draws (a chest while it opens) |
 | Not in it | Particles, world text and name tags, the hand, the camera's own body in first person, items Horizon draws itself (a dropped item, a framed one), translucent items, breaking cracks, entity shadows, energy swirls, beams, portals, lightning, glowing outlines, additive glows; other block entities out of view (a chest opening behind the camera) |
-| A hit | `entity` true. `albedo` the entity texture's texel in linear light, `tint`, `light` and `uv` its vertices' (the colour vanilla multiplies in, alpha included; block and sky light; the atlas position), `normal` the face's against the ray, `tangent` from its uvs; `material`, `tags`, `emission` and `fluid` 0, `translucent` false, and `hit_normal_map` and `hit_specular_map` give their defaults |
+| A hit | `entity` true. `albedo` the entity texture's texel in linear light, `tint`, `light` and `uv` its vertices' (the colour vanilla multiplies in, alpha included; block and sky light; the atlas position), `normal` the face's against the ray, `tangent` from its uvs, `shade` vanilla's entity shade for the face (the Nether's in the Nether), `ao` 1; `material`, `tags`, `emission` and `fluid` 0, `translucent` false, and `hit_normal_map` and `hit_specular_map` give their defaults |
 | A ray stops | Where vanilla's alpha test keeps the entity's pixel, `(texel * tint).a` 0.1 or more, from either side of the face (on the dying dragon's dissolve, where vanilla's mask keeps it). A pack's own `[entity]` alpha is not the layer's: the scene runs no pack code |
 | Cost | For a pack that names the layer: the models of the entities within reach that the camera doesn't draw, posed on the CPU every frame, and one BLAS of the frame's entity quads and the TLAS built again every frame. The cached block entities have a BLAS a section, built again only when that section's change (a chest opens or closes, one is placed or broken) |
 
