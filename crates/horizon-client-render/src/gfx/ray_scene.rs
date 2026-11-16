@@ -99,12 +99,8 @@ impl Renderer {
             &self.device,
             super::wanted(super::switch(), traces),
         );
+        // The arenas' looks follow before the next frame (`follow_terrain_looks`).
         self.native = pack;
-        // The pipelines just made read the arenas' looks, or don't: their pages follow.
-        let looks = self.native_looks();
-        if looks != self.terrain_looks {
-            self.set_terrain_looks(looks);
-        }
     }
 
     /// Every section is gone (a new world, a new dimension): so are the pack's kept resources.

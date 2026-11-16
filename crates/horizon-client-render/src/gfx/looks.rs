@@ -1,5 +1,5 @@
-//! The arenas' quad looks (`mesher::QuadLook`) bound for a shader API 0.2 pack whose terrain
-//! reads them (`Report::looks`): one bind group a page, at `GROUP` of its terrain pipelines,
+//! The arenas' quad looks (`mesher::QuadLook`) bound for a shader API 0.2 pack's terrain while
+//! sections carry them (`wanted`): one bind group a page, at `GROUP` of its terrain pipelines,
 //! set with the page's vertices. A page without looks binds an empty buffer, which the
 //! shaders read as no look (`LOOK_WGSL`).
 
@@ -30,6 +30,13 @@ pub fn wanted(adapter: &wgpu::Adapter) -> bool {
         });
     }
     bound
+}
+
+/// A name for buffers of looks made again empty, or dropped, unique in the process: the game
+/// compares it from one renderer to the next (`Renderer::terrain_looks`).
+pub fn epoch() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The looks as the material and shadow wrappers read them: `horizon_look(slot)`, a slot's
@@ -167,6 +174,72 @@ impl LookGroups {
         self.get(page + if translucent { TRANSLUCENT_KEYS } else { 0 })
     }
 }
+
+/// A section's quad looks of one part (solid, translucent), a slot of its range each
+/// (`per_slot`): as its arena's page holds them (`None`: the page keeps none) and as its mesh
+/// was handed over.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug)]
+pub struct PartLooks {
+    pub held: Option<Vec<QuadLook>>,
+    pub handed: Vec<QuadLook>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl super::Renderer {
+    /// Section `key`'s looks, solid then translucent, read back from its arenas, beside its
+    /// mesh's as handed over (`keep_capture_copies` on before it was uploaded), and whether
+    /// translucent quads have an arena of their own.
+    pub fn section_looks(&mut self, key: super::SectionKey) -> Option<([PartLooks; 2], bool)> {
+        if let Some(copies) = self.take_section_copies() {
+            self.queue.submit([copies]);
+        }
+        let s = self.sections.find(key)?;
+        let mesh = self.capture_copies.as_ref()?.held(key)?;
+        let translucent = mesh.translucent.len() as u64;
+        let split = self.translucent_arena.is_some();
+        let parts = [
+            (
+                &self.arena,
+                (s.page, s.start),
+                s.solid_slots,
+                &mesh.solid_looks,
+                s.packed,
+            ),
+            (
+                self.translucent_arena.as_ref().unwrap_or(&self.arena),
+                s.translucent_at,
+                translucent,
+                &mesh.translucent_looks,
+                false,
+            ),
+        ];
+        let parts = parts.map(|(arena, (page, start), slots, looks, packed)| PartLooks {
+            held: match slots {
+                0 => Some(Vec::new()),
+                _ => arena.looks(page).map(|buffer| {
+                    let range = start * LOOK_BYTES..(start + slots) * LOOK_BYTES;
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    wgpu::util::DownloadBuffer::read_buffer(
+                        &self.device,
+                        &self.queue,
+                        &buffer.slice(range),
+                        move |r| tx.send(r.unwrap().to_vec()).unwrap(),
+                    );
+                    self.device
+                        .poll(wgpu::PollType::wait_indefinitely())
+                        .unwrap();
+                    bytemuck::pod_collect_to_vec(&rx.recv().unwrap())
+                }),
+            },
+            handed: per_slot(looks, packed, slots),
+        });
+        Some((parts, split))
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+const LOOK_BYTES: u64 = std::mem::size_of::<QuadLook>() as u64;
 
 #[cfg(test)]
 mod tests {
