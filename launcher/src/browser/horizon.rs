@@ -448,10 +448,7 @@ fn project_of(index: &Index, p: &index::Project) -> Option<Project> {
         Blocked::EarlierSystem => {
             tr("Made for Horizon's earlier mod system: it can't be installed yet.").to_string()
         }
-        Blocked::OtherShaderApi(api) => format!(
-            "Made for shader API {api}: this Horizon serves {}.",
-            horizon_shader_api::API
-        ),
+        Blocked::OtherShaderApi(api) => made_for_other_shader_api(&api),
     });
     Some(Project {
         source: SourceId::Horizon,
@@ -900,6 +897,14 @@ fn newest<'a>(index: &Index, p: &'a index::Project) -> Result<&'a index::Version
         (Some(r), None) => format!("{} was taken down: {}", p.name, r.reason),
         (None, None) => format!("{} has no version for {GAME} to install.", p.name),
     })
+}
+
+/// What the browser and the installed packs say of a shader pack made for shader API `api`.
+pub fn made_for_other_shader_api(api: &str) -> String {
+    format!(
+        "Made for shader API {api}: this Horizon serves {}.",
+        horizon_shader_api::API
+    )
 }
 
 /// Why a shader pack made for shader API `api` doesn't run: the game's own words for it
