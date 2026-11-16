@@ -142,6 +142,21 @@ fn overrides_match_the_options() {
     assert_eq!(p.file, MANIFEST);
 }
 
+/// The game refuses a pack through `check` (`game/modding/native_shaders.rs`), so a word WGSL
+/// reserves is the check's refusal, at its line in the pack.
+#[test]
+fn a_word_wgsl_reserves_is_refused_where_the_pack_names_it() {
+    let p = one(
+        GRADE,
+        "override saturation: f32 = 1.1;\noverride tonemap: u32 = 1u;\n\
+         fn mix_from(from: vec3<f32>, to: vec3<f32>) -> vec3<f32> { return mix(from, to, 0.5); }\n\
+         fn post(input: PostInput) -> vec4<f32> {\n    \
+         return vec4<f32>(mix_from(input.color.rgb, input.color.rgb), 1.0);\n}\n",
+        "name `from` is a reserved keyword",
+    );
+    assert_eq!((p.file.as_str(), p.line, p.column), (GRADE, 3, 13), "{p}");
+}
+
 #[test]
 fn validation_errors_point_into_the_pack() {
     // A compute-only barrier in a fragment stage passes the parser, not the validator.
