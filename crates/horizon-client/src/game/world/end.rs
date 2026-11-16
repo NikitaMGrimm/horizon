@@ -2025,6 +2025,11 @@ mod tests {
         use super::super::native_entity_refs::tests::with_game;
 
         with_game(|game| {
+            // The exit's chunk is loaded, so the arrival does not wait.
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+            );
             game.spawn_item_own(
                 horizon_client::items::ItemStack::new("minecraft:stick", 1),
                 [2.5, 100.0, 2.5],
