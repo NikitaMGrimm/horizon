@@ -54,11 +54,17 @@ const BASE: i32 = MIN_Y + 4;
 
 /// The blocks of the emission table, each with vanilla's light level (`None`: drawn as a block
 /// entity, so no terrain quad), one every other block along x and z. The water of a
-/// waterlogged one gives off what water does, nothing.
-const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 16] = [
+/// waterlogged one gives off what water does, nothing. A lit candle gives 3 a candle.
+const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 22] = [
     ("minecraft:torch", &[], Some(14)),
     ("minecraft:lantern", &[], Some(15)),
     ("minecraft:lantern", &[("waterlogged", "true")], Some(15)),
+    ("minecraft:lantern", &[("hanging", "true")], Some(15)),
+    ("minecraft:candle", &[("lit", "true")], Some(3)),
+    ("minecraft:candle", &[("lit", "true"), ("candles", "4")], Some(12)),
+    ("minecraft:candle", &[("candles", "4")], Some(0)),
+    ("minecraft:candle_cake", &[("lit", "true")], Some(3)),
+    ("minecraft:fire", &[], Some(15)),
     ("minecraft:sea_lantern", &[], Some(15)),
     ("minecraft:glowstone", &[], Some(15)),
     ("minecraft:ochre_froglight", &[], Some(15)),
