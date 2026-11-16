@@ -1055,14 +1055,19 @@ struct HorizonMaterialIn {
     @location(9) @interpolate(flat) fluid_quad: u32,
     @location(10) @interpolate(flat) emission: f32,
     @location(11) @interpolate(flat) material: u32,
+    @location(12) shaded: vec4<f32>,
+    @location(13) @interpolate(flat) shade: f32,
+    @location(14) ao: f32,
 }
 @fragment fn horizon_fs_material(in: HorizonMaterialIn) -> @location(0) vec4<f32> {
     let fluid = select(0u, select(2u, 1u, in.translucent != 0u), in.fluid_quad != 0u);
     let normal = horizon_material_normal(in.world);
     let tangent = horizon_material_tangent(in.world, in.uv, normal);
-    let input = MaterialInput(horizon_decode_rgba(in.albedo), horizon_decode_rgba(in.tint), in.light,
-        horizon_decode(in.lightmap), in.world, in.uv, in.translucent != 0u, in.tags, in.material,
-        in.position.xy / frame.resolution, in.face, fluid, in.emission, normal, tangent, vec3<f32>(0.0), 0.0);
+    let horizon_shaded = horizon_decode_rgba(in.shaded);
+    let input = MaterialInput(horizon_decode_rgba(in.albedo), horizon_decode_rgba(in.tint), in.shade,
+        in.ao, in.light, horizon_decode(in.lightmap), in.world, in.uv, in.translucent != 0u, in.tags,
+        in.material, in.position.xy / frame.resolution, in.face, fluid, in.emission, normal, tangent,
+        vec3<f32>(0.0), 0.0@shaded_tint@);
     return horizon_encode_rgba(material(input).color);
 }
 "
@@ -1087,8 +1092,11 @@ const VERTEX_ENTRIES: &str = "\
 @vertex fn horizon_vs_vertex(
     @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) light: vec2<f32>,
     @location(3) tint: vec4<f32>, @location(4) material: u32, @location(5) flags: u32,
+    @location(6) shade: f32, @location(7) ao: f32, @location(8) shaded: vec4<f32>,
 ) -> @builtin(position) vec4<f32> {
-    let input = VertexInput(position, uv, material, light, horizon_decode_rgba(tint), flags & 7u, flags >> 31u);
+    let horizon_shaded = horizon_decode_rgba(shaded);
+    let input = VertexInput(position, uv, material, light, horizon_decode_rgba(tint), shade, ao,
+        flags & 7u, flags >> 30u@shaded_tint@);
     return frame.projection * frame.view * vec4<f32>(vertex(input), 1.0);
 }
 ";
@@ -1314,7 +1322,7 @@ impl StageKind {
             self,
             StageKind::Post | StageKind::Material | StageKind::Compute | StageKind::BeforeWorld
         );
-        self.prelude_rays(tracing, rays, false, false, false)
+        self.prelude_rays(tracing, rays, false, false, false, false)
     }
 
     /// `prelude_traced`, with the ray names only where `rays`: a material, compute or
@@ -1322,6 +1330,8 @@ impl StageKind {
     /// them. `kept`: the frame's epochs, for a pack with `[[resource]]`. With `entities` (the
     /// pack's files name `RAY_ENTITY`) the trace functions have the entity layer too. `fog`:
     /// the frame's fog distances and `vanilla_fog`, for a pack with `[frame] fog = "pack"`.
+    /// `shaded`: `SHADED_TINT` last in the terrain's inputs and `RayHit`, for a pack whose files
+    /// name it.
     fn prelude_rays(
         self,
         tracing: Tracing,
@@ -1329,6 +1339,7 @@ impl StageKind {
         kept: bool,
         entities: bool,
         fog: bool,
+        shaded: bool,
     ) -> String {
         let rays = rays && tracing != Tracing::None;
         let mut out = match tracing {
@@ -1344,13 +1355,13 @@ impl StageKind {
         if kept {
             out += &crate::kept::reasons_wgsl();
         }
-        out += &self.input().wgsl();
+        out += &crate::inputs::shaded(self.input(), shaded && self.terrain());
         if matches!(self, StageKind::Material | StageKind::Entity) {
             out += &SURFACE.wgsl();
         }
         if self == StageKind::Material {
             // The vertex stage's file joins the material's module (`compose`).
-            out += &VERTEX_INPUT.wgsl();
+            out += &crate::inputs::shaded(&VERTEX_INPUT, shaded);
             out += &DISPLACEMENT_INPUT.wgsl();
         }
         for r in self.resources() {
@@ -1401,6 +1412,11 @@ impl StageKind {
             out += &layered(RAY_PBR, entities);
         }
         out
+    }
+
+    /// Whether the stage's input is the terrain's, which may end with `SHADED_TINT`.
+    fn terrain(self) -> bool {
+        matches!(self, StageKind::Material | StageKind::Vertex)
     }
 
     /// The entry points put after the pack's files.
@@ -1737,6 +1753,28 @@ pub fn names_ray_entity(pack: &Pack) -> bool {
     pack.manifest.ray_tracing.is_some() && pack.manifest.files().into_iter().any(named)
 }
 
+/// Whether the files of `pack` name `shaded_tint` anywhere outside a comment, dead code
+/// included: only then do `MaterialInput`, `VertexInput` and `RayHit` have it (a false positive
+/// only declares the field).
+pub fn names_shaded_tint(pack: &Pack) -> bool {
+    let named = |file: &str| {
+        let text = pack.source(file).unwrap_or_default();
+        identifiers(text)
+            .iter()
+            .any(|(_, name)| *name == crate::inputs::SHADED_TINT.name)
+    };
+    pack.manifest.files().into_iter().any(named)
+}
+
+/// Where an entry point's constructor of a terrain input takes `shaded_tint` (`horizon_shaded`)
+/// in a pack that names it.
+pub const SHADED_TINT_ARGUMENT: &str = "@shaded_tint@";
+
+/// `entries` with `SHADED_TINT_ARGUMENT` filled in for a pack that names `shaded_tint` or not.
+pub fn shaded_entries(entries: &str, shaded: bool) -> String {
+    entries.replace(SHADED_TINT_ARGUMENT, if shaded { ", horizon_shaded" } else { "" })
+}
+
 /// Whether a material stage's files, `texts`, name a trace function: only then does its prelude
 /// have them and the renderer build its terrain against the scene.
 fn traces<'a>(mut texts: impl Iterator<Item = &'a str>) -> bool {
@@ -1810,7 +1848,8 @@ pub(crate) fn compose_traced(
     let kept = !m.kept.resources.is_empty();
     let entities = rays && names_ray_entity(pack);
     let fog = m.fog == crate::Fog::Pack;
-    let mut prelude = kind.prelude_rays(tracing, rays, kept, entities, fog)
+    let shaded = names_shaded_tint(pack);
+    let mut prelude = kind.prelude_rays(tracing, rays, kept, entities, fog, shaded)
         + &texture_declarations(&pack.manifest.textures);
     if matches!(kind, StageKind::Post | StageKind::Compute) {
         prelude += &post_target_declarations(&pack.manifest);
@@ -1828,7 +1867,7 @@ pub(crate) fn compose_traced(
     if kind == StageKind::Material && m.displacement.is_some() {
         push(
             "<entries>",
-            &(kind.entries().to_owned() + DISPLACEMENT_ENTRIES),
+            &(shaded_entries(kind.entries(), shaded) + DISPLACEMENT_ENTRIES),
         );
     } else if let (StageKind::Compute | StageKind::BeforeWorld, Some(stage)) = (kind, stage) {
         push("<entries>", &compute_entries(stage));
@@ -1838,7 +1877,7 @@ pub(crate) fn compose_traced(
     {
         push("<entries>", POST_ENTRIES_KEPT);
     } else {
-        push("<entries>", kind.entries());
+        push("<entries>", &shaded_entries(kind.entries(), shaded));
     }
     composed
 }

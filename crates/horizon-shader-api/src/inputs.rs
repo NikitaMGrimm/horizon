@@ -337,8 +337,10 @@ pub const MATERIAL_INPUT: Struct = Struct {
     doc: "One point of a block's surface, for `fn material(input: MaterialInput) -> Surface`.",
     fields: fields! {
         albedo: "vec4<f32>" = "The block texture's colour here (alpha 0..1).",
-        tint: "vec4<f32>" = "The vertex colour: biome tint, face shade and ambient occlusion.",
-        light: "vec2<f32>" = "Block and sky light, 0..1, smoothed over the face.",
+        tint: "vec4<f32>" = "The colour vanilla multiplies the block's texture by: the biome's tint (grass, leaves, water), a model's own colour, else white; alpha 1. Without the face's shade and ambient occlusion (`shade`, `ao`).",
+        shade: "f32" = "Vanilla's directional shade for this face as a factor on linear light, 0..1 (vanilla's value decoded with the 2.2 power, as `EntityInput.shade`): the shade the face was given, 1 on top, 0.8 north and south, 0.6 east and west, 0.5 below, 0.9 above and below in the Nether. A face with `shade_direction_override` is shaded as that face (a torch is 1 all round, 0.9 in the Nether), one vanilla doesn't shade (a model element with `\"shade\": false`) is 1, and a fluid's side has the side's shade times the top's.",
+        ao: "f32" = "Vanilla's ambient occlusion here as a factor on linear light, 0..1 (decoded with the 2.2 power), smoothed over the face: how much the blocks around each corner darken it. 1 where vanilla applies none: Smooth Lighting off, a block that gives off light, a model without ambient occlusion, fluids, distant terrain.",
+        light: "vec2<f32>" = "Block and sky light, 0..1, smoothed over the face: vanilla's smooth light, without ambient occlusion (`ao`), and Horizon's dynamic block light.",
         lightmap: "vec3<f32>" = "Vanilla's light colour for that light this frame.",
         position: "vec3<f32>" = "The point, camera-relative, in blocks.",
         uv: "vec2<f32>" = "The texture coordinate inside the block atlas.",
@@ -346,9 +348,9 @@ pub const MATERIAL_INPUT: Struct = Struct {
         tags: "u32" = "The pack's sprite tags this surface's sprite has: bit i for the manifest's i-th `[[tags]]`.",
         material: "u32" = "The `[[materials]]` id of this surface's sprite (0 when no entry names it).",
         screen: "vec2<f32>" = "Where the point is on the screen, 0..1 from the top left (`opaque_depth` and `opaque_color` at `screen * frame.resolution`).",
-        face: "u32" = "For a fluid, which face of the block the point is on, `Direction` order: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east. 0 elsewhere.",
+        face: "u32" = "Which way the surface faces, `Direction` order: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east (a model face's own direction; a fluid's face of its block).",
         fluid: "u32" = "0 not a fluid, 1 water, 2 lava.",
-        emission: "f32" = "How strongly the block itself shines, 0..1, by its kind of light: a redstone torch or a candle 7/15, a torch or lava 14/15, glowstone 1; 0 for most blocks.",
+        emission: "f32" = "How much light the surface gives off, 0..1: its block's light level over 15 (a torch 14/15; a lantern, glowstone, a froglight or lava 1; a redstone torch or glow lichen 7/15; one lit candle 3/15), 0 for a block that gives none. The same on every face of the block, except a model face with a light level of its own (`light_emission`, as the open eyeblossom's petals), which has the larger of the two. A fluid's surface has the fluid's own (lava 1, water 0, also around a waterlogged lantern). It says how much light the block gives, not which of its texels glow: the resource packs' LabPBR maps say that where they ship (`block_specular_map(uv).a`).",
         normal: "vec3<f32>" = "The surface's geometric normal, a unit vector in world axes, facing the camera. A normal within about 3.6 degrees of an axis is that axis exactly, so distant block faces do not shimmer; flowing water's slopes are steeper and keep theirs.",
         tangent: "vec4<f32>" = "The surface's tangent: xyz the unit direction in world axes along which `uv.x` grows, w the sign (1 or -1) that makes `cross(normal, tangent.xyz) * tangent.w` the direction `uv.y` grows along (down the texture). With `normal` it turns a normal map's normals into world axes.",
         colored_light: "vec3<f32>" = "The frame's coloured lights at this point (`[[particle_lights]]`, held and dropped items in their `[[lights]]` colour while dynamic lights are on, and mods' visual lights), 0..1, to light the surface with as the pack likes; 0 where none reaches.",
@@ -359,7 +361,9 @@ pub const MATERIAL_INPUT: Struct = Struct {
 /// What the material stage returns.
 pub const SURFACE: Struct = Struct {
     name: "Surface",
-    doc: "What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; \
+    doc: "What `material` returns. Vanilla's own is \
+          `albedo * vec4(tint.rgb * shade * ao * lightmap, 1.0)`, which \
+          `albedo * vec4(shaded_tint.rgb * lightmap, 1.0)` gives within two steps of 255 for nothing; \
           Horizon then applies the alpha test (cutout and translucent; on the texture's alpha \
           unless `[material] coverage = \"pack\"`) and fog (unless `[frame] fog = \"pack\"`).",
     fields: fields! {
@@ -422,9 +426,11 @@ pub const VERTEX_INPUT: Struct = Struct {
         uv: "vec2<f32>" = "The texture coordinate inside the block's sprite.",
         material: "u32" = "The `[[materials]]` id of the block's sprite (0 when none matches).",
         light: "vec2<f32>" = "Block and sky light, 0..1.",
-        tint: "vec4<f32>" = "The vertex colour (biome tint, face shade, ambient occlusion); alpha 1.",
-        face: "u32" = "For a fluid, the face of the block the corner is on (as `MaterialInput.face`), else 0.",
-        fluid: "u32" = "1 on a fluid's surface (water or lava), else 0.",
+        tint: "vec4<f32>" = "As `MaterialInput.tint`: the colour vanilla multiplies the texture by (biome tint, a model's colour), without the shade and ambient occlusion; alpha 1.",
+        shade: "f32" = "As `MaterialInput.shade`.",
+        ao: "f32" = "As `MaterialInput.ao`, at this corner.",
+        face: "u32" = "As `MaterialInput.face`.",
+        fluid: "u32" = "As `MaterialInput.fluid`: 0 not a fluid, 1 water, 2 lava.",
     },
 };
 
@@ -487,6 +493,26 @@ pub fn ray_hit(entities: bool) -> Struct {
         true => RAY_HIT.fields,
     };
     Struct { fields, ..RAY_HIT }
+}
+
+/// `shaded_tint`, the last field of `MaterialInput`, `VertexInput` and `RayHit` in a pack whose
+/// files name it (`stages::names_shaded_tint`): the vertex holds it, so it costs nothing.
+pub const SHADED_TINT: Field = Field {
+    name: "shaded_tint",
+    ty: "vec4<f32>",
+    doc: "Only in a pack whose files name `shaded_tint`: the colour vanilla multiplies the texture by with the face's shade and ambient occlusion in it, `tint.rgb * shade * ao` as vanilla's vertex carries it (vanilla multiplies them at each corner in 8-bit integers, so it is within two steps of 255 of that product); alpha 1. Draw vanilla's colour with it; `tint`, `shade` and `ao` are for lighting faces yourself, and reading them makes the world load again when the pack starts and terrain take half again its memory. On `RayHit` it is linear light, an entity hit's `tint`, and 0 on a miss.",
+};
+
+/// `input` with `SHADED_TINT` last where `shaded`.
+pub fn shaded(input: &Struct, shaded: bool) -> String {
+    let mut out = input.wgsl();
+    if shaded {
+        out.truncate(out.len() - 2);
+        out += &format!("    {}: {},
+}}
+", SHADED_TINT.name, SHADED_TINT.ty);
+    }
+    out
 }
 
 /// The tonemap stage's input: one pixel of the window.
