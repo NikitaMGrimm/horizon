@@ -355,7 +355,9 @@ impl Arena {
     }
 
     /// Writes `looks`, one a slot of the range at `start`, into `page`'s looks; a range without
-    /// them is cleared, so a recycled one never keeps another mesh's (zero: no look).
+    /// them is cleared, so a recycled one never keeps another mesh's (zero: no look). An empty
+    /// range names no page: a section without translucent quads has none in the translucent
+    /// arena, which may have no page yet.
     pub fn write_looks(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -365,12 +367,12 @@ impl Arena {
         slots: u64,
         looks: &[crate::mesher::QuadLook],
     ) {
-        let Some(buffer) = self.looks(page) else {
-            return;
-        };
         if slots == 0 {
             return;
         }
+        let Some(buffer) = self.looks(page) else {
+            return;
+        };
         if looks.len() as u64 == slots {
             uploads.buffer(
                 encoder,

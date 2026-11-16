@@ -220,6 +220,10 @@ mod tests {
         arena.set_looks(&device, true);
         let mut uploads = super::super::upload::Uploads::new(&device);
         let mut encoder = device.create_command_encoder(&Default::default());
+        // A section without translucent quads: an empty range, in an arena with no page yet.
+        let mut translucent = Arena::new(&device, 24, 256, true);
+        translucent.set_looks(&device, true);
+        translucent.write_looks(&mut encoder, &mut uploads, 0, 0, 0, &[]);
         let compact = (
             layout.len() as u64,
             per_slot(&looks, true, layout.len() as u64),
