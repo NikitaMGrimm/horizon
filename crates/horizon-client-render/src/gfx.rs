@@ -334,6 +334,8 @@ pub(super) struct SectionLists<'a> {
     /// The flat draws' lists, where they are made.
     pub flat: Option<&'a flat::Flat>,
     multi_draw: bool,
+    /// The pages' quad looks, bound beside them while a pack reads them.
+    looks: Option<&'a looks::LookGroups>,
 }
 
 impl<'a> SectionLists<'a> {
@@ -366,6 +368,10 @@ impl<'a> SectionLists<'a> {
                 ),
             };
             pass.set_vertex_buffer(0, vertices);
+            if let Some(looks) = self.looks {
+                let translucent = self.translucent_arena.is_some() && index_page.is_some();
+                pass.set_bind_group(looks::GROUP, looks.page(page, translucent), &[]);
+            }
             if pulled
                 && index_page.is_none()
                 && let Some(group) = self.flat.and_then(|f| f.page_group(page))
@@ -460,6 +466,7 @@ mod linear_blend;
 use frame_policy::frame_format;
 use frame_policy::{frame_configuration, hand_depth_store, horizon_tone_curve, overlay_format};
 mod lod;
+mod looks;
 pub mod mod_pipelines;
 pub mod native_entity;
 mod native_material;
@@ -1364,6 +1371,13 @@ pub struct Renderer {
     /// Sections upload their solid quads in the compact layout (`mesher::packed`): the solid
     /// passes read the arena themselves (`flat`) and no shader pack reads it as vertices.
     packed_quads: bool,
+    /// The running 0.2 pack reads the terrain's own inputs: sections upload their quads' looks
+    /// (`set_terrain_looks`).
+    terrain_looks: bool,
+    /// Their groups, while they are on, and the layout the pack's terrain pipelines read them
+    /// with (`looks`), made for the first pack that reads them.
+    look_groups: Option<looks::LookGroups>,
+    looks_layout: Option<wgpu::BindGroupLayout>,
     /// The terrain's acceleration structures, with ray tracing on (`ray_scene`).
     ray_scene: Option<surface_setup::ray_query::ray_scene::RayScene>,
     /// The compact layout is allowed (`HORIZON_PACKED_QUADS`, `set_packed_layout`).
@@ -4868,6 +4882,7 @@ impl Renderer {
             last_encode: std::time::Duration::ZERO,
             window,
             ray_scene: surface_setup::ray_query::ray_scene::RayScene::forced(&device),
+            looks_layout: None,
             device,
             reuse,
             queue: submit::Queue::new(queue, submit::wanted()),
@@ -4880,6 +4895,8 @@ impl Renderer {
             translucent,
             flat_on: flat.is_some(),
             packed_quads,
+            terrain_looks: false,
+            look_groups: None,
             packed_on: packed_wanted(),
             cull_on: cull.is_some(),
             sides_on: true,
@@ -5798,6 +5815,33 @@ impl Renderer {
                     &mesh.translucent_sources,
                 );
         }
+        if self.terrain_looks {
+            // One look a slot: a record's, or each of a quad's four vertices'.
+            let slots = |looks: &[crate::mesher::QuadLook], packed: bool, slots: u64| {
+                let mut out = Vec::new();
+                if !looks.is_empty() {
+                    match packed {
+                        true => out.extend_from_slice(looks),
+                        false => out.extend(looks.iter().flat_map(|&l| [l; 4])),
+                    }
+                    out.resize(slots as usize, crate::mesher::QuadLook::default());
+                }
+                out
+            };
+            let uploads = &mut self.section_uploads;
+            let looks = slots(&mesh.solid_looks, packed, solid_slots);
+            (self.arena).write_looks(encoder, uploads, page, start, solid_slots, &looks);
+            let looks = slots(&mesh.translucent_looks, false, translucent_vertices);
+            let (at_page, at) = translucent_at;
+            (self.translucent_arena.as_ref().unwrap_or(&self.arena)).write_looks(
+                encoder,
+                uploads,
+                at_page,
+                at,
+                translucent_vertices,
+                &looks,
+            );
+        }
         let translucent_arena = self.translucent_arena.as_ref().unwrap_or(&self.arena);
         let solid_bytes: &[u8] = if packed {
             bytemuck::cast_slice(&mesh.packed)
@@ -5914,6 +5958,7 @@ impl Renderer {
             indices: &self.indices,
             flat: self.flat.as_ref(),
             multi_draw: self.multi_draw,
+            looks: self.look_groups.as_ref(),
         };
         lists.draw(pass, indirect, base, first, count, pulled);
     }
@@ -6812,6 +6857,22 @@ impl Renderer {
             _ => None,
         }
     }
+    /// Whether the running Horizon pack reads the terrain's own inputs (`Report::looks`).
+    pub fn native_looks(&self) -> bool {
+        self.native.as_ref().is_some_and(|pack| pack.looks)
+    }
+    /// Sections uploaded from now on carry their quads' looks (`on`), or none; the arenas'
+    /// pages get or lose their buffers of looks. The game meshes the world again.
+    pub(in crate::gfx) fn set_terrain_looks(&mut self, on: bool) {
+        self.terrain_looks = on;
+        self.look_groups = (self.looks_layout.clone())
+            .filter(|_| on)
+            .map(|layout| looks::LookGroups::new(&self.device, layout));
+        self.arena.set_looks(&self.device, on);
+        if let Some(arena) = &mut self.translucent_arena {
+            arena.set_looks(&self.device, on);
+        }
+    }
     /// The running Horizon pack's name, from its manifest.
     pub fn native_pack_name(&self) -> Option<&str> {
         self.native.as_ref().map(|pack| pack.name.as_str())
@@ -7021,6 +7082,9 @@ impl Renderer {
             self.replace_native(None);
             return Ok(Vec::new());
         };
+        if report.looks() && self.looks_layout.is_none() {
+            self.looks_layout = Some(looks::layout(&self.device));
+        }
         let terrain = native_material::TerrainShape {
             globals: &self.terrain_layout,
             flat: self.flat.as_ref().map(|f| &f.draw_layout),
@@ -7034,6 +7098,7 @@ impl Renderer {
             retained_entities: &self.static_entity_pipeline.get_bind_group_layout(1),
             weather_groups: [&self.weather.entity_layout, &self.weather.time_layout],
             pbr: self.pbr_maps.as_ref().and_then(|arrays| arrays.first()),
+            looks: self.looks_layout.as_ref().filter(|_| report.looks()),
         };
         let (pack, labels) = native_pack::NativePack::new(
             &self.device,
@@ -9451,11 +9516,15 @@ impl Renderer {
             _ => false,
         };
         // Each page's group binds the page for the solid draws, flat or not.
+        if let Some(looks) = &mut self.look_groups {
+            looks.refresh(&self.device, &self.arena, self.translucent_arena.as_ref());
+        }
         if let Some(flat) = &mut self.flat {
             let arena = &self.arena;
             flat.bind_pages(&self.device, |page| {
                 arena.has_page(page).then(|| arena.buffer(page))
             });
+            flat.bind_looks(self.look_groups.as_ref());
         }
         if flat_frame {
             section_draw_calls = self.flat.as_ref().map_or(0, |f| f.shadow_calls[0]);
@@ -9680,6 +9749,7 @@ impl Renderer {
                     indices: &self.indices,
                     flat: self.flat.as_ref(),
                     multi_draw: self.multi_draw,
+                    looks: self.look_groups.as_ref(),
                 },
                 flat_frame,
                 instances: &self.instances,
@@ -10274,7 +10344,13 @@ impl Renderer {
                                 pass.set_pipeline(pipeline);
                                 // GPU culling's draws first, all within the render distance.
                                 if let Some(gpu) = gpu {
-                                    gpu.draw(&mut pass, &self.arena, page_group, 0);
+                                    gpu.draw(
+                                        &mut pass,
+                                        &self.arena,
+                                        page_group,
+                                        0,
+                                        self.look_groups.as_ref(),
+                                    );
                                     pass.set_vertex_buffer(1, self.instances.slice(..));
                                 }
                                 if !occluding {
@@ -10321,7 +10397,13 @@ impl Renderer {
                                 pass.stage(self.own_timing.as_mut(), "solid terrain phase 2");
                                 for (pipeline, draws, _) in passes {
                                     pass.set_pipeline(pipeline);
-                                    gpu.draw(&mut pass, &self.arena, page_group, 1);
+                                    gpu.draw(
+                                        &mut pass,
+                                        &self.arena,
+                                        page_group,
+                                        1,
+                                        self.look_groups.as_ref(),
+                                    );
                                     pass.set_vertex_buffer(1, self.instances.slice(..));
                                     self.draw_sections_from(
                                         &mut pass,

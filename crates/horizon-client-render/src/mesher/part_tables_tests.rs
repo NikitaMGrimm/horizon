@@ -84,7 +84,7 @@ fn faces(tables: &MeshTables, parts: &PartTables) -> [Vec<u16>; 6] {
     tesselate(
         tables,
         parts,
-        (false, false, true, false),
+        (false, false, true, false, false),
         &pad,
         0x3F76E4,
         &mut mesh,

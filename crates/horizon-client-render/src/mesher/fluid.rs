@@ -217,7 +217,7 @@ pub(super) fn splits_north_east(nw: f32, ne: f32, sw: f32, se: f32) -> bool {
 pub(super) fn tesselate(
     tables: &MeshTables,
     parts: &PartTables,
-    (nether, shader_pack_lighting, separate_ao, shader_pack): (bool, bool, bool, bool),
+    (nether, shader_pack_lighting, separate_ao, shader_pack, looks): (bool, bool, bool, bool, bool),
     pad: &Padded,
     water_color: u32,
     out: &mut SectionMesh,
@@ -356,20 +356,32 @@ pub(super) fn tesselate(
     } else {
         (tables.lava_still, tables.lava_flow, None)
     };
-    let (target, sprite_layers) = if water {
-        (&mut out.translucent, &mut out.sprite_layers)
+    let (target, target_looks, sprite_layers) = if water {
+        (
+            &mut out.translucent,
+            &mut out.translucent_looks,
+            &mut out.sprite_layers,
+        )
     } else {
-        (&mut out.solid, &mut out.sprite_layers)
+        (&mut out.solid, &mut out.solid_looks, &mut out.sprite_layers)
     };
+    // A fluid gives off its block's light on every face (lava 15, still or flowing).
+    let level = me.emission;
     let mut quad = |v: [([f32; 3], [f32; 2]); 4],
                     layer: u16,
-                    color: u32,
+                    shade: f32,
                     light: u16,
                     back: bool,
                     face: usize| {
         if tables.is_animated(layer) && !sprite_layers.contains(&layer) {
             sprite_layers.push(layer);
         }
+        if looks {
+            let look = super::QuadLook::new(tint, shade, face as u32, [1.0; 4], level);
+            target_looks.resize(target.len() / 4, super::QuadLook::default());
+            target_looks.extend(std::iter::repeat_n(look, 1 + usize::from(back)));
+        }
+        let color = color(shade);
         let color = if separate_ao {
             color
         } else {
@@ -432,7 +444,7 @@ pub(super) fn tesselate(
         quad(
             corners,
             layer,
-            color(cardinal(D::Up)),
+            cardinal(D::Up),
             light(0),
             backward,
             Direction::Up as usize,
@@ -448,7 +460,7 @@ pub(super) fn tesselate(
                 ([fx, y0, fz + 1.0], [0.0, 1.0]),
             ],
             still,
-            color(cardinal(D::Down)),
+            cardinal(D::Down),
             light(-UP),
             false,
             Direction::Down as usize,
@@ -508,7 +520,7 @@ pub(super) fn tesselate(
                 ([x0, fy + bottom, z0], [0.0, 0.5]),
             ],
             layer,
-            color(up_shade * side),
+            up_shade * side,
             side_light,
             !is_overlay,
             d as usize,
@@ -605,7 +617,7 @@ mod tests {
             tesselate(
                 &tables,
                 &PartTables::NONE,
-                (false, false, true, false),
+                (false, false, true, false, false),
                 &pad,
                 0x00FF00,
                 &mut mesh,
@@ -640,7 +652,7 @@ mod tests {
         tesselate(
             &tables,
             &PartTables::NONE,
-            (false, false, true, false),
+            (false, false, true, false, false),
             &pad,
             0x00FF00,
             &mut mesh,

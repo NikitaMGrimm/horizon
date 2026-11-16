@@ -48,6 +48,8 @@ struct Paint {
     light: u16,
     color: u32,
     translucent: bool,
+    /// The quad's `QuadLook`'s words while the pack reads them (`Mesher::looks`), else zero.
+    look: [u32; 3],
 }
 #[derive(Clone, Copy)]
 struct Material {
@@ -58,6 +60,9 @@ struct Material {
 #[derive(Default)]
 pub(super) struct Mesher {
     styles: FxHashMap<(BlockStateId, u8), Styles>,
+    /// Whether quads get their looks (`crate::mesher::QuadLook`), as the section mesher's
+    /// `looks`: 0 not, 1 with the Overworld's face shades, 2 with the Nether's.
+    pub(super) looks: u8,
 }
 impl Mesher {
     pub(super) fn mesh(
@@ -192,6 +197,7 @@ impl Mesher {
                 }
             });
         let biome = context.biomes.get(span.biome);
+        let looks = self.looks;
         let shade = match direction {
             Direction::Up => 1.0,
             Direction::Down => 0.5,
@@ -214,7 +220,19 @@ impl Mesher {
                         Tint::Constant(color) => color,
                     };
                     let channel = |shift: u32| (((rgb >> shift) & 255u32) as f32 * shade) as u32;
+                    // The colour keeps the Overworld's shades in every dimension; a shader pack's
+                    // `shade` is the dimension's.
+                    let look = match looks {
+                        0 => [0; 3],
+                        _ => {
+                            let level = context.tables.facts(span.state).map_or(0, |f| f.emission);
+                            let shade = crate::mesher::cardinal_shade(looks == 2, direction);
+                            let face = direction as u32;
+                            crate::mesher::QuadLook::new(rgb, shade, face, [1.0; 4], level).0
+                        }
+                    };
                     Paint {
+                        look,
                         layer: face.layer,
                         light: span.light,
                         // The HDR tier, as the section mesher writes it, so a light source
@@ -256,6 +274,7 @@ struct FaceKey {
     light: u16,
     color: u32,
     translucent: bool,
+    look: [u32; 3],
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Rect {
@@ -284,6 +303,7 @@ fn add_face(faces: &mut Faces, direction: Direction, plane: f32, rect: Rect, mat
                 light: paint.light,
                 color,
                 translucent: paint.translucent,
+                look: paint.look,
             })
             .or_default()
             .push(rect);
@@ -759,6 +779,7 @@ mod refinement_tests {
                         light: 240,
                         color: u32::MAX,
                         translucent: false,
+                        look: [0; 3],
                     }),
                     None,
                 ],
@@ -846,6 +867,7 @@ mod refinement_tests {
                             light: 240,
                             color: u32::MAX,
                             translucent: false,
+                            look: [0; 3],
                         }),
                         None,
                     ],
@@ -1178,6 +1200,14 @@ fn emit_quad(mesh: &mut SectionMesh, key: FaceKey, rect: Rect, uv_scale: f32) {
     ) {
         points.reverse()
     }
+    if key.look != [0; 3] {
+        let (looks, quads) = match key.translucent {
+            true => (&mut mesh.translucent_looks, mesh.translucent.len() / 4),
+            false => (&mut mesh.solid_looks, mesh.solid.len() / 4),
+        };
+        looks.resize(quads, crate::mesher::QuadLook::default());
+        looks.push(crate::mesher::QuadLook(key.look));
+    }
     let out = if key.translucent {
         &mut mesh.translucent
     } else {
@@ -1241,6 +1271,7 @@ mod tests {
                     light: span.light,
                     color: u32::MAX,
                     translucent: water,
+                    look: [0; 3],
                 }),
                 None,
             ],
@@ -1275,6 +1306,7 @@ mod tests {
             light: 0,
             color: 0,
             translucent: false,
+            look: [0; 3],
         };
         emit(
             &mut mesh,
@@ -1353,6 +1385,7 @@ mod tests {
             light: 0,
             color: 0,
             translucent: false,
+            look: [0; 3],
         };
         let size = 4_194_304.0;
         emit(

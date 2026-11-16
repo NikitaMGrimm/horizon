@@ -82,11 +82,16 @@ impl FreeList {
     }
 }
 
+/// Bytes of one slot's `mesher::QuadLook`.
+pub(super) const LOOK_BYTES: u64 = 12;
+
 /// One vertex buffer of the arena; only the newest page grows.
 struct Page {
     buffer: wgpu::Buffer,
     /// Optional shader-pack source records, indexed by the vertex index / 4.
     sources: Option<wgpu::Buffer>,
+    /// A 0.2 shader pack's quad looks (`mesher::QuadLook`), one a slot, while it reads them.
+    looks: Option<wgpu::Buffer>,
     /// Capacity in vertices.
     capacity: u64,
     free: FreeList,
@@ -122,6 +127,7 @@ pub struct Arena {
     /// A page had to go to system memory (logged once).
     spilled: bool,
     sources_enabled: bool,
+    looks_enabled: bool,
     /// Tests: GPU-local pages fail as if video memory were full.
     #[cfg(test)]
     video_memory_full: bool,
@@ -209,6 +215,7 @@ impl Arena {
             closing: None,
             spilled: false,
             sources_enabled: false,
+            looks_enabled: false,
             #[cfg(test)]
             video_memory_full: false,
         }
@@ -261,7 +268,10 @@ impl Arena {
         self.pages
             .iter()
             .flatten()
-            .map(|p| p.capacity * self.stride + p.sources.as_ref().map_or(0, wgpu::Buffer::size))
+            .map(|p| {
+                let size = |b: &Option<wgpu::Buffer>| b.as_ref().map_or(0, wgpu::Buffer::size);
+                p.capacity * self.stride + size(&p.sources) + size(&p.looks)
+            })
             .sum()
     }
     /// The most vertices a page holds.
@@ -311,6 +321,66 @@ impl Arena {
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC,
         )
+    }
+
+    /// `page`'s quad looks, while a pack reads them (`set_looks`).
+    pub fn looks(&self, page: u32) -> Option<&wgpu::Buffer> {
+        self.pages[page as usize].as_ref()?.looks.as_ref()
+    }
+
+    /// A page's buffer of looks, while they are on.
+    fn look_buffer(&self, device: &wgpu::Device, capacity: u64) -> Option<wgpu::Buffer> {
+        let bytes = capacity * LOOK_BYTES;
+        if !self.looks_enabled || bytes > device.limits().max_storage_buffer_binding_size {
+            return None;
+        }
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC;
+        try_create(device, "Terrain quad looks", bytes, usage)
+    }
+
+    /// Every page gets a zeroed buffer of looks (`on`), or loses it: what is drawn is meshed
+    /// again either way (`Renderer::set_terrain_looks`).
+    pub fn set_looks(&mut self, device: &wgpu::Device, on: bool) {
+        self.looks_enabled = on;
+        let capacities: Vec<_> = self.pages.iter().flatten().map(|p| p.capacity).collect();
+        let looks: Vec<_> = capacities
+            .into_iter()
+            .map(|c| self.look_buffer(device, c))
+            .collect();
+        for (page, looks) in self.pages.iter_mut().flatten().zip(looks) {
+            page.looks = looks;
+        }
+    }
+
+    /// Writes `looks`, one a slot of the range at `start`, into `page`'s looks; a range without
+    /// them is cleared, so a recycled one never keeps another mesh's (zero: no look).
+    pub fn write_looks(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        uploads: &mut super::upload::Uploads,
+        page: u32,
+        start: u64,
+        slots: u64,
+        looks: &[crate::mesher::QuadLook],
+    ) {
+        let Some(buffer) = self.looks(page) else {
+            return;
+        };
+        if slots == 0 {
+            return;
+        }
+        if looks.len() as u64 == slots {
+            uploads.buffer(
+                encoder,
+                buffer,
+                start * LOOK_BYTES,
+                bytemuck::cast_slice(looks),
+            );
+        } else {
+            encoder.clear_buffer(buffer, start * LOOK_BYTES, Some(slots * LOOK_BYTES));
+        }
     }
 
     /// Native meshes allocate no sidecar. Once needed, existing pages also get a zeroed
@@ -412,6 +482,7 @@ impl Arena {
                 .sources_enabled
                 .then(|| Self::source_buffer(device, capacity))
                 .flatten(),
+            looks: self.look_buffer(device, capacity),
             capacity,
             free,
             host,
@@ -525,12 +596,14 @@ impl Arena {
             return false;
         };
         let free = FreeList::new(capacity);
+        let looks = self.look_buffer(device, capacity);
         self.pages.push(Some(Page {
             buffer,
             sources: self
                 .sources_enabled
                 .then(|| Self::source_buffer(device, capacity))
                 .flatten(),
+            looks,
             capacity,
             free,
             host,
@@ -576,6 +649,21 @@ impl Arena {
                     ),
                     None => encoder.clear_buffer(to_sources, to.1 / 4 * 8, Some(bytes)),
                 }
+            }
+        }
+        if let Some(to_looks) = self.looks(to.0)
+            && vertices > 0
+        {
+            let (at, bytes) = (to.1 * LOOK_BYTES, vertices * LOOK_BYTES);
+            match self.looks(from.0) {
+                Some(from_looks) => encoder.copy_buffer_to_buffer(
+                    from_looks,
+                    from.1 * LOOK_BYTES,
+                    to_looks,
+                    at,
+                    bytes,
+                ),
+                None => encoder.clear_buffer(to_looks, at, Some(bytes)),
             }
         }
     }
@@ -641,6 +729,7 @@ impl Arena {
             .sources_enabled
             .then(|| Self::source_buffer(device, capacity))
             .flatten();
+        let looks = self.look_buffer(device, capacity);
         let old = self.pages[page].as_mut().expect("live arena page");
         // Copies recorded for the old buffer run before this one.
         encoder.copy_buffer_to_buffer(&old.buffer, 0, &buffer, 0, old.capacity * self.stride);
@@ -648,6 +737,10 @@ impl Arena {
             encoder.copy_buffer_to_buffer(from, 0, to, 0, from.size());
         }
         old.sources = sources;
+        if let (Some(from), Some(to)) = (&old.looks, &looks) {
+            encoder.copy_buffer_to_buffer(from, 0, to, 0, from.size());
+        }
+        old.looks = looks;
         let previous = old.capacity;
         old.buffer = buffer;
         old.host = host;
@@ -1567,6 +1660,7 @@ mod tests {
             let buffer = buffer.clone();
             arena.pages = vec![Some(Page {
                 sources: None,
+                looks: None,
                 buffer,
                 capacity,
                 free,

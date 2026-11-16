@@ -42,6 +42,8 @@ pub struct NativePack {
     pub timing: Option<PassTiming>,
     /// It declares `[ray_tracing]`: the renderer keeps a scene for it (`replace_native`).
     pub traces: bool,
+    /// It reads the terrain's own inputs (`Report::looks`): sections carry their quads' looks.
+    pub looks: bool,
     /// With kept resources, what lets a rebuild keep them (`carry`).
     kept: Option<super::native_post::kept::Signature>,
 }
@@ -254,6 +256,7 @@ impl NativePack {
                     steps,
                     &frame.pbr[0],
                     report.shadow.is_some(),
+                    terrain.looks,
                 )
             });
         let shadow = chosen
@@ -323,6 +326,7 @@ impl NativePack {
             .find(|s| s.kind == StageKind::Weather)
             .map(|s| s.label.clone());
         let has_vertex = report.stages.iter().any(|s| s.kind == StageKind::Vertex);
+        let looks = report.looks();
         let (mut post, others): (Vec<_>, Vec<_>) = report.stages.into_iter().partition(|s| {
             matches!(
                 s.kind,
@@ -411,6 +415,7 @@ impl NativePack {
             particle_lights: report.manifest.particle_lights.clone(),
             light_colors: report.manifest.lights.clone(),
             traces: report.manifest.ray_tracing.is_some(),
+            looks,
             kept,
             frame,
             sky,
@@ -793,6 +798,7 @@ file = \"material.wgsl\"
             retained_entities: empty,
             weather_groups: [empty, empty],
             pbr: None,
+            looks: None,
         }
     }
 

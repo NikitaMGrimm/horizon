@@ -1207,3 +1207,39 @@ fn the_retained_block_entities_store_is_the_layer_s_last_binding() {
     assert_eq!(bindings(ENTITY_SHADOWED), [60, 61, 62, 63]);
     assert_eq!(bindings(SHADOWED), [0u32; 0]);
 }
+
+/// `Report::looks`: a stage reads a field only the terrain's quad looks hold (`tint`, `shade`,
+/// `ao`, `face`, `emission`), by member on the three structs, through a `var` too; the prelude
+/// reads none, nor do an entity stage's `tint` and a pack's own `shade`.
+#[test]
+fn looks_are_read_by_the_terrain_fields_alone() {
+    let dir = |path: &str| Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    let report = |path: &str| check(&Pack::read(&dir(path)).unwrap()).unwrap();
+    for (pack, looks) in [
+        ("packs/golden_hour", false),
+        ("packs/traced_shadows", false),
+        ("packs/traced_water", true),
+        ("tests/samples/entity-stage", false),
+        (
+            "../../tools/fixtures/shaderpacks/frame_identity_terrain",
+            true,
+        ),
+    ] {
+        assert_eq!(report(pack).looks(), looks, "{pack}");
+    }
+    let material = |body: &str| {
+        let mut files = sample().files;
+        let text = format!(
+            "override reflections: bool = true;\nfn material(input: MaterialInput) -> Surface {{\n{body}\n}}\n"
+        );
+        files.insert("material.wgsl".into(), text.into_bytes());
+        check(&Pack::from_files(files).unwrap()).unwrap().looks()
+    };
+    assert!(!material(
+        "    let shade = 0.5;\n    return Surface(input.albedo * shade);"
+    ));
+    assert!(material("    return Surface(input.albedo * input.tint);"));
+    assert!(material(
+        "    var i = input;\n    i.light.x = 1.0;\n    return Surface(vec4(i.emission));"
+    ));
+}
