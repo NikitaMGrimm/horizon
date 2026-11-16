@@ -96,6 +96,41 @@ impl CheckedStage {
         })
     }
 
+    /// Whether a function of the stage, called or not, reads one of `LOOK_FIELDS`: where only
+    /// the terrain's quad looks hold the value, not the vertex.
+    pub fn reads_looks(&self) -> bool {
+        let m = &self.module;
+        let looked = |ty: naga::Handle<naga::Type>, index: u32| {
+            let t = &m.types[ty];
+            let naga::TypeInner::Struct { members, .. } = &t.inner else {
+                return false;
+            };
+            let field = members.get(index as usize).and_then(|f| f.name.as_deref());
+            LOOK_FIELDS.iter().any(|(name, fields)| {
+                t.name.as_deref() == Some(*name) && field.is_some_and(|f| fields.contains(&f))
+            })
+        };
+        let reads = |f: &naga::Function, info: &naga::valid::FunctionInfo| {
+            f.expressions.iter().any(|(_, e)| {
+                let naga::Expression::AccessIndex { base, index } = *e else {
+                    return false;
+                };
+                // The struct, or a pointer to one (a `var`).
+                let ty = match &info[base].ty {
+                    naga::proc::TypeResolution::Handle(ty) => Some(*ty),
+                    naga::proc::TypeResolution::Value(naga::TypeInner::Pointer {
+                        base, ..
+                    }) => Some(*base),
+                    naga::proc::TypeResolution::Value(_) => None,
+                };
+                ty.is_some_and(|ty| looked(ty, index))
+            })
+        };
+        m.functions.iter().any(|(h, f)| reads(f, &self.info[h]))
+            || (m.entry_points.iter().enumerate())
+                .any(|(i, e)| reads(&e.function, self.info.get_entry_point(i)))
+    }
+
     /// Whether the stage's function, or a function it calls, reads the prelude's `global`
     /// (a resource of the stage, such as `reflection`).
     pub fn reads(&self, global: &str) -> bool {
@@ -115,6 +150,17 @@ impl CheckedStage {
     }
 }
 
+/// The fields of the terrain's inputs that only its quads' looks hold, by struct: the vertex
+/// holds their product (`shaded_tint`).
+const LOOK_FIELDS: [(&str, &[&str]); 3] = [
+    (
+        "MaterialInput",
+        &["tint", "shade", "ao", "face", "emission"],
+    ),
+    ("VertexInput", &["tint", "shade", "ao", "face"]),
+    ("RayHit", &["tint", "shade", "ao", "emission"]),
+];
+
 #[derive(Debug)]
 pub struct Report {
     pub stages: Vec<CheckedStage>,
@@ -131,6 +177,15 @@ pub struct Report {
     pub textures: Vec<(crate::manifest::PackTexture, Image)>,
     /// The manifest the stages were checked against.
     pub manifest: crate::manifest::Manifest,
+}
+
+impl Report {
+    /// Whether the pack reads the terrain's own inputs, which the vertex doesn't hold: a stage
+    /// reads one of `LOOK_FIELDS` (`CheckedStage::reads_looks`) or `shadow_color`: what needs
+    /// the renderer's sections to carry their quads' looks.
+    pub fn looks(&self) -> bool {
+        (self.stages.iter()).any(|s| s.reads_looks() || s.reads("shadow_color"))
+    }
 }
 
 #[derive(Clone, Debug)]
