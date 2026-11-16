@@ -188,7 +188,7 @@ fn vanilla_fog(position: vec3<f32>) -> f32 {
 }
 ";
 
-const POST_RESOURCES: [Resource; 12] = [
+const POST_RESOURCES: [Resource; 11] = [
     FRAME,
     Resource {
         binding: 1,
@@ -212,12 +212,6 @@ const POST_RESOURCES: [Resource; 12] = [
     NEAREST_SAMPLER,
     shadow_map(6),
     shadow_sampler(7),
-    Resource {
-        binding: 8,
-        name: "history",
-        ty: "var history: texture_2d<f32>",
-        doc: "Last frame's input to the last pass (what the pass before it wrote), for temporal passes (TAA, denoising): put such a pass second to last and it reads its own previous output; reproject with `frame.previous_view_projection`. Black on the first frame, after a gap of over half a second, and with a single pass.",
-    },
     shadow_map_translucent(9),
     shadow_color(10),
     Resource {
@@ -1211,14 +1205,14 @@ struct HorizonEntityIn {
     @location(5) world: vec3<f32>,
     @location(6) light: vec2<f32>,
     @location(7) uv: vec2<f32>,
-    @location(8) @interpolate(flat) emission: f32,
+    @location(8) @interpolate(flat) full_light: u32,
     @location(9) @interpolate(flat) kind: u32,
     @location(10) @interpolate(flat) translucent: u32,
 }
 @fragment fn horizon_fs_entity(in: HorizonEntityIn) -> @location(0) vec4<f32> {
     let input = EntityInput(horizon_decode_rgba(in.albedo), horizon_decode_rgba(in.tint),
         horizon_decode_rgba(in.overlay), horizon_decode(in.lightmap), horizon_decode(vec3<f32>(in.shade)).x,
-        in.world, in.emission, horizon_entity_normal(in.world), in.kind, vec3<f32>(0.0),
+        in.world, in.full_light != 0u, horizon_entity_normal(in.world), in.kind, vec3<f32>(0.0),
         in.translucent != 0u, in.light, in.uv, in.position.xy / frame.resolution);
     return horizon_encode_rgba(entity(input).color);
 }
@@ -1329,7 +1323,7 @@ impl StageKind {
     /// before-world stage that calls none of the trace functions is built as it was before
     /// them. `kept`: the frame's epochs, for a pack with `[[resource]]`. With `entities` (the
     /// pack's files name `RAY_ENTITY`) the trace functions have the entity layer too. `fog`:
-    /// the frame's fog distances and `vanilla_fog`, for a pack with `[frame] fog = "pack"`.
+    /// `vanilla_fog`, for a pack with `[frame] fog = "pack"`.
     /// `shaded`: `SHADED_TINT` last in the terrain's inputs and `RayHit`, for a pack whose files
     /// name it.
     fn prelude_rays(
@@ -1351,7 +1345,7 @@ impl StageKind {
             crate::API,
             crate::reference::PATH
         );
-        out += &Frame::declared_wgsl(tracing != Tracing::None, kept, fog);
+        out += &Frame::declared_wgsl(tracing != Tracing::None, kept);
         if kept {
             out += &crate::kept::reasons_wgsl();
         }

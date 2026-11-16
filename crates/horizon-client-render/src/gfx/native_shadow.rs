@@ -396,12 +396,12 @@ pub struct NativeShadow {
     pub displaced: Option<wgpu::RenderPipeline>,
 }
 
-/// The entity draw's shader. Like the terrain's (`shader_source`), it declares `Frame` without
-/// the fields only a `[frame] fog = "pack"` prelude has.
+/// The entity draw's shader. Like the terrain's (`shader_source`), it declares the whole
+/// `Frame`.
 fn entity_source() -> String {
     format!(
         "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{ENTITY_ENTRIES}",
-        FrameInputs::declared_wgsl(true, true, false),
+        FrameInputs::declared_wgsl(true, true),
         horizon_shader_api::stages::SHADOW_HELPERS,
     )
 }
@@ -517,7 +517,7 @@ fn shader_source(
         (None, None) => (
             format!(
                 "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{UNTAKEN}",
-                FrameInputs::declared_wgsl(true, true, false),
+                FrameInputs::declared_wgsl(true, true),
                 horizon_shader_api::stages::SHADOW_HELPERS,
             ),
             super::native_material::DISPLACE_VANILLA,
@@ -911,15 +911,15 @@ mod tests {
         }
     }
 
-    /// The shadow shaders declare the frame as before `[frame] fog`, whose fields no shadow
-    /// reads: the SHA-256 of `Frame` then, so every pack's shadow pass is the same WGSL.
+    /// The shadow shaders declare the whole frame, whatever the pack's keys: the SHA-256 of
+    /// `Frame`'s WGSL, so every pack's shadow pass is the same WGSL.
     #[test]
     fn the_shadow_shaders_declare_the_frame_as_before() {
         use sha2::{Digest, Sha256};
-        let frame = FrameInputs::declared_wgsl(true, true, false);
+        let frame = FrameInputs::declared_wgsl(true, true);
         assert_eq!(
             format!("{:x}", Sha256::digest(&frame)),
-            "9218b8f0da2c1af28ace7bc402e44701448011acee478c9cef34277b2ab5e034"
+            "88afec7c6709091383bffd26f431131ac68e2f6fd5d1079dd7febb591209211a"
         );
         assert!(entity_source().starts_with(&frame));
         let solid = shader_source(&shadow_solid(&[], &[7]), None, &[], None);

@@ -257,7 +257,6 @@ fn frame(
         world,
         &view,
         [4, 4],
-        false,
         None,
         scene,
     );
@@ -396,8 +395,7 @@ fn a_kept_post_pass_reads_its_previous_and_traces() {
 /// frames: three with a scene, two with another (a TLAS regrown). A `[ray_tracing]` pack without
 /// kept resources makes what it made before them: the frame's layout, the chain's and the one
 /// with the scene; its passes' pipelines twice, the decode's and the tonemap's; its groups (a
-/// pass's and the tonemap's) on the first frame, again on the second, whose history is no longer
-/// blank, and again for the other scene. One that keeps resources and traces from a
+/// pass's and the tonemap's) on the first frame, and again for the other scene. One that keeps resources and traces from a
 /// `[[before_world]]` pass and a compute pass makes a layout a pass, each again with the scene,
 /// and its groups for both parities once, then once for the other scene. Nothing else, ever.
 #[test]
@@ -438,7 +436,7 @@ fn a_traced_pack_makes_its_layouts_and_groups_once() {
                 .post
                 .groups
                 .iter()
-                .flat_map(|(_, _, g)| g.iter().cloned());
+                .flat_map(|(_, g)| g.iter().cloned());
             let worlds = pack.post.kept.iter().flat_map(|k| k.worlds.iter().cloned());
             held.extend(chain.chain(worlds));
             counts.push(count()?);
@@ -472,7 +470,7 @@ fn a_traced_pack_makes_its_layouts_and_groups_once() {
         [
             [3, 1, 6, 0],
             [0, 3, 0, 0],
-            [0, 3, 0, 0],
+            [0, 0, 0, 0],
             [0, 0, 0, 0],
             [0, 3, 0, 0],
             [0, 0, 0, 0]

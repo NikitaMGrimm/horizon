@@ -547,7 +547,7 @@ fn the_entity_stage_is_checked_like_the_material_s() {
                let tinted = textureLoad(shadow_color, vec2<i32>(p.xy * vec2<f32>(textureDimensions(shadow_color))), 0);\n    \
                let lamp = block_light_color(input.position);\n    \
                let facing = max(dot(input.normal, frame.light_direction), 0.0) * input.shade;\n    \
-               var light = input.lightmap * (1.0 + input.emission) + lamp.rgb * lamp.a * input.light.x;\n    \
+               var light = input.lightmap * (1.0 + f32(input.full_light)) + lamp.rgb * lamp.a * input.light.x;\n    \
                light += input.colored_light + sun * through * tinted.rgb * facing * f32(frame.has_shadow);\n    \
                if input.kind == 4u || input.translucent { light *= 0.5 + input.uv.x * input.screen.y; }\n    \
                let base = mix(input.albedo.rgb * input.tint.rgb, input.overlay.rgb, input.overlay.a);\n    \
@@ -605,7 +605,7 @@ fn the_entity_stage_is_checked_like_the_material_s() {
     // `EntityInput` may gain fields: read, not constructed.
     let built = "fn entity(input: EntityInput) -> Surface {\n    \
                  let again = EntityInput(input.albedo, input.tint, input.overlay, input.lightmap, input.shade, \
-                 input.position, input.emission, input.normal, input.kind, input.colored_light, \
+                 input.position, input.full_light, input.normal, input.kind, input.colored_light, \
                  input.translucent, input.light, input.uv, input.screen);\n    \
                  return Surface(again.albedo);\n}\n";
     let p = entity_pack(built).expect_err("should fail");
@@ -1003,7 +1003,7 @@ fn a_material_stage_that_doesn_t_trace_is_built_as_before() {
     let report = traced_material(quiet, "", &[]).unwrap();
     assert!(report.stages[0].scene.is_none() && report.stages[0].scene_source.is_none());
     // Its composition before `trace` reached the material stage, from the same pack with a
-    // post pass (which `[ray_tracing]` needed then).
+    // post pass (which `[ray_tracing]` needed then), but for the frame's fog fields since.
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
                     [material]\nfile = \"material.wgsl\"\n[[post]]\nfile = \"post.wgsl\"\n\
                     [tonemap]\nfile = \"tonemap.wgsl\"\n[ray_tracing]\n";
@@ -1019,7 +1019,7 @@ fn a_material_stage_that_doesn_t_trace_is_built_as_before() {
     let composed = horizon_shader_api::compose(&pack, StageKind::Material, "material.wgsl");
     assert_eq!(
         horizon_shader_api::package::sha256_hex(composed.text.as_bytes()),
-        "a8df6b5822f7cb911604859061d438ea45924677ff146376e249e7f2e38768d3"
+        "b60d3c32cdaa469cdff8b8b746769b88229fbd0ad0cc89a757a17b3d51cf1b49"
     );
     // Without the key `trace` is the pack's own name, in the material stage too.
     let own = "fn trace(c: vec4<f32>) -> vec4<f32> { return c; }\n\
@@ -1146,7 +1146,8 @@ fn the_entity_layer_is_the_pack_s_that_names_it() {
 
 /// A traced pack whose files don't name `RAY_ENTITY` composes as it did before the entity layer,
 /// byte for byte, with the scene and without it: the hashes are those of its post and material
-/// stages composed before.
+/// stages composed before, but for what changed for every pack since (the frame's fog fields,
+/// `history`, `RayHit`'s fields).
 #[test]
 fn a_traced_pack_that_doesn_t_name_ray_entity_composes_as_before() {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
@@ -1176,10 +1177,10 @@ fn a_traced_pack_that_doesn_t_name_ray_entity_composes_as_before() {
     assert_eq!(
         hashes,
         [
-            "98798d371e540aa157b5e297d13f4cb26d033cd20fa4d7e0d4812532a3929da1",
-            "38e22f3422efecd68b09c7156406fbbe2a44c11962bc012740bba3b418453505",
-            "97d863f6ab2d52d7b3d7acf56804fc84762007df473b0a9217ae1a52722e0756",
-            "3d90723593cdcf680d2cc479b8eedaafd394a7acdbfc58a9c4c5c4761692e876",
+            "1af2ec758e6f343986c676a7df695a1bf820ac9f498840422bbb8ef72df65cc4",
+            "05d4cc7ba11791f4f6b8ff3acdbe1f422747f8360de29064b9ad6e48cb33ee70",
+            "e646501b8bcd9097579a8bcb14e11710439d85617dfc61b044bde4e0490c8681",
+            "f7e7650f346bb7e551dbdbd6f40d4ee2ca0d7c1a52ddde63ee37f4a754073412",
         ]
     );
 }
