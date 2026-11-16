@@ -1374,10 +1374,8 @@ pub struct Renderer {
     /// passes read the arena themselves (`flat`) and no shader pack reads it as vertices.
     packed_quads: bool,
     /// The running 0.2 pack's terrain pipelines take the quads' looks (`looks::wanted`):
-    /// sections upload them (`follow_terrain_looks`), and `looks_epoch` names the arenas'
-    /// buffers of looks they were made with (`looks::epoch`).
+    /// sections upload them (`follow_terrain_looks`).
     terrain_looks: bool,
-    looks_epoch: u64,
     /// Their groups, while they are on, and the layout the pack's terrain pipelines read them
     /// with (`looks`), made for the first pack that takes them.
     look_groups: Option<looks::LookGroups>,
@@ -4902,7 +4900,6 @@ impl Renderer {
             flat_on: flat.is_some(),
             packed_quads,
             terrain_looks: false,
-            looks_epoch: 0,
             look_groups: None,
             packed_on: packed_wanted(),
             cull_on: cull.is_some(),
@@ -6858,11 +6855,12 @@ impl Renderer {
     fn native_looks(&self) -> bool {
         self.native.as_ref().is_some_and(|pack| pack.looks)
     }
-    /// Whether sections carry their quads' looks, and the buffers of looks the arenas hold
-    /// them in, which change (across renderers too) only when they are made again empty or
-    /// dropped: the game meshes the world again when either changes.
-    pub fn terrain_looks(&self) -> (bool, u64) {
-        (self.terrain_looks, self.looks_epoch)
+    /// Whether sections carry their quads' looks: the game meshes the world again when it
+    /// changes. Their buffers are made empty or dropped only then; a renderer that takes the
+    /// world (`take_world`) takes them with it, and one that doesn't starts without looks, with
+    /// every section meshed again.
+    pub fn terrain_looks(&self) -> bool {
+        self.terrain_looks
     }
     /// Before a world frame, the arenas' looks follow the pack that runs: a pack replaced by
     /// another that takes them too (the picker drops one and loads the other in a frame) leaves
@@ -6874,20 +6872,32 @@ impl Renderer {
         }
     }
     /// Sections uploaded from now on carry their quads' looks (`on`), or none; the arenas'
-    /// pages get or lose their buffers of looks. The game meshes the world again.
+    /// pages get or lose their buffers of looks. The game meshes the world again. Where an
+    /// arena's pages no longer hold (`Arena::set_looks`: their most changes, as a translucent
+    /// page's does with looks, or a page got no looks), every section goes now, as on a change
+    /// of layout, and new pages keep to the limit.
     fn set_terrain_looks(&mut self, on: bool) {
         log::info!(
             "Horizon renderer: terrain quad looks {}",
             if on { "on" } else { "off" }
         );
         self.terrain_looks = on;
-        self.looks_epoch = looks::epoch();
         self.look_groups = (self.looks_layout.clone())
             .filter(|_| on)
             .map(|layout| looks::LookGroups::new(&self.device, layout));
-        self.arena.set_looks(&self.device, on);
+        let mut holds = self.arena.set_looks(&self.device, on);
         if let Some(arena) = &mut self.translucent_arena {
-            arena.set_looks(&self.device, on);
+            holds &= arena.set_looks(&self.device, on);
+        }
+        if !holds {
+            self.sections_dropped |=
+                self.sections.len() > 0 || !self.lods.is_empty() || self.lod_pending.is_some();
+            self.clear_sections(self.layout);
+            // Flat draws size a translucent page's table by it when they make the table: it
+            // changes with `clear_sections`, which drops the tables.
+            if let (Some(flat), Some(arena)) = (&mut self.flat, &self.translucent_arena) {
+                flat.set_translucent_page_vertices(arena.page_vertices());
+            }
         }
     }
     /// The running Horizon pack's name, from its manifest.

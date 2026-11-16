@@ -32,13 +32,6 @@ pub fn wanted(adapter: &wgpu::Adapter) -> bool {
     bound
 }
 
-/// A name for buffers of looks made again empty, or dropped, unique in the process: the game
-/// compares it from one renderer to the next (`Renderer::terrain_looks`).
-pub fn epoch() -> u64 {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
 /// The looks as the material and shadow wrappers read them: `horizon_look(slot)`, a slot's
 /// three words (`mesher::QuadLook`), zero past the buffer.
 pub const LOOK_WGSL: &str = "
@@ -187,6 +180,13 @@ pub struct PartLooks {
 
 #[cfg(any(test, feature = "test-support"))]
 impl super::Renderer {
+    /// `slots` stands in for the device's limit on the slots of a translucent page with looks
+    /// (`Arena::set_looks`): the only arena whose pages may be past the real one.
+    pub fn limit_translucent_look_pages(&mut self, slots: u64) {
+        if let Some(arena) = &mut self.translucent_arena {
+            arena.limit_looks(slots);
+        }
+    }
     /// Section `key`'s looks, solid then translucent, read back from its arenas, beside its
     /// mesh's as handed over (`keep_capture_copies` on before it was uploaded), and whether
     /// translucent quads have an arena of their own.
