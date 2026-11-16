@@ -32,13 +32,6 @@ pub fn wanted(adapter: &wgpu::Adapter) -> bool {
     bound
 }
 
-/// A name for buffers of looks made again empty, or dropped, unique in the process: the game
-/// compares it from one renderer to the next (`Renderer::terrain_looks`).
-pub fn epoch() -> u64 {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
 /// The looks as the material and shadow wrappers read them: `horizon_look(slot)`, a slot's
 /// three words (`mesher::QuadLook`), zero past the buffer.
 pub const LOOK_WGSL: &str = "

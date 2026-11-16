@@ -1374,10 +1374,8 @@ pub struct Renderer {
     /// passes read the arena themselves (`flat`) and no shader pack reads it as vertices.
     packed_quads: bool,
     /// The running 0.2 pack's terrain pipelines take the quads' looks (`looks::wanted`):
-    /// sections upload them (`follow_terrain_looks`), and `looks_epoch` names the arenas'
-    /// buffers of looks they were made with (`looks::epoch`).
+    /// sections upload them (`follow_terrain_looks`).
     terrain_looks: bool,
-    looks_epoch: u64,
     /// Their groups, while they are on, and the layout the pack's terrain pipelines read them
     /// with (`looks`), made for the first pack that takes them.
     look_groups: Option<looks::LookGroups>,
@@ -4902,7 +4900,6 @@ impl Renderer {
             flat_on: flat.is_some(),
             packed_quads,
             terrain_looks: false,
-            looks_epoch: 0,
             look_groups: None,
             packed_on: packed_wanted(),
             cull_on: cull.is_some(),
@@ -6858,11 +6855,12 @@ impl Renderer {
     fn native_looks(&self) -> bool {
         self.native.as_ref().is_some_and(|pack| pack.looks)
     }
-    /// Whether sections carry their quads' looks, and the buffers of looks the arenas hold
-    /// them in, which change (across renderers too) only when they are made again empty or
-    /// dropped: the game meshes the world again when either changes.
-    pub fn terrain_looks(&self) -> (bool, u64) {
-        (self.terrain_looks, self.looks_epoch)
+    /// Whether sections carry their quads' looks: the game meshes the world again when it
+    /// changes. Their buffers are made empty or dropped only then; a renderer that takes the
+    /// world (`take_world`) takes them with it, and one that doesn't starts without looks, with
+    /// every section meshed again.
+    pub fn terrain_looks(&self) -> bool {
+        self.terrain_looks
     }
     /// Before a world frame, the arenas' looks follow the pack that runs: a pack replaced by
     /// another that takes them too (the picker drops one and loads the other in a frame) leaves
@@ -6881,7 +6879,6 @@ impl Renderer {
             if on { "on" } else { "off" }
         );
         self.terrain_looks = on;
-        self.looks_epoch = looks::epoch();
         self.look_groups = (self.looks_layout.clone())
             .filter(|_| on)
             .map(|layout| looks::LookGroups::new(&self.device, layout));

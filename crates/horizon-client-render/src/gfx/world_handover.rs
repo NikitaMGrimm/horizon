@@ -65,7 +65,6 @@ impl Renderer {
             capture_copies,
             // The arenas' pages hold their buffers of looks: their state goes with them.
             terrain_looks,
-            looks_epoch,
             look_groups,
             looks_layout,
         );
