@@ -261,10 +261,16 @@ impl Mods {
     }
 
     /// How well a result runs: a Java mod's from its check once it has one. In a Java
-    /// instance, a result was searched for its version and loader: installing checks the file.
+    /// instance, a result was searched for its version and loader: installing checks the file. A
+    /// registry shader pack with no version for the shader API this launcher serves doesn't run.
     pub(super) fn support(&self, p: &Project) -> Support {
         if self.java_for(p.kind).is_some() {
             return Support::Works;
+        }
+        if p.source == SourceId::Horizon {
+            if let Some(why) = horizon::shader_api_mismatch(&p.id) {
+                return Support::No(why);
+            }
         }
         let metadata = p.support();
         if p.kind != PackKind::Mod || p.source == SourceId::Horizon || !metadata.installable() {

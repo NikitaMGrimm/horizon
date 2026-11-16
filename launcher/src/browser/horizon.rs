@@ -387,8 +387,8 @@ fn project_of(p: &index::Project) -> Option<Project> {
     })
 }
 
-/// Version `v` of `p` as the browser shows it; blocked when taken down, or when it needs a newer
-/// mod API level than `level`, the game's.
+/// Version `v` of `p` as the browser shows it; blocked when taken down, when it needs a newer
+/// mod API level than `level`, the game's, or when it is a shader pack for another shader API.
 fn version_of(
     index: &Index,
     p: &index::Project,
@@ -415,7 +415,8 @@ fn version_of(
             .revoked(&p.id, &v.file.sha256)
             .map(|r| format!("taken down: {}", r.reason))
             .or_else(|| needs_port(v).then(|| NEEDS_PORT.to_string()))
-            .or_else(|| needs_newer(v, level).then(|| NEEDS_NEWER.to_string())),
+            .or_else(|| needs_newer(v, level).then(|| NEEDS_NEWER.to_string()))
+            .or_else(|| index::needs_other_shader_api(p, v).then(|| other_shader_api(&v.api))),
     }
 }
 
@@ -822,10 +823,13 @@ fn fitting<'a>(
     crate::native_fit::best(p, &plays, &pins, |v| usable(index, p, v, level))
 }
 
-/// A version of `p` an install may pick: made for this game, not taken down, and not needing a
-/// newer mod API than `level`.
+/// A version of `p` an install may pick: made for this game, not taken down, not needing a
+/// newer mod API than `level`, and for a shader pack made for this build's shader API.
 fn usable(index: &Index, p: &index::Project, v: &index::Version, level: Option<u32>) -> bool {
-    v.game == GAME && index.revoked(&p.id, &v.file.sha256).is_none() && !needs_newer(v, level)
+    v.game == GAME
+        && index.revoked(&p.id, &v.file.sha256).is_none()
+        && !needs_newer(v, level)
+        && !index::needs_other_shader_api(p, v)
 }
 
 /// How a registry native mod works on `instance`: whether a version of it does, with the line its
@@ -1197,31 +1201,63 @@ pub fn fit_versions(instance: &crate::instances::Instance) -> Vec<String> {
     lines
 }
 
-/// A project's newest version for this game that wasn't taken down and that a game serving mod
-/// API `level` runs (any, when the level isn't known).
+/// A project's newest version for this game that wasn't taken down, that a game serving mod
+/// API `level` runs (any, when the level isn't known), and that is for this build's shader API.
 fn newest<'a>(
     index: &Index,
     p: &'a index::Project,
     level: Option<u32>,
 ) -> Result<&'a index::Version, String> {
-    let (mut taken_down, mut too_new) = (None, false);
+    let (mut taken_down, mut too_new, mut other_api) = (None, false, None);
     for v in p.versions.iter().filter(|v| v.game == GAME) {
         if let Some(r) = index.revoked(&p.id, &v.file.sha256) {
             taken_down.get_or_insert(r);
         } else if needs_newer(v, level) {
             too_new = true;
+        } else if index::needs_other_shader_api(p, v) {
+            other_api.get_or_insert(v.api.as_str());
         } else {
             return Ok(v);
         }
     }
-    Err(match taken_down {
+    Err(match (taken_down, other_api) {
         _ if too_new => format!("{} {NEEDS_NEWER}: update it first.", p.name),
-        Some(r) => format!("{} was taken down: {}", p.name, r.reason),
-        None => format!("{} has no version for {GAME} to install.", p.name),
+        (_, Some(api)) => format!("{} {}.", p.name, other_shader_api(api)),
+        (Some(r), None) => format!("{} was taken down: {}", p.name, r.reason),
+        (None, None) => format!("{} has no version for {GAME} to install.", p.name),
     })
 }
 
 const NEEDS_NEWER: &str = "needs a newer Horizon than the game you play";
+
+/// Why a shader pack made for shader API `api` doesn't run: the game's own words for it
+/// (`horizon_shader_api::Manifest::parse`).
+fn other_shader_api(api: &str) -> String {
+    format!(
+        "needs shader API {api}; this Horizon serves {}",
+        horizon_shader_api::API
+    )
+}
+
+/// Why registry shader pack `id` doesn't run, by the index already read (never the network):
+/// none of its versions for this game is for this build's shader API. None when one is, for
+/// other kinds, and when no index was read.
+pub fn shader_api_mismatch(id: &str) -> Option<String> {
+    shader_api_mismatch_in(known_index().as_deref(), id)
+}
+
+fn shader_api_mismatch_in(index: Option<&Index>, id: &str) -> Option<String> {
+    let p = index?.project(id)?;
+    let mut ours = p.versions.iter().filter(|v| v.game == GAME);
+    let newest = ours.clone().next()?;
+    ours.all(|v| index::needs_other_shader_api(p, v)).then(|| {
+        format!(
+            "Made for shader API {}: this Horizon serves {}.",
+            newest.api,
+            horizon_shader_api::API
+        )
+    })
+}
 const NEEDS_PORT: &str = "needs a native port: Horizon doesn't run WebAssembly mods any more";
 
 /// Whether version `v` is a WebAssembly mod with code: a `.hmod` that may do more than add
