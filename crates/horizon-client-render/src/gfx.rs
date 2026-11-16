@@ -467,6 +467,8 @@ use frame_policy::frame_format;
 use frame_policy::{frame_configuration, hand_depth_store, horizon_tone_curve, overlay_format};
 mod lod;
 mod looks;
+#[cfg(any(test, feature = "test-support"))]
+pub use looks::PartLooks;
 pub mod mod_pipelines;
 pub mod native_entity;
 mod native_material;
@@ -1372,8 +1374,10 @@ pub struct Renderer {
     /// passes read the arena themselves (`flat`) and no shader pack reads it as vertices.
     packed_quads: bool,
     /// The running 0.2 pack's terrain pipelines take the quads' looks (`looks::wanted`):
-    /// sections upload them (`set_terrain_looks`).
+    /// sections upload them (`follow_terrain_looks`), and `looks_epoch` names the arenas'
+    /// buffers of looks they were made with (`looks::epoch`).
     terrain_looks: bool,
+    looks_epoch: u64,
     /// Their groups, while they are on, and the layout the pack's terrain pipelines read them
     /// with (`looks`), made for the first pack that takes them.
     look_groups: Option<looks::LookGroups>,
@@ -4780,6 +4784,8 @@ impl Renderer {
             std::mem::size_of::<TerrainVertex>() as u64,
             flat.is_some(),
             translucent_split(translucent_batching, flat.is_some(), shader_pack, false),
+            // Nor sections with looks (`terrain_looks`).
+            false,
         );
         if let (Some(flat), Some(arena)) = (&mut flat, &translucent_arena) {
             flat.set_translucent_page_vertices(arena.page_vertices());
@@ -4896,6 +4902,7 @@ impl Renderer {
             flat_on: flat.is_some(),
             packed_quads,
             terrain_looks: false,
+            looks_epoch: 0,
             look_groups: None,
             packed_on: packed_wanted(),
             cull_on: cull.is_some(),
@@ -6300,6 +6307,7 @@ impl Renderer {
             std::mem::size_of::<TerrainVertex>() as u64,
             self.flat.is_some(),
             split,
+            self.terrain_looks,
         );
         if let (Some(flat), Some(arena)) = (&mut self.flat, &self.translucent_arena) {
             flat.set_translucent_page_vertices(arena.page_vertices());
@@ -6847,17 +6855,33 @@ impl Renderer {
         }
     }
     /// Whether the running Horizon pack's terrain takes the quads' looks (`looks::wanted`).
-    pub fn native_looks(&self) -> bool {
+    fn native_looks(&self) -> bool {
         self.native.as_ref().is_some_and(|pack| pack.looks)
+    }
+    /// Whether sections carry their quads' looks, and the buffers of looks the arenas hold
+    /// them in, which change (across renderers too) only when they are made again empty or
+    /// dropped: the game meshes the world again when either changes.
+    pub fn terrain_looks(&self) -> (bool, u64) {
+        (self.terrain_looks, self.looks_epoch)
+    }
+    /// Before a world frame, the arenas' looks follow the pack that runs: a pack replaced by
+    /// another that takes them too (the picker drops one and loads the other in a frame) leaves
+    /// them as they are.
+    fn follow_terrain_looks(&mut self) {
+        let want = self.native_looks();
+        if want != self.terrain_looks {
+            self.set_terrain_looks(want);
+        }
     }
     /// Sections uploaded from now on carry their quads' looks (`on`), or none; the arenas'
     /// pages get or lose their buffers of looks. The game meshes the world again.
-    pub(in crate::gfx) fn set_terrain_looks(&mut self, on: bool) {
+    fn set_terrain_looks(&mut self, on: bool) {
         log::info!(
             "Horizon renderer: terrain quad looks {}",
             if on { "on" } else { "off" }
         );
         self.terrain_looks = on;
+        self.looks_epoch = looks::epoch();
         self.look_groups = (self.looks_layout.clone())
             .filter(|_| on)
             .map(|layout| looks::LookGroups::new(&self.device, layout));
@@ -7654,6 +7678,7 @@ impl Renderer {
         // through a pack dropped (Shader Options) or not loaded yet (`Renderer::new`),
         // so the next world's sections, which the level loading screen uploads, stay.
         if !frame.title {
+            self.follow_terrain_looks();
             self.follow_translucent_layout();
             self.follow_packed_layout();
         }

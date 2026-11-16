@@ -300,7 +300,7 @@ pub struct TerrainShape<'a> {
     pub weather_groups: [&'a wgpu::BindGroupLayout; 2],
     /// The resource packs' LabPBR maps (normals, specular), when they ship any.
     pub pbr: Option<&'a [wgpu::Texture; 2]>,
-    /// The arenas' quad looks' group (`looks`), for a pack that reads them (`Report::looks`).
+    /// The arenas' quad looks' group (`looks`), while sections carry them (`looks::wanted`).
     pub looks: Option<&'a wgpu::BindGroupLayout>,
 }
 

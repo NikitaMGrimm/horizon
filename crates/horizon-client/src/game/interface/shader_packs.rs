@@ -333,10 +333,11 @@ impl Game<'_> {
         }
         // A shader API 0.2 pack whose terrain takes the quads' looks (their tint, shade, ambient
         // occlusion, face and light level apart): every quad carries its look, so the world
-        // meshes again once when such a pack starts or stops running, and never otherwise.
-        let looks = self.renderer.as_ref().is_some_and(|r| r.native_looks());
-        if self.streaming.looks != looks {
-            self.streaming.looks = looks;
+        // meshes again once when the renderer's sections start or stop carrying them, or its
+        // buffers of looks are made again empty, and never otherwise.
+        let looks = self.renderer.as_ref().map_or((false, 0), |r| r.terrain_looks());
+        if (self.streaming.looks, self.streaming.looks_epoch) != looks {
+            (self.streaming.looks, self.streaming.looks_epoch) = looks;
             self.all_sections_changed();
         }
         let selected = picked_pack(&self.settings).to_owned();

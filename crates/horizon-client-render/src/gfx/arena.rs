@@ -174,11 +174,13 @@ impl Arena {
     /// (vertices of `stride`) with large pages, which no shader binds;
     /// otherwise translucent quads stay in the section arena. The indices go in
     /// large pages too, unless flat draws (`flat`) bind their pages as storage.
+    /// The translucent arena's pages carry looks where the section arena's do (`looks`).
     pub fn translucent_arenas(
         device: &wgpu::Device,
         stride: u64,
         flat: bool,
         split: bool,
+        looks: bool,
     ) -> (Self, Option<Self>) {
         let indices = if split && !flat {
             Self::translucent_indices(device, 1 << 16)
@@ -187,7 +189,11 @@ impl Arena {
         };
         (
             indices,
-            split.then(|| Self::translucent(device, stride, 1 << 18)),
+            split.then(|| {
+                let mut arena = Self::translucent(device, stride, 1 << 18);
+                arena.set_looks(device, looks);
+                arena
+            }),
         )
     }
     fn with_usage(
@@ -1460,7 +1466,8 @@ mod tests {
             for flat in [false, true] {
                 for split in [false, true] {
                     let case = format!("large {large}, flat {flat}, split {split}");
-                    let (indices, translucent) = Arena::translucent_arenas(device, 24, flat, split);
+                    let (indices, translucent) =
+                        Arena::translucent_arenas(device, 24, flat, split, false);
                     assert_eq!(translucent.is_some(), split, "{case}");
                     let bytes = indices.page_vertices() * 4;
                     let storage = indices.usage.contains(wgpu::BufferUsages::STORAGE);
