@@ -267,12 +267,7 @@ impl Mods {
         if self.java_for(p.kind).is_some() {
             return Support::Works;
         }
-        if p.source == SourceId::Horizon {
-            if let Some(why) = horizon::shader_api_mismatch(&p.id) {
-                return Support::No(why);
-            }
-        }
-        let metadata = p.support();
+        let metadata = horizon::support_of(p);
         if p.kind != PackKind::Mod || p.source == SourceId::Horizon || !metadata.installable() {
             return metadata;
         }

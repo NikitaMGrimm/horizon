@@ -508,6 +508,17 @@ fn shader_packs_for_another_shader_api_are_marked_and_not_installed() {
     );
     let home = scratch("shader-api");
     let project = project_of(p).unwrap();
+    // The card, the CLI and MCP give the same answer.
+    assert_eq!(project.support(), super::super::Support::Works);
+    assert_eq!(
+        support_in(Some(&index), &project),
+        super::super::Support::No("Made for shader API 0.1: this Horizon serves 0.2.".into())
+    );
+    assert_eq!(
+        support_in(None, &project),
+        super::super::Support::Works,
+        "no index read yet"
+    );
     let e = install_from(&index, true, None, &project, &home, &|_, _| {}).unwrap_err();
     assert_eq!(
         e,

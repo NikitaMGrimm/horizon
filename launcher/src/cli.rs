@@ -2378,7 +2378,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             let datapack = kind == Kind::DataPack;
             if as_json {
                 json(found.iter().map(|p| {
-                    let support = p.support();
+                    let support = horizon::support_of(p);
                     serde_json::json!({
                         "id": p.id, "slug": p.slug, "title": p.title, "summary": p.summary,
                         "author": p.author, "downloads": p.downloads, "page": p.page,
@@ -2391,11 +2391,14 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     println!("{}\n", horizon_launcher::browser::datapack_support());
                 }
                 for p in &found {
-                    let support = p.support();
+                    let support = horizon::support_of(p);
                     if p.source == SourceId::Horizon {
                         println!("{}  ({})  {}\n  {}", p.title, p.slug, p.author, p.summary);
                         for line in horizon::trust_and_capabilities(&p.id, instance.as_ref()) {
                             println!("  {line}");
+                        }
+                        if let Some(why) = support.reason() {
+                            println!("  {} · {why}", support.label());
                         }
                         continue;
                     }

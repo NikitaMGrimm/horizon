@@ -1239,13 +1239,22 @@ fn other_shader_api(api: &str) -> String {
     )
 }
 
-/// Why registry shader pack `id` doesn't run, by the index already read (never the network):
-/// none of its versions for this game is for this build's shader API. None when one is, for
-/// other kinds, and when no index was read.
-pub fn shader_api_mismatch(id: &str) -> Option<String> {
-    shader_api_mismatch_in(known_index().as_deref(), id)
+/// How project `p` runs, as the browser, the CLI and MCP say it: [`Project::support`], unless
+/// it is a registry shader pack none of whose versions for this game is for this build's shader
+/// API, by the index already read (never the network).
+pub fn support_of(p: &Project) -> super::Support {
+    support_in(known_index().as_deref(), p)
 }
 
+fn support_in(index: Option<&Index>, p: &Project) -> super::Support {
+    match shader_api_mismatch_in(index, &p.id).filter(|_| p.source == SourceId::Horizon) {
+        Some(why) => super::Support::No(why),
+        None => p.support(),
+    }
+}
+
+/// Why registry shader pack `id` doesn't run ([`support_of`]); None when it does, for other
+/// kinds, and when no index was read.
 fn shader_api_mismatch_in(index: Option<&Index>, id: &str) -> Option<String> {
     let p = index?.project(id)?;
     let mut ours = p.versions.iter().filter(|v| v.game == GAME);
