@@ -41,6 +41,9 @@ class FakeApi:
     def team(self, login):
         return login in self.members
 
+    def existing_labels(self):
+        return {"bug", "conflicts", "keep-open"}
+
     def comment(self, n, text):
         self.calls.append(("comment", n, text))
 
@@ -135,6 +138,13 @@ class SweepTests(unittest.TestCase):
                       pr(3, "MERGEABLE", labels=["conflicts"], labelled=timedelta(days=1)))
         self.assertEqual(run(api, enforce=False)[0], {"notice": [1], "close": [2], "clear": [3]})
         self.assertEqual(api.writes(), [])
+
+    def test_enforcing_needs_the_label(self):
+        api = FakeApi(pr(1))
+        api.existing_labels = lambda: {"bug"}
+        self.assertRaises(SystemExit, run, api)
+        self.assertEqual(api.calls, [])
+        self.assertEqual(run(api, enforce=False)[0], {"notice": [1]})
 
     def test_caps_per_run(self):
         api = FakeApi(*[pr(n) for n in range(cw.MAX_NOTICES_PER_RUN + 5)])

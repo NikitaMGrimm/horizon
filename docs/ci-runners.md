@@ -30,7 +30,8 @@ mini's) is kept small by [`tools/ci/git-slim.sh`](../tools/ci/git-slim.sh) befor
   pull requests that conflict with main (CONTRIBUTING.md "Pull requests"). It writes nothing unless the repository
   variable `CONFLICT_WINDOW_ENFORCE` is `true`; until then each run prints what it would do. A dry run by hand:
   `gh workflow run conflict-window.yml` (its `dry_run` input is on by default), or locally
-  `REPO=horizon-rust/horizon python3 tools/ci/conflict_window.py sweep`, which only reads.
+  `REPO=horizon-rust/horizon python3 tools/ci/conflict_window.py sweep`, which only reads. To switch it on, create
+  its labels first (`conflict_window.py create --apply`), then set the variable.
 - **Release builds**: Linux on `ubuntu-22.04` (players' binaries must link against its older glibc; our Linux
   machines have newer ones), Windows on `windows-latest` (no Windows machine). macOS builds already run on the Mac
   mini.

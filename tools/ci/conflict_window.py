@@ -199,6 +199,10 @@ def sweep(api, enforce: bool, now: datetime | None = None, wait=time.sleep, log=
     def candidates_unknown(prs):
         return any(p["mergeable"] == "UNKNOWN" and not p["isDraft"] and p["baseRefName"] == BASE for p in prs)
 
+    if enforce and CONFLICT_LABEL not in {name.lower() for name in api.existing_labels()}:
+        # Adding a label the repository lacks fails after the notice is posted: the same pull request would get a
+        # notice every day.
+        raise SystemExit(f"no `{CONFLICT_LABEL}` label: run `conflict_window.py create --apply` first")
     prs = api.open_pulls()
     if candidates_unknown(prs):
         # Asking started GitHub's computation; ask once more. What is still unknown waits for the next run.
