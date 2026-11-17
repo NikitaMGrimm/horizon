@@ -285,16 +285,16 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 ## Changelog
 
 - 2026-11-16: API 0.2 (**breaking**, experimental): the terrain's own inputs. `MaterialInput` and `VertexInput` have
-  the quad's `tint` without its shade and ambient occlusion, the face's `shade`, the corner's `ao`, its `face`, and
-  `emission`, the block state's light level over 15 (one candle 3/15, four 12/15); `VertexInput.fluid` is 2 for
-  lava. A pack that reads `tint`, `shade`, `ao`, `face` or `emission` makes the world load again when it starts, and
-  terrain takes half again its memory; a device whose vertex stage reads no storage buffers refuses it. A pack that
-  names `shaded_tint` gets the old `tint` last in `MaterialInput`, `VertexInput` and `RayHit`, free. `RayHit` gains
-  `shade`, `ao` and `back` and is ordered as the reference lists it; an entity hit has vanilla's entity shade, the
-  Nether's in the Nether. `EntityInput.emission` is `full_light: bool`. Gone: the post stage's `history`, `[material] fog`
-  (a check error naming `[frame] fog`), and `frame.fog_start` and `fog_end`; the fog's fields are declared for every
-  pack. [Moving a pack](#shader-api-02-experimental) says what to read instead. A pack that reads none of these is
-  built and draws as before.
+  the quad's `tint` without its shade and ambient occlusion, the face's `shade`, the corner's `ao` and its `face`;
+  `MaterialInput.emission` is the block state's light level over 15 (one candle 3/15, four 12/15); `VertexInput.fluid`
+  is 2 for lava. A pack that reads `tint`, `shade`, `ao`, `face` or `emission` makes the world load again when it
+  starts, and terrain takes half again its memory; a device whose vertex stage reads no storage buffers refuses it. A
+  pack that names `shaded_tint` gets the old `tint` last in `MaterialInput`, `VertexInput` and `RayHit`, free.
+  `RayHit` gains `shade`, `ao` and `back` and is ordered as the reference lists it; an entity hit has vanilla's entity
+  shade, the Nether's in the Nether. `EntityInput.emission` is `full_light: bool`. Gone: the post stage's `history`,
+  `[material] fog` (a check error naming `[frame] fog`), and `frame.fog_start` and `fog_end`; the fog's fields are
+  declared for every pack. [Moving a pack](#shader-api-02-experimental) says what to read instead. A pack that reads
+  none of these is built and draws as before.
 - 2026-11-15: API 0.2 (addition, experimental): `[frame] fog = "pack"` turns Horizon's fog off on what the material
   and entity stages return, and gives every stage `fn vanilla_fog(position: vec3<f32>) -> f32` and the frame's
   `fog_environment` and `fog_render`, the two distances vanilla's fog takes the larger of, which `fog_start` and
