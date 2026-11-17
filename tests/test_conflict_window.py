@@ -146,6 +146,13 @@ class SweepTests(unittest.TestCase):
         self.assertEqual(api.calls, [])
         self.assertEqual(run(api, enforce=False)[0], {"notice": [1]})
 
+    def test_label_names_match_whatever_their_case(self):
+        kept = pr(1, labels=["Keep-Open", "Conflicts"], labelled=timedelta(days=9))
+        noticed = pr(2, labels=["Conflicts"], labelled=timedelta(days=3))
+        noticed["timelineItems"]["nodes"][0]["label"]["name"] = "Conflicts"
+        api = FakeApi(kept, noticed)
+        self.assertEqual(run(api)[0], {"clear": [1], "wait": [2]})
+
     def test_caps_per_run(self):
         api = FakeApi(*[pr(n) for n in range(cw.MAX_NOTICES_PER_RUN + 5)])
         done = run(api)[0]
@@ -169,6 +176,29 @@ class SweepTests(unittest.TestCase):
         self.assertEqual(api.created, [])
         cw.create(api, apply=True)
         self.assertEqual(api.created, ["keep-open"])
+
+
+class HistoryTests(unittest.TestCase):
+    def test_the_notice_is_found_behind_newer_label_changes(self):
+        def event(label, days):
+            return {"createdAt": (NOW - timedelta(days=days)).isoformat().replace("+00:00", "Z"),
+                    "actor": {"login": "github-actions"}, "label": {"name": label}}
+        listed = pr(1, labels=["conflicts"])
+        listed["timelineItems"] = {"pageInfo": {"hasPreviousPage": True, "startCursor": "c2"},
+                                   "nodes": [event("size: S", 1)] * 20}
+        pages = {"c2": {"pageInfo": {"hasPreviousPage": True, "startCursor": "c1"}, "nodes": [event("bug", 5)] * 100},
+                 "c1": {"pageInfo": {"hasPreviousPage": True, "startCursor": "c0"},
+                        "nodes": [event("conflicts", 8)] + [event("size: M", 6)] * 99}}
+        asked = []
+
+        def graphql(query, **variables):
+            asked.append(variables["cursor"])
+            return {"pullRequest": {"timelineItems": pages[variables["cursor"]]}}
+        api = cw.Api("o/r")
+        api._graphql = graphql
+        full = api._history(listed)
+        self.assertEqual(asked, ["c2", "c1"])  # stops at the page with the notice
+        self.assertEqual(cw.decide(full, lambda _: False, NOW), "close")
 
 
 class WorkflowTests(unittest.TestCase):

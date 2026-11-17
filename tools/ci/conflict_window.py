@@ -50,6 +50,7 @@ FIELDS = """
   author { login }
   labels(first: 100) { nodes { name } }
   timelineItems(itemTypes: [LABELED_EVENT], last: 20) {
+    pageInfo { hasPreviousPage startCursor }
     nodes { ... on LabeledEvent { createdAt actor { login } label { name } } }
   }"""
 LIST = """query($owner: String!, $name: String!, $cursor: String) {
@@ -63,6 +64,15 @@ LIST = """query($owner: String!, $name: String!, $cursor: String) {
 ONE = """query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) { %s } }
 }""" % FIELDS
+# Older label events, when the last 20 hold no `conflicts` one.
+HISTORY = """query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    timelineItems(itemTypes: [LABELED_EVENT], last: 100, before: $cursor) {
+      pageInfo { hasPreviousPage startCursor }
+      nodes { ... on LabeledEvent { createdAt actor { login } label { name } } }
+    }
+  } }
+}"""
 
 
 def notice(repo: str) -> str:
@@ -79,9 +89,13 @@ def closing(repo: str) -> str:
             f"[Why]({GUIDE.format(repo=repo)})")
 
 
+def is_conflict_event(event: dict) -> bool:
+    return ((event.get("label") or {}).get("name") or "").lower() == CONFLICT_LABEL
+
+
 def labelled_at(pr: dict) -> datetime | None:
     """When this job's token last put the label on; None if it never did (a person added it by hand)."""
-    events = [e for e in pr["timelineItems"]["nodes"] if (e.get("label") or {}).get("name") == CONFLICT_LABEL]
+    events = [e for e in pr["timelineItems"]["nodes"] if is_conflict_event(e)]
     if not events or (events[-1].get("actor") or {}).get("login") != BOT:
         return None
     return datetime.fromisoformat(events[-1]["createdAt"].replace("Z", "+00:00"))
@@ -91,7 +105,8 @@ def decide(pr: dict, team, now: datetime) -> str:
     """What the sweep does with one open pull request: skip, notice, wait, close, clear (take the label off), team
     (a team member's, left alone) or unclear (labelled without a clock, left alone). `team(login)` is asked only
     for a conflicting one."""
-    labels = {l["name"] for l in pr["labels"]["nodes"]}
+    # GitHub's label names match whatever their case: `Keep-Open` is `keep-open`.
+    labels = {l["name"].lower() for l in pr["labels"]["nodes"]}
     labelled = CONFLICT_LABEL in labels
     if pr["isDraft"] or KEEP_OPEN_LABEL in labels or pr["baseRefName"] != BASE:
         return "clear" if labelled else "skip"
@@ -146,13 +161,24 @@ class Api:
         out, cursor = [], None
         while True:
             page = self._graphql(LIST, **({"cursor": cursor} if cursor else {}))["pullRequests"]
-            out += page["nodes"]
+            out += [self._history(pr) for pr in page["nodes"]]
             if not page["pageInfo"]["hasNextPage"]:
                 return out
             cursor = page["pageInfo"]["endCursor"]
 
     def pull(self, n: int) -> dict:
-        return self._graphql(ONE, number=n)["pullRequest"]
+        return self._history(self._graphql(ONE, number=n)["pullRequest"])
+
+    def _history(self, pr: dict) -> dict:
+        """The pull request with its label events back to the latest `conflicts` one, or all of them: after more
+        than 20 newer label changes the notice is further back than the list reads."""
+        items = pr["timelineItems"]
+        while not any(map(is_conflict_event, items["nodes"])) and items["pageInfo"]["hasPreviousPage"]:
+            older = self._graphql(HISTORY, number=pr["number"],
+                                  cursor=items["pageInfo"]["startCursor"])["pullRequest"]["timelineItems"]
+            items = {"pageInfo": older["pageInfo"], "nodes": older["nodes"] + items["nodes"]}
+        pr["timelineItems"] = items
+        return pr
 
     def team(self, login: str) -> bool:
         """Write access to the repository: the Horizon Team. Any answer but a clear 404 stops the run, so a failed
