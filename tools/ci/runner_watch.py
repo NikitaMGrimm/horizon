@@ -31,7 +31,7 @@ EFFECTS = [
     ("horizon-light", "Small jobs (triage and claim commands, pull request labels, overlap notes, the Mojang "
                       "republish check, a pull request's parity scope) wait instead of running.",
      "An organisation owner sets the repository variable `SELF_HOSTED_CI` to `off`: they run on GitHub's runners."),
-    ("horizon-checks", "`verify` and `launcher` of the pull requests whose number ends in 0 or 1 wait, so those pull "
+    ("horizon-checks", "`verify` and `launcher` of the pull requests whose number ends in 0 wait, so those pull "
                        "requests can't merge.",
      "An organisation owner sets `SELF_HOSTED_CI` to `off` (or `light`), then the authors push again or a Team "
      "member re-runs the checks."),
