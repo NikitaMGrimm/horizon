@@ -135,6 +135,9 @@ pub struct Arena {
     /// Tests: GPU-local pages fail as if video memory were full.
     #[cfg(test)]
     video_memory_full: bool,
+    /// Tests: look buffers of more slots than this fail as if there were no memory for them.
+    #[cfg(test)]
+    look_memory: Option<u64>,
 }
 
 impl Arena {
@@ -230,6 +233,8 @@ impl Arena {
             looks_enabled: false,
             #[cfg(test)]
             video_memory_full: false,
+            #[cfg(test)]
+            look_memory: None,
         }
     }
     /// A buffer of `capacity` vertices in video memory or, when that is full,
@@ -347,10 +352,26 @@ impl Arena {
         if !self.looks_enabled {
             return Some(None);
         }
+        #[cfg(test)]
+        if self.look_memory.is_some_and(|room| capacity > room) {
+            return None;
+        }
         let usage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC;
         try_create(device, "Terrain quad looks", capacity * LOOK_BYTES, usage).map(Some)
+    }
+
+    /// A new page's buffer (`create`, which may spill) and its looks at `capacity`; `None`
+    /// when either has no memory, dropping what was made.
+    fn new_page(
+        &mut self,
+        device: &wgpu::Device,
+        capacity: u64,
+    ) -> Option<((wgpu::Buffer, bool), Option<wgpu::Buffer>)> {
+        let made = self.create(device, capacity, true)?;
+        let looks = self.look_buffer(device, capacity)?;
+        Some((made, looks))
     }
 
     /// Every page gets a zeroed buffer of looks (`on`), or loses it: what is drawn is meshed
@@ -506,13 +527,12 @@ impl Arena {
         }
         .max(len)
         .min(self.page_limit);
-        // A page just large enough when memory is short.
-        let ((buffer, host), capacity) = match self.create(device, capacity, true) {
-            Some(buffer) => (buffer, capacity),
-            None if capacity > len => (self.create(device, len, true)?, len),
+        // A page just large enough when memory is short, for its buffer or its looks.
+        let (((buffer, host), looks), capacity) = match self.new_page(device, capacity) {
+            Some(made) => (made, capacity),
+            None if capacity > len => (self.new_page(device, len)?, len),
             None => return None,
         };
-        let looks = self.look_buffer(device, capacity)?;
         let mut free = FreeList::new(capacity);
         let start = free.take(len).expect("a new page fits one section");
         let page = Page {
@@ -1945,5 +1965,31 @@ mod tests {
         // Without looks again, pages are as large as before.
         assert!(!arena.set_looks(&device, false));
         assert_eq!(arena.page_vertices(), arena.plain_limit);
+    }
+
+    /// A new page whose looks don't fit at the capacity it prefers is made just large enough
+    /// for the section, looks and all, as when its buffer doesn't fit.
+    #[test]
+    fn a_new_page_without_memory_for_its_looks_is_made_just_large_enough() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let mut arena = Arena::new(&device, 24, 64 * GRAIN, false);
+        arena.set_looks(&device, true);
+        arena.look_memory = Some(GRAIN);
+        let (page, _) = alloc(&mut arena, &device, &queue, GRAIN).expect("a page of the section");
+        let p = arena.pages[page as usize].as_ref().unwrap();
+        assert_eq!(p.capacity, GRAIN);
+        assert_eq!(arena.looks(page).unwrap().size(), GRAIN * LOOK_BYTES);
+        // With room for both, the page takes the capacity it prefers.
+        let mut roomy = Arena::new(&device, 24, 64 * GRAIN, false);
+        roomy.set_looks(&device, true);
+        let (page, _) = alloc(&mut roomy, &device, &queue, GRAIN).unwrap();
+        assert_eq!(
+            roomy.pages[page as usize].as_ref().unwrap().capacity,
+            64 * GRAIN
+        );
     }
 }
