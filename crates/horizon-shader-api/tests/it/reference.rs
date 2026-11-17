@@ -134,7 +134,7 @@ const PINNED_TRACED_MATERIAL: [(Tracing, &str); 2] = [
     ),
     (
         Tracing::Scene,
-        "3a84f62ae5a1d0279c725d76bce1ec17f67d670e9878435523471767ecf2379a",
+        "3a67f6454a3f339e10030dd27d896fba89d76db6b35d4db895fcd1209cf16773",
     ),
 ];
 

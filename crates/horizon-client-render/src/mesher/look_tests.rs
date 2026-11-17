@@ -293,10 +293,21 @@ fn shade_is_the_shade_the_quad_was_given() {
 /// the arena holds them while every pass reads that layout): what the ray scene unpacks and
 /// traces (`gfx/ray_terrain_tests.rs`).
 pub(crate) fn meshed_alone(blocks: &[(&str, [i32; 3])]) -> (SectionMesh, Vec<[u32; 6]>) {
+    let states: Vec<_> = blocks
+        .iter()
+        .map(|&(name, at)| (name, &[][..], at))
+        .collect();
+    meshed_alone_states(&states)
+}
+
+/// `meshed_alone` with each block's state properties (a lit candle).
+pub(crate) fn meshed_alone_states(
+    blocks: &[(&str, &[(&str, &str)], [i32; 3])],
+) -> (SectionMesh, Vec<[u32; 6]>) {
     let f = fixture();
     let mut chunk = Chunk::empty(0, 0);
-    for &(name, [x, y, z]) in blocks {
-        chunk.set(x, MIN_Y + y, z, state(&f, name, &[]));
+    for &(name, properties, [x, y, z]) in blocks {
+        chunk.set(x, MIN_Y + y, z, state(&f, name, properties));
     }
     let region = [[Some(&chunk); 3]; 3];
     let mut mesher = Mesher {

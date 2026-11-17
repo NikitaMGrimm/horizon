@@ -1178,9 +1178,9 @@ fn a_traced_pack_that_doesn_t_name_ray_entity_composes_as_before() {
         hashes,
         [
             "1af2ec758e6f343986c676a7df695a1bf820ac9f498840422bbb8ef72df65cc4",
-            "80423d35b9c8e03fb4bbdb8dbc0435b78661504c7943531861787d026e9976c4",
+            "29affe29f1192045e0abd0b8a507f8f79e88c128521b83cf949abe042b32ebcc",
             "e646501b8bcd9097579a8bcb14e11710439d85617dfc61b044bde4e0490c8681",
-            "bb1450e8c6d56743e7b7947fb41e258317eccd86756a00dcc4c4ffa42e903496",
+            "21e40d6e1d5ba4792ce40a0a1ecf2ea483bfd60a05cff344c8f73fb5fcf99fe9",
         ]
     );
 }

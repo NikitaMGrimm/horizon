@@ -96,41 +96,62 @@ fn a_terrain_hit_is_front_from_outside_a_block_and_back_from_inside() {
     }
 }
 
-/// A terrain hit's `emission` is still its face's brightness class (7/15, 14/15 or 1), and its
-/// `fluid` lava's (2) in the solid layer and water's (1) in the translucent one, read from the
-/// colour's alpha byte that also holds the light level, from either layout of the arena.
+/// A terrain hit's `emission` is its block's light level over 15, as `MaterialInput.emission`,
+/// and its `fluid` lava's (2) in the solid layer and water's (1) in the translucent one, read
+/// from the colour's alpha byte, from either layout of the arena.
 #[test]
 #[ignore = "daily"]
-fn a_terrain_hit_gives_its_class_and_its_fluid() {
+fn a_terrain_hit_gives_its_light_level_and_its_fluid() {
     let Some((device, queue)) = ray_device() else {
         eprintln!("no GPU with ray queries: skipped");
         return;
     };
-    // (block, where, the layers a ray from above meets it in, emission, fluid)
+    const LIT: &[(&str, &str)] = &[("lit", "true")];
+    const NONE: &[(&str, &str)] = &[];
+    // (block, its properties, where, the layers a ray from above meets it in, emission, fluid)
     let blocks = [
-        ("minecraft:glowstone", [2, 4, 2], RAY_SOLID, 1.0, 0.0),
+        ("minecraft:glowstone", NONE, [2, 4, 2], RAY_SOLID, 1.0, 0.0),
         (
             "minecraft:sea_lantern",
+            NONE,
             [6, 4, 2],
             RAY_SOLID,
-            14.0 / 15.0,
+            1.0,
             0.0,
         ),
         (
             "minecraft:jack_o_lantern",
+            NONE,
             [10, 4, 2],
             RAY_SOLID,
-            7.0 / 15.0,
+            1.0,
             0.0,
         ),
-        ("minecraft:stone", [2, 4, 6], RAY_SOLID, 0.0, 0.0),
-        ("minecraft:lava", [6, 4, 6], RAY_SOLID, 14.0 / 15.0, 2.0),
-        ("minecraft:water", [10, 4, 6], RAY_TRANSLUCENT, 0.0, 1.0),
+        ("minecraft:stone", NONE, [2, 4, 6], RAY_SOLID, 0.0, 0.0),
+        ("minecraft:lava", NONE, [6, 4, 6], RAY_SOLID, 1.0, 2.0),
+        (
+            "minecraft:water",
+            NONE,
+            [10, 4, 6],
+            RAY_TRANSLUCENT,
+            0.0,
+            1.0,
+        ),
+        (
+            "minecraft:candle",
+            LIT,
+            [2, 4, 10],
+            RAY_SOLID,
+            3.0 / 15.0,
+            0.0,
+        ),
+        ("minecraft:lantern", NONE, [6, 4, 10], RAY_SOLID, 1.0, 0.0),
+        ("minecraft:candle", NONE, [10, 4, 10], RAY_SOLID, 0.0, 0.0),
     ];
-    let placed: Vec<(&str, [i32; 3])> = blocks.iter().map(|b| (b.0, b.1)).collect();
-    let (mesh, records) = crate::mesher::look_tests::meshed_alone(&placed);
+    let placed: Vec<_> = blocks.iter().map(|b| (b.0, b.1, b.2)).collect();
+    let (mesh, records) = crate::mesher::look_tests::meshed_alone_states(&placed);
     let rays: Vec<Ray> = (blocks.iter())
-        .map(|&(_, [x, y, z], layers, ..)| {
+        .map(|&(_, _, [x, y, z], layers, ..)| {
             let above = [x as f32 + 0.5, y as f32 + 3.0, z as f32 + 0.5];
             (above, [0.0, -1.0, 0.0], layers)
         })

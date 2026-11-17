@@ -254,8 +254,9 @@ A 0.2 pack from before 2026-11-16 moves to the terrain's own inputs so: where it
 with `tint`, `shade` and `ao` apart; `[material] fog = false` becomes `[frame] fog = "pack"`; `frame.fog_start` and
 `fog_end` become `fog_environment` and `fog_render`; the post stage's `history` becomes a
 `[[resource]]` with `keep = "view"` that a pass writes as its `output` and reads as `<name>_previous` next frame; and
-`EntityInput.emission` is `full_light`. `shaded_tint` and `MaterialInput.emission` cost nothing; reading `tint`,
-`shade`, `ao` or `face` makes the world load again when the pack starts and terrain take a third again its memory.
+`EntityInput.emission` is `full_light`. A terrain hit's `emission` is the block's light level over 15 from
+2026-11-17, as `input.emission`, no longer its brightness class. `shaded_tint` and `MaterialInput.emission` cost
+nothing; reading `tint`, `shade`, `ao` or `face` makes the world load again when the pack starts and terrain take a third again its memory.
 
 ## Testing a pack frame by frame
 
@@ -292,7 +293,9 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 - 2026-11-17: API 0.2 (experimental): `MaterialInput.emission` comes with the vertex, as `shaded_tint` does. Only
   `tint`, `shade`, `ao` and `face` make the world load again when a pack starts and need a vertex stage that reads
   storage buffers; a pack that reads `emission` and none of them pays none of it. Terrain takes a third again its
-  memory for them, not half. No value or WGSL name changes.
+  memory for them, not half. A terrain hit's `RayHit.emission` is its block's light level over 15, as
+  `MaterialInput.emission` (one candle 3/15, a lantern 1), no longer its brightness class (7/15, 14/15 or 1); an
+  entity hit's stays 0. No WGSL name changes.
 - 2026-11-16: API 0.2 (**breaking**, experimental): the terrain's own inputs. `MaterialInput` and `VertexInput` have
   the quad's `tint` without its shade and ambient occlusion, the face's `shade`, the corner's `ao` and its `face`;
   `MaterialInput.emission` is the block state's light level over 15 (one candle 3/15, four 12/15); `VertexInput.fluid`
@@ -301,7 +304,7 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   storage buffers refuses it. A pack that names `shaded_tint` gets the old `tint` last in `MaterialInput`,
   `VertexInput` and `RayHit`, free (on an entity hit, its `tint` times its `shade`). `RayHit` gains `shade`, `ao` and
   `back` and is ordered as the reference lists it; an entity hit has vanilla's entity shade, the Nether's in the
-  Nether. A terrain hit's `tint`, `shade`, `ao` and `emission` change value, not type, in a later version (to what
+  Nether. A terrain hit's `tint`, `shade` and `ao` change value, not type, in a later version (to what
   `MaterialInput` gives), without a source break; its `shaded_tint` stays their product. `EntityInput.emission` is
   `full_light: bool`. Gone: the post stage's `history`, `[material] fog` (a check error naming `[frame] fog`), and
   `frame.fog_start` and `fog_end`; the fog's fields are declared for every pack. [Moving a
