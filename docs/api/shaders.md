@@ -288,6 +288,11 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-17: API 0.2 (experimental, #18023): an R-relative kept texture takes its two versions at their size of the
+  post targets' budget, `2 × scale² × bytes a texel / 8` render-size `rgba16float` textures, instead of 2 at any
+  format and scale: `rgba16float` at scale 0.5 takes 0.5, `r32uint` at scale 1 takes 1. Packs that keep small
+  textures fit where they were refused. A `rgba32float` or `rgba32uint` one at scale 1 takes 4 where it took 2, so a
+  pack whose post targets took more than 4 with one of those, or two of them, is now refused; no WGSL name changes.
 - 2026-11-16: API 0.2 (**breaking**, experimental): the terrain's own inputs. `MaterialInput` and `VertexInput` have
   the quad's `tint` without its shade and ambient occlusion, the face's `shade`, the corner's `ao` and its `face`;
   `MaterialInput.emission` is the block state's light level over 15 (one candle 3/15, four 12/15); `VertexInput.fluid`
@@ -302,6 +307,12 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   `frame.fog_start` and `fog_end`; the fog's fields are declared for every pack. [Moving a
   pack](#shader-api-02-experimental) says what to read instead. A pack that reads none of these is built and draws as
   before.
+- 2026-11-16: API 0.2 (additions, experimental): `[entity] reads` and `[sky] reads` (#16011 item 4): the entity and
+  sky stages read kept resources by `[material] reads`' rules: `x` for this frame's version of a texture a
+  `[[before_world]]` pass writes, `x_previous` for last frame's, and buffers, in their fragments only. The check
+  refuses `x` of a texture only `[[post]]` passes write, and `writes` on either stage. An entity or sky stage without
+  `reads` composes and draws as before, a test holds. The reference now says that a compute pass may call
+  `storageBarrier()`.
 - 2026-11-15: API 0.2 (additions, experimental): `[material] reads` (#16011 item 4): the terrain reads kept
   resources, `x` for this frame's version of a texture a `[[before_world]]` pass writes (in the same frame),
   `x_previous` for last frame's, and buffers; their declarations join the material's module at the passes'
