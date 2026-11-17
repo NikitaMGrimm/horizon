@@ -162,8 +162,6 @@ it (edited on every push, never repeated): talk to its author in the thread befo
   pr_ready counts it the same way and warns when a pull request is over.
 - **Small fixes of one kind are one change.** The same defect in several tools, or several small fixes to one tool
   or harness, go in one pull request that lists each issue it fixes (`Fixes #1, Fixes #2`).
-- **At most 20 open pull requests that aren't drafts, per author.** Keep the rest as drafts until one of yours is
-  merged or closed.
 - **Fill in the template**: what and why, the vanilla reference, the pr_ready block, screenshots for anything you
   can see.
 - **Tick "Allow edits by maintainers".** When something small is left (a lint, a rebase, a nit) we push the fixup
