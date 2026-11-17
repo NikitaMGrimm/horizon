@@ -398,7 +398,7 @@ translucent surfaces (`input.translucent`), which leave no surface for a post pa
 
 ### `RayHit`
 
-The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `light`, `uv`, `material`, `tags`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, and on a terrain hit so are `tint`, `shade`, `ao`, `emission` and `shaded_tint`, so one function can shade both. A stage that reads a hit's `tint`, `shade`, `ao` or `emission` has the scene keep its terrain's looks, twelve bytes a face in video memory for the faces within its reach and as many in memory for every loaded section, from each section's next mesh on: the world loads again when the pack starts, and until a section is meshed again its hits read as a face without a look (`tint` the `shaded_tint` product, `shade` and `ao` 1, `emission` 0). The scene holds the faces flat: under `[displacement]` a fragment shades from its displaced point, a hit from the face. An entity hit's `shaded_tint` is its `tint` alone, without `shade`. On a miss, and in every stage while the scene isn't there (`frame.has_ray_tracing` 0), `distance` is negative and every other field is 0 (the `bool`s false).
+The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `light`, `uv`, `material`, `tags`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, and on a terrain hit so are `tint`, `shade`, `ao`, `emission` and `shaded_tint`, so one function can shade both. A stage that reads a hit's `tint`, `shade`, `ao` or `emission` has the scene keep its terrain's looks, twelve bytes a face in video memory for the faces within its reach and as many in memory for every loaded section, from each section's next mesh on: the world loads again when the pack starts, and until a section is meshed again its hits read as a face without a look (`tint` the `shaded_tint` product, `shade` and `ao` 1, `emission` 0). The scene holds the faces flat: under `[displacement]` a fragment shades from its displaced point, a hit from the face. `shaded_tint` is the product `tint.rgb * shade * ao` on every hit (an entity hit's `tint` times its `shade`). On a miss, and in every stage while the scene isn't there (`frame.has_ray_tracing` 0), `distance` is negative and every other field is 0 (the `bool`s false).
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -429,7 +429,7 @@ Bindings 48 to 59 of group 3 hold the scene while the game traces (60 to
 ## Kept resources and compute passes
 
 - `[[resource]]`: `name`; `buffer` (bytes) with `element` (`u32`, `atomic<u32>`, `f32`, `vec4<u32>`, `vec4<f32>`), or `format`
-  (`rgba16float`, `r32float`, `rgba32float`, `rgba32uint`) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `"view"`
+  (`rgba16float`, `r32float`, `rgba32float`, `rgba32uint`, `r32uint`) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `"view"`
   (screen history) or `"world"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in
   blocks, clears it). A texture has this frame's version, `<name>`, and last frame's, `<name>_previous`; a buffer
   has one. Both names are free WGSL names, as an `output`'s, and no word WGSL reserves.
@@ -471,8 +471,8 @@ A pass's prelude declares the resources it lists, the pack's resource i at bindi
 3 and its `_previous` at 65 + 2i: a buffer `var<storage, read_write> x: array<element>` where written,
 `var<storage, read>` where only read (an `atomic<u32>` buffer then reads as `array<u32>`); a texture
 `texture_storage_2d<format, write>` where written, else `texture_2d<f32>` (`texture_2d<u32>` for
-`rgba32uint`, which only a compute pass writes). An `r32float`, `rgba32float` or `rgba32uint` texture is read
-with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.
+`rgba32uint` and `r32uint`, which only a compute pass writes). An `r32float`, `rgba32float`, `rgba32uint` or
+`r32uint` texture is read with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.
 
 `[[before_world]]` resources (bind group 3):
 

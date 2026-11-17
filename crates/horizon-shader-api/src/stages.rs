@@ -1083,10 +1083,13 @@ fn horizon_ray_entity_hit(hit: RayIntersection, origin: vec3<f32>, direction: ve
         horizon_ray_entity_word(t.corners.y, 7u), horizon_ray_entity_word(t.corners.z, 7u));
     let sky = dot(vec3<f32>(words & vec3<u32>(0xffu)), t.weights);
     let block = dot(vec3<f32>((words >> vec3<u32>(8u)) & vec3<u32>(0xffu)), t.weights);
-    let horizon_shaded = horizon_decode_rgba(horizon_ray_entity_color(t));
+    let tint = horizon_decode_rgba(horizon_ray_entity_color(t));
+    let shade = horizon_ray_entity_shade(t, direction);
+    // `shaded_tint`: the product, as on a terrain hit (`ao` is 1 here).
+    let horizon_shaded = vec4<f32>(tint.rgb * shade, tint.a);
     return RayHit(hit.t, origin + direction * hit.t, normal, uv,
-        horizon_decode_rgba(horizon_ray_entity_texel(uv)), horizon_shaded,
-        horizon_ray_entity_shade(t, direction), 1.0, min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)),
+        horizon_decode_rgba(horizon_ray_entity_texel(uv)), tint,
+        shade, 1.0, min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)),
         0u, 0u, 0.0, 0u, false, back, true, horizon_ray_entity_tangent(d1, d2, e1, e2, normal),
         0u@shaded_tint@);
 }
