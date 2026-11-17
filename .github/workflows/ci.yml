@@ -179,6 +179,16 @@ jobs:
           github.event_name == 'pull_request' && github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' &&
           runner.environment == 'github-hosted'
         run: tools/ci/pin_mtimes.sh .ci-built
+      # rust-cache saves the dependencies from a registry and the workspace's crates, and deletes the rest of target/:
+      # the path-patched crates in third_party/. Clippy rebuilt them on every restore, then re-checked every crate
+      # above them, which is most of the workspace. So main carries their build in .ci-built (the step that records
+      # the commit moves it there) and a pull request moves it back. Main builds them anew each time, from files
+      # dated as a pull request's are: Cargo rebuilds a crate like these when its newest file time differs.
+      - name: Put back the path-patched crates' build, or prepare main's
+        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        env:
+          ACTION: ${{ github.event_name == 'pull_request' && 'restore .ci-built' || 'prepare' }}
+        run: python3 tools/ci/path_crates.py $ACTION
       - name: Check formatting and lint
         if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false'
         # A commit the queue verified skips the format check but still runs clippy: its build is what verify-static's
@@ -203,6 +213,7 @@ jobs:
         run: |
           mkdir -p .ci-built
           git rev-parse HEAD > .ci-built/sha
+          python3 tools/ci/path_crates.py save .ci-built
       # The launcher is its own workspace (launcher/Cargo.toml), so verify's cargo runs never build it. A pull request that
       # changes it or a crate it builds is checked here, and so are main's pushes when their range changes it: two pull
       # requests can each pass alone and break it together (#2059 and the registry ratings did, 2026-10-26), and the push
@@ -334,6 +345,13 @@ jobs:
           github.event_name == 'pull_request' && steps.rust.outputs.required != 'false' &&
           runner.environment == 'github-hosted'
         run: tools/ci/pin_mtimes.sh .ci-built
+      # As in verify-static: rust-cache drops the path-patched crates' build, and rebuilding them rebuilt most of the
+      # workspace above them. The step that records main's commit moves it into .ci-built.
+      - name: Put back the path-patched crates' build, or prepare main's
+        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        env:
+          ACTION: ${{ github.event_name == 'pull_request' && 'restore .ci-built' || 'prepare' }}
+        run: python3 tools/ci/path_crates.py $ACTION
       # sccache through GitHub's cache, GitHub's runners only (ours keep their build folder): rust-cache keeps the
       # dependencies but cleans the workspace crates and the path-patched ones (third_party), so cargo rebuilt ~70
       # crates on every run. sccache knows them by their content. Only main's pushes write to it: an entry a pull
@@ -395,7 +413,9 @@ jobs:
         if: >-
           github.ref == 'refs/heads/main' &&
           steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
-        run: mkdir -p .ci-built && git rev-parse HEAD > .ci-built/sha
+        run: |
+          mkdir -p .ci-built && git rev-parse HEAD > .ci-built/sha
+          python3 tools/ci/path_crates.py save .ci-built
       - name: What sccache reused
         if: always() && steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         run: |
