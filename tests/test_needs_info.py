@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 
 from tools.ci import needs_info as ni
@@ -8,9 +9,13 @@ LABELLED = "2026-11-13T11:00:00Z"  # 7 days and an hour before NOW
 
 
 class FakeApi:
-    def __init__(self, issues):
+    def __init__(self, issues, unlabelled=()):
         self.issues = issues  # n -> (labelled_at, comments)
+        self.unlabelled = set(unlabelled)  # listed, but the label was taken off before the issue's turn
         self.calls = []
+
+    def has_label(self, n):
+        return n not in self.unlabelled
 
     def labelled(self):
         return list(self.issues)
@@ -62,6 +67,17 @@ class RunTests(unittest.TestCase):
         self.assertEqual(api.calls, [])
         ni.run(api, True, NOW)
         self.assertEqual(api.calls, [("close", 1), ("unlabel", 2)])
+
+    def test_a_label_taken_off_after_the_listing_is_left_alone(self):
+        api = FakeApi({1: (LABELLED, [])}, unlabelled={1})
+        self.assertEqual(ni.run(api, True, NOW), [])
+        self.assertEqual(api.calls, [])
+
+    def test_close_closes_before_it_comments(self):
+        calls = []
+        with mock.patch.object(ni, "gh", side_effect=lambda *a: calls.append(a[:2]) or ""):
+            ni.Api("o/r").close(5)
+        self.assertEqual(calls, [("issue", "close"), ("issue", "comment")])
 
 
 if __name__ == "__main__":

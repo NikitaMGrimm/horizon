@@ -54,12 +54,17 @@ class Api:
         return lines(gh("api", "--paginate", f"repos/{self.repo}/issues/{n}/comments?since={since}&per_page=100",
                         "--jq", ".[] | {at: .created_at, bot: (.user.type == \"Bot\")}"))
 
+    def has_label(self, n: int) -> bool:
+        return LABEL in gh("api", f"repos/{self.repo}/issues/{n}/labels", "--jq", ".[].name").splitlines()
+
     def unlabel(self, n: int) -> None:
         gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{n}/labels/{urllib.parse.quote(LABEL, safe='')}")
 
     def close(self, n: int) -> None:
-        gh("issue", "comment", str(n), "-R", self.repo, "--body", CLOSING)
+        # Closed first: a failure between the two leaves a closed issue without the note, never a second note
+        # tomorrow (the bot's own comments don't count as answers, so a repeat would repeat daily).
         gh("issue", "close", str(n), "-R", self.repo, "--reason", "not planned")
+        gh("issue", "comment", str(n), "-R", self.repo, "--body", CLOSING)
 
 
 def decide(labelled_at: str | None, comments: list[dict], now: datetime) -> str | None:
@@ -77,7 +82,8 @@ def run(api, apply: bool, now: datetime) -> list[str]:
     for n in api.labelled():
         at = api.labelled_at(n)
         action = decide(at, api.comments_since(n, at) if at else [], now)
-        if action is None:
+        # The listing can be minutes old: someone may have taken the label off since.
+        if action is None or not api.has_label(n):
             continue
         done.append(f"#{n} {action}")
         if apply:
