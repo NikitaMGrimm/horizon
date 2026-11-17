@@ -138,7 +138,9 @@ class SweepTests(unittest.TestCase):
 
     def test_caps_per_run(self):
         api = FakeApi(*[pr(n) for n in range(cw.MAX_NOTICES_PER_RUN + 5)])
-        self.assertEqual(len(run(api)[0]["notice"]), cw.MAX_NOTICES_PER_RUN)
+        done = run(api)[0]
+        self.assertEqual((len(done["notice"]), len(done["notice next run"])), (cw.MAX_NOTICES_PER_RUN, 5))
+        self.assertEqual(len([c for c in api.calls if c[0] == "comment"]), cw.MAX_NOTICES_PER_RUN)
         api = FakeApi(*[pr(n, labels=["conflicts"], labelled=timedelta(days=8))
                         for n in range(cw.MAX_CLOSES_PER_RUN + 5)])
         self.assertEqual(len(run(api)[0]["close"]), cw.MAX_CLOSES_PER_RUN)

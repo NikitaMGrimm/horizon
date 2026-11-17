@@ -206,14 +206,16 @@ def sweep(api, enforce: bool, now: datetime | None = None, wait=time.sleep, log=
         prs = api.open_pulls()
     now = now or datetime.now(timezone.utc)
     done: dict[str, list[int]] = {}
+    caps = {"notice": MAX_NOTICES_PER_RUN, "close": MAX_CLOSES_PER_RUN}
     for pr in prs:
         n = pr["number"]
         action = decide(pr, api.team, now)
-        if action == "skip" or (action == "notice" and len(done.get("notice", [])) >= MAX_NOTICES_PER_RUN):
+        if action == "skip":
+            continue
+        if len(done.get(action, [])) >= caps.get(action, len(prs)):
+            done.setdefault(f"{action} next run", []).append(n)  # over the cap: counted, not acted on
             continue
         if action == "close":
-            if len(done.get("close", [])) >= MAX_CLOSES_PER_RUN:
-                continue
             # The list is minutes old, and a merge to main can resolve a conflict without touching the pull request.
             fresh = api.pull(n)
             if fresh["state"] != "OPEN" or (action := decide(fresh, api.team, now)) != "close":
