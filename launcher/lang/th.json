@@ -1377,5 +1377,7 @@
   "Performance mode draws solid panels, without glass or blur.": "โหมดประสิทธิภาพวาดแผงทึบ ไม่มีกระจกหรือความเบลอ",
   "This theme's night draws solid panels, without glass or blur.": "กลางคืนของธีมนี้วาดแผงทึบ ไม่มีกระจกหรือความเบลอ",
   "The server gets a copy: your single-player world stays as it is.": "The server gets a copy: your single-player world stays as it is.",
-  "You have no single-player world yet: play one first, or choose New world.": "You have no single-player world yet: play one first, or choose New world."
+  "You have no single-player world yet: play one first, or choose New world.": "You have no single-player world yet: play one first, or choose New world.",
+  "Starting without marking the game's folders as in use: {error}": "Starting without marking the game's folders as in use: {error}",
+  "{error}. Make sure your account can write to that folder, then try again.": "{error}. Make sure your account can write to that folder, then try again."
 }
