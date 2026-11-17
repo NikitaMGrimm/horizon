@@ -3,7 +3,7 @@
 //! beside glass and leaves, back faces, cardinal shading and max(self, above)
 //! light.
 use super::{
-    Info, MeshTables, Padded, SectionMesh, TerrainVertex, fluid_face, lighting, pack_coords,
+    Info, MeshTables, Padded, SectionMesh, TerrainVertex, as_fluid, lighting, pack_coords,
     pack_rgb, part_tables::PartTables, pi,
 };
 use horizon_core::{
@@ -276,12 +276,20 @@ pub(super) fn tesselate(
     } else {
         crate::mesher::hdr_tier("lava", 15)
     };
+    // What the fluid itself gives off, on every face and not the block holding it: lava's block
+    // 15 at every level, water none, also around a waterlogged light; a mod fluid its own
+    // block's (a mod fluid waterlogging another block reads that block's).
+    let level = match kind {
+        FluidKind::Lava | FluidKind::FlowingLava => 15,
+        FluidKind::Mod(_) | FluidKind::ModFlowing(_) => me.emission,
+        _ => 0,
+    };
     let color = |by: f32| {
         let rgb = [16, 8, 0].map(|shift| lighting::scale((tint >> shift & 255) as i32, by) as u32);
         if separate_ao {
             pack_rgb(rgb)
         } else {
-            crate::mesher::emitting(pack_rgb(rgb), emission)
+            crate::mesher::giving_off(crate::mesher::emitting(pack_rgb(rgb), emission), level)
         }
     };
     let height = |step: isize| -> f32 {
@@ -365,14 +373,6 @@ pub(super) fn tesselate(
     } else {
         (&mut out.solid, &mut out.solid_looks, &mut out.sprite_layers)
     };
-    // What the fluid itself gives off, on every face and not the block holding it: lava's block
-    // 15 at every level, water none, also around a waterlogged light; a mod fluid its own
-    // block's (a mod fluid waterlogging another block reads that block's).
-    let level = match kind {
-        FluidKind::Lava | FluidKind::FlowingLava => 15,
-        FluidKind::Mod(_) | FluidKind::ModFlowing(_) => me.emission,
-        _ => 0,
-    };
     let mut quad = |v: [([f32; 3], [f32; 2]); 4],
                     layer: u16,
                     shade: f32,
@@ -388,11 +388,7 @@ pub(super) fn tesselate(
             target_looks.extend(std::iter::repeat_n(look, 1 + usize::from(back)));
         }
         let color = color(shade);
-        let color = if separate_ao {
-            color
-        } else {
-            fluid_face(color, face)
-        };
+        let color = if separate_ao { color } else { as_fluid(color) };
         let vertex = |(pos, uv)| TerrainVertex::new(pos, uv, layer, color, light);
         target.extend([vertex(v[0]), vertex(v[1]), vertex(v[2]), vertex(v[3])]);
         if back {

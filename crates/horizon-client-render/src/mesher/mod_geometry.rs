@@ -310,7 +310,9 @@ pub(super) fn add(mesher: &Mesher<'_>, tints: &mut Tints<'_>, out: &mut SectionM
 /// `quad` as four section vertices in its pass, drawn with atlas `layer`.
 fn emit(mesher: &Mesher<'_>, quad: &SectionQuad, layer: u16, out: &mut SectionMesh) {
     let [a, r, g, b] = quad.color.to_be_bytes().map(u32::from);
-    let color = r | g << 8 | b << 16 | a << 24;
+    // The alpha lands in the HDR tier's bits (`mesher::emitting`), as it always has; no fluid,
+    // and no light level, as the look says.
+    let color = r | g << 8 | b << 16 | (a | 0xF8) << 24;
     let [sky, block] = quad.light.map(|l| u16::from(l.min(15)) * 16);
     let light = sky | block << 8;
     let vertices = std::array::from_fn(|i| {

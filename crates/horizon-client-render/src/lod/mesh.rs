@@ -2,7 +2,7 @@
 use super::{Column, Span, Spans, TileKey};
 use crate::{
     fast_hash::{FxHashMap, FxHashSet},
-    mesher::{OPAQUE_LAYER, SectionMesh, TerrainVertex, fluid_face},
+    mesher::{OPAQUE_LAYER, SectionMesh, TerrainVertex, as_fluid},
     streaming::WorkerContext,
 };
 use horizon_assets::model::Direction;
@@ -251,11 +251,14 @@ impl Mesher {
                         look: L::make(|| far_look(looks, rgb, direction, level)),
                         layer: face.layer,
                         light: span.light,
-                        // The HDR tier, as the section mesher writes it, so a light source
-                        // keeps shining across the LOD boundary.
-                        color: crate::mesher::emitting(
-                            channel(16) | channel(8) << 8 | channel(0) << 16 | 0xff000000,
-                            context.tables.hdr_tier(span.state),
+                        // The HDR tier and light level, as the section mesher writes them, so
+                        // a light source keeps shining across the LOD boundary.
+                        color: crate::mesher::giving_off(
+                            crate::mesher::emitting(
+                                channel(16) | channel(8) << 8 | channel(0) << 16 | 0xff000000,
+                                context.tables.hdr_tier(span.state),
+                            ),
+                            level(),
                         ),
                         translucent: face.translucent,
                     }
@@ -296,7 +299,7 @@ fn hides<L>(
         || (material.fluid != 0 && material.fluid == current_material.fluid)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy)]
 struct FaceKey {
     direction: Direction,
     plane: u32,
@@ -305,6 +308,40 @@ struct FaceKey {
     light: u16,
     color: u32,
     translucent: bool,
+}
+impl FaceKey {
+    /// What faces merge by: all of it but the light level in the colour's alpha, which only a
+    /// shader pack reads (from the look too, which splits them where a pack takes looks), so
+    /// faces merge as they did before it was there; a merged face keeps the first one's.
+    fn merged(&self) -> (Direction, u32, u8, u16, u16, u32, bool) {
+        let color = self.color | crate::mesher::LEVEL_BITS;
+        let k = self;
+        (
+            k.direction,
+            k.plane,
+            k.overlay,
+            k.layer,
+            k.light,
+            color,
+            k.translucent,
+        )
+    }
+}
+impl PartialEq for FaceKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.merged() == other.merged()
+    }
+}
+impl Eq for FaceKey {}
+impl PartialOrd for FaceKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for FaceKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.merged().cmp(&other.merged())
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Rect {
@@ -324,10 +361,10 @@ fn add_face<L: Look>(
 ) {
     for (overlay, paint) in material.faces.into_iter().enumerate() {
         let Some(paint) = paint else { continue };
-        // The same fluid flags the section mesher sets, so the material stage's water
+        // The same fluid flag the section mesher sets, so the material stage's water
         // reaches the distant tiles too and the LOD boundary keeps one look.
         let color = if material.fluid != 0 {
-            fluid_face(paint.color, direction as usize)
+            as_fluid(paint.color)
         } else {
             paint.color
         };
@@ -1451,6 +1488,69 @@ mod tests {
     fn normal(q: &[TerrainVertex; 4]) -> glam::Vec3 {
         let p = |i: usize| glam::Vec3::from(q[i].pos);
         (p(1) - p(0)).cross(p(2) - p(0))
+    }
+    /// Faces that differ only in the light level their colour holds merge as if it weren't there
+    /// (only a shader pack reads it, and one taking looks has it in the look too), each merged
+    /// face keeping one of theirs: without looks the tile has the quads it had before the level
+    /// was in the colour; with looks they stay apart.
+    #[test]
+    fn far_faces_merge_whatever_their_light_level() {
+        // A checkerboard of states 1 and 3: the same face, giving off `levels` by state.
+        fn painted<L: Look>(span: &Span, levels: [u8; 2]) -> Material<L> {
+            let level = levels[usize::from(span.state.0 == 3)];
+            let paint = Paint {
+                layer: 1,
+                light: span.light,
+                color: crate::mesher::giving_off(u32::MAX, level),
+                translucent: false,
+                look: L::make(|| [1, 0, u32::from(level)]),
+            };
+            Material {
+                faces: [Some(paint), None],
+                fluid: 0,
+                opaque: true,
+            }
+        }
+        let mut columns = columns();
+        for (i, column) in columns.iter_mut().enumerate() {
+            let state = if (i % CELLS + i / CELLS).is_multiple_of(2) {
+                3
+            } else {
+                1
+            };
+            column.spans = vec![span(0, 4, state)].into();
+        }
+        let refs: Vec<&Column> = columns.iter().collect();
+        let key = TileKey {
+            x: 0,
+            z: 0,
+            level: 0,
+        };
+        let (no_edges, set) = (Default::default(), FxHashSet::default());
+        let mesh = |levels: [u8; 2], looks: bool| match looks {
+            false => {
+                mesh_columns_with_edges::<()>(key, &refs, &set, None, &no_edges, &[], |s, _, _| {
+                    painted(s, levels)
+                })
+            }
+            true => mesh_columns_with_edges::<[u32; 3]>(
+                key,
+                &refs,
+                &set,
+                None,
+                &no_edges,
+                &[],
+                |s, _, _| painted(s, levels),
+            ),
+        };
+        let (lit, unlit) = (mesh([0, 12], false), mesh([0, 0], false));
+        assert_eq!(lit.solid.len(), unlit.solid.len());
+        let levels: FxHashSet<u32> = lit.solid.iter().map(|v| 15 - (v.color >> 28)).collect();
+        assert!(
+            levels.is_subset(&[0, 12].into_iter().collect()),
+            "{levels:?}"
+        );
+        assert!(mesh([0, 12], true).solid.len() > lit.solid.len());
     }
     /// A far tile's looks: each face's look gives back its vertex colour (the Overworld's
     /// shades, no ambient occlusion; the Nether's shades differ only in its look), and the

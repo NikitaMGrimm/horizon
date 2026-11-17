@@ -260,17 +260,20 @@ mod vertex_tests {
         }
     }
     #[test]
-    fn emission_keeps_the_colour_and_the_free_bits() {
+    fn emission_keeps_the_colour_and_the_other_bits() {
+        use super::{INCANDESCENT, LOW, VERY_BRIGHT, WHOLE, as_fluid, emitting, giving_off};
         let rgb = super::pack_rgb([0x12, 0x34, 0x56]);
-        assert_eq!(super::emitting(rgb, 0), rgb);
-        assert_eq!(super::emitting(rgb, super::INCANDESCENT), 0xFD56_3412);
-        assert_eq!(super::emitting(rgb, super::VERY_BRIGHT), 0xFB56_3412);
-        assert_eq!(super::emitting(rgb, super::LOW | super::WHOLE), 0xFA56_3412);
-        assert_eq!(super::emitting(rgb, super::WHOLE), rgb);
-        assert_eq!(
-            super::emitting(rgb, super::VERY_BRIGHT) | super::EMISSION_BITS,
-            rgb
-        );
+        assert_eq!(emitting(rgb, 0), rgb);
+        assert_eq!(giving_off(rgb, 0), rgb);
+        assert_eq!(giving_off(emitting(rgb, INCANDESCENT), 14), 0x1D56_3412);
+        assert_eq!(giving_off(emitting(rgb, VERY_BRIGHT), 15), 0x0B56_3412);
+        assert_eq!(giving_off(emitting(rgb, LOW | WHOLE), 3), 0xCA56_3412);
+        assert_eq!(emitting(rgb, WHOLE), rgb);
+        // A light level without a tier: a glow lichen's.
+        assert_eq!(giving_off(rgb, 7), 0x8F56_3412);
+        let lava = as_fluid(giving_off(emitting(rgb, INCANDESCENT | WHOLE), 15));
+        assert_eq!(lava, 0x0156_3412);
+        assert_eq!(giving_off(emitting(lava, LOW), 3), 0xCE56_3412);
     }
     #[test]
     fn light_sources_shine_by_kind_not_light_level() {
@@ -291,33 +294,32 @@ mod vertex_tests {
         assert_eq!(hdr_tier("vault", 12), INCANDESCENT);
         assert_eq!(hdr_tier("sculk_sensor", 1), LOW);
     }
-    #[test]
-    fn fluid_faces_keep_the_colour_and_the_emission() {
-        let lit = super::emitting(super::pack_rgb([0x12, 0x34, 0x56]), super::INCANDESCENT);
-        assert_eq!(super::fluid_face(lit, 0), 0x8D56_3412);
-        assert_eq!(super::fluid_face(lit, 5), 0xDD56_3412);
-        // Another face replaces the first.
-        assert_eq!(super::fluid_face(super::fluid_face(lit, 5), 1), 0x9D56_3412);
-    }
-    /// What `gfx/native_material.rs` reads back from the colour's alpha byte: the face of a
-    /// fluid quad, and the HDR tier.
-    fn decoded(color: u32) -> (Option<u32>, u32) {
+    /// What `terrain.wgsl` (the tier), `gfx/native_material.rs` and `gfx/native_shadow.rs` (the
+    /// fluid flag and the level) read back from the colour's alpha byte.
+    fn decoded(color: u32) -> (u32, bool, u32) {
         let flags = color >> 24;
-        let high = flags >> 4;
-        let fluid = high >= 8 && (high & 7) < 6;
-        (fluid.then_some(high & 7), 15 - (flags & 15))
+        (7 - (flags & 7), flags & 8 == 0, 15 - (flags >> 4))
     }
     #[test]
-    fn the_material_stage_reads_back_what_the_mesher_encodes() {
+    fn the_shaders_read_back_what_the_mesher_encodes() {
         let rgb = super::pack_rgb([0x12, 0x34, 0x56]);
-        for tier in 0..=super::VERY_BRIGHT {
-            let lit = super::emitting(rgb, tier);
-            assert_eq!(decoded(lit), (None, u32::from(tier)));
-            for face in 0..6 {
-                assert_eq!(
-                    decoded(super::fluid_face(lit, face)),
-                    (Some(face as u32), u32::from(tier))
-                );
+        // Every code a block has: 0, the three tiers alone and all over.
+        let tiers = [
+            0,
+            1,
+            2,
+            3,
+            1 | super::WHOLE,
+            2 | super::WHOLE,
+            3 | super::WHOLE,
+        ];
+        for (tier, code) in tiers.into_iter().zip([0, 1, 2, 3, 5, 6, 7]) {
+            for level in 0..=15 {
+                let lit = super::giving_off(super::emitting(rgb, tier), level);
+                assert_eq!(lit & 0xFF_FFFF, rgb & 0xFF_FFFF);
+                assert_eq!(decoded(lit), (code, false, u32::from(level)));
+                let fluid = super::as_fluid(lit);
+                assert_eq!(decoded(fluid), (code, true, u32::from(level)));
             }
         }
     }
@@ -1682,12 +1684,15 @@ mod reuse_tests;
 mod tint_tests;
 /// Set on a terrain vertex's sprite layer when its texture alpha must be ignored.
 pub const OPAQUE_LAYER: u16 = 1 << 15;
-/// The bits of `TerrainVertex::color`'s alpha byte that hold how brightly its face shines
-/// in HDR output (`gfx/hdr.rs`): 15 minus the tier, plus 4 for one that shines all over
-/// (`WHOLE`), so the usual 0xFF means none. The byte's high nibble carries the fluid face
-/// flags (`fluid_face`); the shaders ignore the vertex alpha, so both travel to the
-/// material stage untouched.
-pub const EMISSION_BITS: u32 = 0x0F00_0000;
+/// `TerrainVertex::color`'s alpha byte, stored inverted so the usual 0xFF means nothing: bits
+/// 0..2 (`TIER_BITS`) 7 minus how brightly the face shines in HDR output (`gfx/hdr.rs`), the
+/// tier plus 4 for one that shines all over (`WHOLE`); bit 3 (`FLUID_BIT`) clear on a fluid
+/// quad; bits 4..7 (`LEVEL_BITS`) 15 minus the light level the surface gives off
+/// (`MaterialInput.emission`). The shaders take the vertex alpha for none of its colour, so
+/// all three travel to the HDR marks and the material stage untouched.
+pub const TIER_BITS: u32 = 0x0700_0000;
+pub const FLUID_BIT: u32 = 0x0800_0000;
+pub const LEVEL_BITS: u32 = 0xF000_0000;
 /// HDR tiers, by the kind of light rather than its level: a candle's flame is as bright as
 /// a torch's, it only lights less around it. 0 stays as in SDR.
 pub const LOW: u8 = 1;
@@ -1698,26 +1703,26 @@ pub const VERY_BRIGHT: u8 = 4;
 /// Added to a tier: the light source shines all over (a froglight), not only where its
 /// sprite is brightest (a torch's flame, not its handle). See `gfx/hdr.rs` `Masks`.
 pub const WHOLE: u8 = 8;
-/// `color` marked as shining at `tier` (0 to `VERY_BRIGHT`, plus `WHOLE`).
+/// `color` marked as shining at `tier` (0 to `VERY_BRIGHT`, plus `WHOLE` below it), on a quad
+/// that isn't a fluid's (`as_fluid` marks one after).
 pub fn emitting(color: u32, tier: u8) -> u32 {
-    let level = (tier & !WHOLE).min(VERY_BRIGHT);
-    let code = if level > 0 && tier & WHOLE != 0 {
-        level + 4
+    let base = (tier & !WHOLE).min(VERY_BRIGHT);
+    let code = if base > 0 && tier & WHOLE != 0 {
+        base + 4
     } else {
-        level
+        base
     };
-    color & !EMISSION_BITS | u32::from(15 - code) << 24
+    // Terrain has three bits for it: `VERY_BRIGHT` all over is the sun's, never a block's.
+    debug_assert!(code < 8, "tier {tier} doesn't fit a terrain vertex");
+    color & !(TIER_BITS | FLUID_BIT) | u32::from(15 - code) << 24
 }
-/// The high nibble of `TerrainVertex::color`'s alpha byte: 8 plus the face (`Direction`
-/// as usize) on a fluid quad, 0xF on every other. `terrain.wgsl` reads only the low nibble
-/// (the emission), so only the material stage of Horizon's own packs reads it
-/// (`gfx/native_material.rs`); whether the fluid is water or lava follows from the pass
-/// that draws it.
-pub const FLUID_FACE_BITS: u32 = 0xF000_0000;
-/// `color` marked as a fluid quad of face `face` (`Direction` as usize, 0 to 5).
-pub fn fluid_face(color: u32, face: usize) -> u32 {
-    debug_assert!(face < 6);
-    color & !FLUID_FACE_BITS | 0x8000_0000 | (face as u32) << 28
+/// `color` marked as giving off light `level` (0..15).
+pub fn giving_off(color: u32, level: u8) -> u32 {
+    color & !LEVEL_BITS | u32::from(15 - level.min(15)) << 28
+}
+/// `color` marked as a fluid quad's (`FLUID_BIT`).
+pub fn as_fluid(color: u32) -> u32 {
+    color & !FLUID_BIT
 }
 /// The HDR tier of block `name` (no namespace), which emits light `level`.
 pub fn hdr_tier(name: &str, level: u8) -> u8 {
@@ -2570,7 +2575,7 @@ impl Mesher<'_> {
                 let ao_byte = (ao_factor[i] * 255.0).round().clamp(0.0, 255.0) as u32;
                 ao_byte << 24 | (pack_rgb(rgb) & 0x00FF_FFFF)
             } else {
-                emitting(pack_rgb(rgb), tier)
+                giving_off(emitting(pack_rgb(rgb), tier), state.emission)
             };
             TerrainVertex::packed_uv(
                 [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],

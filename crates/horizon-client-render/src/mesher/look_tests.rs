@@ -1,7 +1,8 @@
-//! The quads' looks (`QuadLook`, a shader pack's `tint`, `shade`, `ao`, `face` and `emission`)
-//! through the real mesher: each quad's look gives back its vertex colour, they stay with
-//! their quads through the solid sort, a mesh without them is the same, and `emission` is the
-//! block's light level. Needs prepared resources, like the other mesher geometry tests.
+//! The quads' looks (`QuadLook`, a shader pack's `tint`, `shade`, `ao` and `face`) through the
+//! real mesher: each quad's look gives back its vertex colour, they stay with their quads
+//! through the solid sort and a mesh without them is the same; and `emission`, which the vertex
+//! holds, is the block's light level. Needs prepared resources, like the other mesher geometry
+//! tests.
 use super::opaque_ice_tests::{Fixture, fixture};
 use super::*;
 use crate::chunk::Chunk;
@@ -55,7 +56,7 @@ const BASE: i32 = MIN_Y + 4;
 /// The blocks of the emission table, each with vanilla's light level (`None`: drawn as a block
 /// entity, so no terrain quad), one every other block along x and z. The water of a
 /// waterlogged one gives off what water does, nothing. A lit candle gives 3 a candle.
-const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 23] = [
+const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 24] = [
     ("minecraft:torch", &[], Some(14)),
     ("minecraft:lantern", &[], Some(15)),
     ("minecraft:lantern", &[("waterlogged", "true")], Some(15)),
@@ -73,6 +74,7 @@ const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 23] = [
     ("minecraft:glowstone", &[], Some(15)),
     ("minecraft:ochre_froglight", &[], Some(15)),
     ("minecraft:soul_torch", &[], Some(10)),
+    ("minecraft:soul_fire", &[], Some(10)),
     ("minecraft:lava", &[], Some(15)),
     ("minecraft:lava", &[("level", "4")], Some(15)),
     ("minecraft:glow_lichen", &[("down", "true")], Some(7)),
@@ -88,6 +90,11 @@ const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 23] = [
 
 fn place(i: usize) -> (i32, i32) {
     (1 + 2 * (i as i32 % 7), 1 + 2 * (i as i32 / 7))
+}
+
+fn all_quads(mesh: &SectionMesh) -> impl Iterator<Item = &[TerrainVertex; 4]> {
+    let solid = mesh.solid.as_chunks::<4>().0.iter();
+    solid.chain(mesh.translucent.as_chunks::<4>().0.iter())
 }
 
 fn quads(mesh: &SectionMesh) -> impl Iterator<Item = (&[TerrainVertex; 4], QuadLook)> {
@@ -167,15 +174,21 @@ fn emission_is_the_blocks_light_level() {
         let (x, z) = place(i);
         chunk.set(x, BASE, z, state(&f, name, properties));
     }
-    let mesh = mesh(&f, &chunk, true);
+    // Without the looks: the vertex holds it, as `gfx/native_material.rs` reads it back.
+    let mesh = mesh(&f, &chunk, false);
+    let level_of = |q: &[TerrainVertex; 4]| {
+        let levels = q.map(|v| 15 - (v.color >> 28));
+        assert!(levels.iter().all(|&l| l == levels[0]), "{levels:?}");
+        levels[0]
+    };
     let y = (BASE - MIN_Y) as f32;
     for (i, (name, properties, level)) in BLOCKS.iter().enumerate() {
         let (x, z) = place(i);
         let (x, z) = (x as f32, z as f32);
         // Translucent quads here are water's.
-        let levels: Vec<(bool, u32)> = quads(&mesh)
+        let levels: Vec<(bool, u32)> = all_quads(&mesh)
             .enumerate()
-            .map(|(i, (q, l))| (i >= mesh.solid.len() / 4, q, l))
+            .map(|(i, q)| (i >= mesh.solid.len() / 4, q, level_of(q)))
             .filter(|(_, q, _)| {
                 let c = q.iter().fold([0.0; 3], |c, v| {
                     [
@@ -188,7 +201,7 @@ fn emission_is_the_blocks_light_level() {
                     && (y - 0.01..y + 1.01).contains(&c[1])
                     && (z - 0.01..z + 1.01).contains(&c[2])
             })
-            .map(|(translucent, _, l)| (translucent, l.0[2]))
+            .map(|(translucent, _, l)| (translucent, l))
             .collect();
         let waterlogged = properties.contains(&("waterlogged", "true"))
             || name.ends_with("sea_pickle") && properties.iter().all(|p| p.0 != "waterlogged");

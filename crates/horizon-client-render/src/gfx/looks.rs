@@ -37,7 +37,7 @@ pub fn decide(pack: bool, switch: bool, storage: bool) -> Result<bool, String> {
     if pack && !storage {
         return Err(
             "the device's vertex stage reads no storage buffers, which the terrain's \
-                    `tint`, `shade`, `ao`, `face` and `emission` need (`shaded_tint` doesn't)"
+                    `tint`, `shade`, `ao` and `face` need (`shaded_tint` and `emission` don't)"
                 .into(),
         );
     }
@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(decide(false, true, false), Ok(false));
         let refused = decide(true, true, false).unwrap_err();
         assert!(refused.starts_with("the device's vertex stage reads no storage buffers"));
-        assert!(refused.contains("(`shaded_tint` doesn't)"));
+        assert!(refused.contains("(`shaded_tint` and `emission` don't)"));
     }
 
     /// A mesh's looks as the renderer uploads them (`per_slot`, `Arena::write_looks`) sit at

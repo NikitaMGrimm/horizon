@@ -4346,6 +4346,102 @@ mod tests {
         }
         Ok(())
     }
+    /// A far face gives off its block's light level in its vertex, as the section mesher's
+    /// faces do (`MaterialInput.emission`, read from the vertex): the block state's, a fluid's
+    /// own, none for one that gives no light; the same with quad looks or without.
+    #[test]
+    #[ignore = "daily"]
+    fn far_faces_give_off_their_blocks_light_level() -> crate::Result<()> {
+        use crate::{assets::Assets, biome::Biomes, light::LightTables, mesher::MeshTables};
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
+        let assets = Arc::new(Assets::load(&root)?);
+        let resource_root = crate::resource_source::ResourceRoot::directory(root.clone());
+        let render = Arc::new(assets.reload(&resource_root)?);
+        let facts = BlockFacts::load(&root, assets.registry)?;
+        let context = WorkerContext {
+            light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
+            tables: Arc::new(MeshTables::new(
+                &assets,
+                &render,
+                &facts,
+                crate::models::load_visibility(&root, assets.registry)?,
+                None,
+            )?),
+            assets: assets.clone(),
+            render,
+            biomes: Arc::new(Biomes::load(&resource_root)?),
+            hidden_states: Arc::from([]),
+            part_tables: Default::default(),
+        };
+        let kinds = state_kinds(&facts);
+        let registry = assets.registry;
+        let state = |name: &str, properties: &[(&str, &str)]| {
+            let mut state = registry
+                .state(registry.default_state(name).unwrap())
+                .unwrap()
+                .clone();
+            for (key, value) in properties {
+                state.properties.insert((*key).into(), (*value).into());
+            }
+            registry.id(&state).unwrap().0
+        };
+        let blocks: [(&str, &[(&str, &str)], u32); 10] = [
+            ("minecraft:glowstone", &[], 15),
+            ("minecraft:jack_o_lantern", &[], 15),
+            ("minecraft:redstone_lamp", &[("lit", "true")], 15),
+            ("minecraft:redstone_lamp", &[], 0),
+            ("minecraft:crying_obsidian", &[], 10),
+            ("minecraft:magma_block", &[], 3),
+            ("minecraft:shroomlight", &[], 15),
+            ("minecraft:stone", &[], 0),
+            ("minecraft:lava", &[], 15),
+            ("minecraft:water", &[], 0),
+        ];
+        for (name, properties, level) in blocks {
+            let mut chunk = Chunk::empty(0, 0);
+            chunk.set(3, 90, 3, state(name, properties));
+            let columns = summarize(&chunk, &kinds);
+            let meshes = [0, 1].map(|looks| {
+                let mut mesher = mesh::Mesher::default();
+                mesher.looks = looks;
+                mesher.mesh(
+                    TileKey {
+                        x: 0,
+                        z: 0,
+                        level: 0,
+                    },
+                    &columns.iter().collect::<Vec<_>>(),
+                    &FxHashSet::default(),
+                    None,
+                    &context,
+                    &std::array::from_fn(|_| Vec::new()),
+                    &[],
+                )
+            });
+            for (looks, mesh) in meshes.iter().enumerate() {
+                let vertices: Vec<&TerrainVertex> =
+                    mesh.solid.iter().chain(&mesh.translucent).collect();
+                assert!(!vertices.is_empty(), "{name} {properties:?}");
+                let levels: FxHashSet<u32> =
+                    vertices.iter().map(|v| 15 - (v.color >> 28)).collect();
+                assert_eq!(
+                    levels,
+                    [level].into_iter().collect(),
+                    "{name} {properties:?}, looks {looks}"
+                );
+            }
+            let bytes = |v: &[TerrainVertex]| bytemuck::cast_slice::<_, u8>(v).to_vec();
+            assert_eq!(bytes(&meshes[0].solid), bytes(&meshes[1].solid), "{name}");
+            assert_eq!(
+                bytes(&meshes[0].translucent),
+                bytes(&meshes[1].translucent),
+                "{name}"
+            );
+        }
+        Ok(())
+    }
     #[test]
     #[ignore = "daily"]
     fn real_mesh_clips_near_chunks_and_preserves_water_and_edited_surfaces() -> crate::Result<()> {
