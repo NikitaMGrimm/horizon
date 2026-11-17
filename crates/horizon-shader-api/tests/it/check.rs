@@ -1147,7 +1147,8 @@ fn the_entity_layer_is_the_pack_s_that_names_it() {
 /// A traced pack whose files don't name `RAY_ENTITY` composes as it did before the entity layer,
 /// byte for byte, with the scene and without it: the hashes are those of its post and material
 /// stages composed before, but for what changed for every pack since (the frame's fog fields,
-/// `history`, `RayHit`'s fields).
+/// `history`, `RayHit`'s fields), and the scene builds' terrain hits, which read their quads'
+/// looks: its stages read `hit.tint` and `hit.emission`.
 #[test]
 fn a_traced_pack_that_doesn_t_name_ray_entity_composes_as_before() {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
@@ -1178,9 +1179,56 @@ fn a_traced_pack_that_doesn_t_name_ray_entity_composes_as_before() {
         hashes,
         [
             "1af2ec758e6f343986c676a7df695a1bf820ac9f498840422bbb8ef72df65cc4",
-            "05d4cc7ba11791f4f6b8ff3acdbe1f422747f8360de29064b9ad6e48cb33ee70",
+            "c048c6f4532fc2377c66406fecbcd8732332c794cd3603ea14f7d2594cde2e76",
             "e646501b8bcd9097579a8bcb14e11710439d85617dfc61b044bde4e0490c8681",
-            "f7e7650f346bb7e551dbdbd6f40d4ee2ca0d7c1a52ddde63ee37f4a754073412",
+            "2dbea0f33e2c51c82dd1a4e4d5160f91d406f2471d1a32f5c2a2409b14449583",
+        ]
+    );
+}
+
+/// The same pack with stages that read none of a terrain hit's look (`RayHit.tint`, `shade`,
+/// `ao`, `emission`) composes as before the scene kept looks, with the scene and without it.
+#[test]
+fn a_traced_pack_that_reads_no_hit_look_composes_as_before() {
+    let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+                    [material]\nfile = \"material.wgsl\"\n[[post]]\nfile = \"post.wgsl\"\n\
+                    [tonemap]\nfile = \"tonemap.wgsl\"\n[ray_tracing]\n";
+    let plain = |text: &str| {
+        text.replace("hit.tint", "hit.albedo")
+            .replace("hit.emission", "hit.light.x")
+    };
+    let (material, post) = (plain(REFLECTING), plain(SHADOWED));
+    let files = [
+        (MANIFEST, manifest),
+        ("material.wgsl", &material),
+        ("post.wgsl", &post),
+        ("tonemap.wgsl", TONEMAP),
+    ]
+    .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+    .into();
+    let pack = Pack::from_files(files).unwrap();
+    let report = check(&pack).unwrap();
+    // The material still reads its own `input.tint`: the arena's looks, another bit.
+    assert!(!report.ray_looks() && report.looks());
+    let stages = [
+        (StageKind::Post, "post.wgsl"),
+        (StageKind::Material, "material.wgsl"),
+    ];
+    let hashes: Vec<String> = stages
+        .into_iter()
+        .flat_map(|(kind, file)| {
+            use horizon_shader_api::{compose, compose_scene};
+            [compose(&pack, kind, file), compose_scene(&pack, kind, file)]
+        })
+        .map(|c| horizon_shader_api::package::sha256_hex(c.text.as_bytes()))
+        .collect();
+    assert_eq!(
+        hashes,
+        [
+            "6f8b2d85a9472217a514cf65608dcfa8743f847923eb1a6706ae0a2eb016eb25",
+            "d77da0b10574512e69789de461e904d5aed8e4b3e93ce170dae0733e00b50998",
+            "596986641ff69096210701d224647968de1cc5d4e4ded91ff56433dd4d4e6c94",
+            "0fa088341da7a3d090f9009b487dc252935a00dc0d4759f413eca8dc4aeb8ea6",
         ]
     );
 }
@@ -1199,6 +1247,8 @@ fn the_retained_block_entities_store_is_the_layer_s_last_binding() {
         let mut found: Vec<u32> = (scene.global_variables.iter())
             .filter_map(|(_, g)| g.binding.as_ref())
             .filter(|b| b.group == GROUP && b.binding >= RAY_ENTITY_STORE_BINDING)
+            // The terrain's looks, after the layer's, are another trigger's.
+            .filter(|b| b.binding != horizon_shader_api::stages::RAY_LOOKS_BINDING)
             .map(|b| b.binding)
             .collect();
         found.sort_unstable();
@@ -1369,4 +1419,53 @@ fn shadow_color_and_ray_hits_leave_the_looks_off() {
                       let c = hit.tint.rgb * hit.shade * hit.ao + vec3(hit.emission);\n    \
                       return vec4<f32>(input.color.rgb * c, 1.0);\n}\n";
     assert!(!traced(traced_hit).unwrap().looks());
+}
+
+/// The ray scene's store of terrain looks is a stage's whose code reads a hit's `tint`, `shade`,
+/// `ao` or `emission`, however: directly, through a copy, or in a helper of another file. A hit's
+/// `shaded_tint` (the vertex holds it) and a stage's own input's looks don't need it.
+#[test]
+fn a_hit_s_look_fields_bring_the_scene_s_looks() {
+    let post = |body: &str| {
+        format!(
+            "fn post(input: PostInput) -> vec4<f32> {{\n    \
+             let hit = trace(view_position(input.uv, input.depth), frame.sun_direction, 64.0);\n    \
+             {body}\n}}\n"
+        )
+    };
+    // Every pack has `lib.wgsl` beside its post pass, with `lit`.
+    let looked = "fn lit(h: RayHit) -> f32 { return h.ao + h.emission; }\n";
+    let plain = "fn lit(h: RayHit) -> f32 { return h.distance; }\n";
+    let ray_looks = |text: &str, lib: &str| {
+        let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+                        [[post]]\nfile = \"post.wgsl\"\nfiles = [\"lib.wgsl\"]\n\
+                        [tonemap]\nfile = \"tonemap.wgsl\"\n[ray_tracing]\n";
+        let files = [
+            (MANIFEST, manifest),
+            ("post.wgsl", text),
+            ("lib.wgsl", lib),
+            ("tonemap.wgsl", TONEMAP),
+        ]
+        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+        .into();
+        let report = check(&Pack::from_files(files).unwrap()).unwrap();
+        assert!(!report.looks(), "{text}");
+        report.ray_looks()
+    };
+    let reads = [
+        post("return vec4<f32>(hit.tint.rgb, 1.0);"),
+        post("let h = hit;\n    return vec4<f32>(h.shade);"),
+        post("return vec4<f32>(lit(hit));"),
+    ];
+    for text in &reads {
+        assert!(ray_looks(text, looked), "{text}");
+    }
+    let none = [
+        post("return input.color * hit.albedo;"),
+        post("return vec4<f32>(hit.shaded_tint.rgb * hit.albedo.rgb, 1.0);"),
+        post("return input.color * lit(hit);"),
+    ];
+    for text in &none {
+        assert!(!ray_looks(text, plain), "{text}");
+    }
 }

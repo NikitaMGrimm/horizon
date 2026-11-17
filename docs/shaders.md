@@ -244,9 +244,8 @@ let hit = trace(position * 0.99, direction, 64.0);   // hit.distance < 0.0: noth
 ```
 
 `trace` returns the nearest solid surface along a ray, with what the material stage would get for that point (`albedo`,
-`light`, `uv`, `material`, `tags`, `fluid`, `translucent`, `tangent`; for now a terrain hit's `tint` still holds its shade
-and ambient occlusion, its `shade` and `ao` are 1 and its `emission` is the block's brightness class, as the reference
-says) and its `position`, `normal`, `back` and `distance`; `trace_any` only says whether something is in the way, which is all a shadow needs. Origins are camera-relative, as `view_position` gives them, and
+`light`, `uv`, `material`, `tags`, `fluid`, `translucent`, `tangent`, and on a terrain hit `tint`, `shade`, `ao` and
+`emission`; reading those four makes the world load again when the pack starts, as the reference says) and its `position`, `normal`, `back` and `distance`; `trace_any` only says whether something is in the way, which is all a shadow needs. Origins are camera-relative, as `view_position` gives them, and
 rays pass through the clear texels of leaves and plants, and through water, stained glass and ice, which are in a
 [layer of their own](#layers). `frame.ray_distance` is the distance the scene covers in every direction; a longer ray
 is allowed and may still hit geometry toward the corners, and no clamp is needed. Horizon keeps the scene; the look is the pack's: Horizon

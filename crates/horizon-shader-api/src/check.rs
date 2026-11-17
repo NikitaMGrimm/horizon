@@ -13,8 +13,8 @@ use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT, SHADED_TI
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
 use crate::stages::{
-    Composed, GROUP, RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING, RAY_SCENE_BINDING,
-    StageKind, compose_traced, identifiers,
+    Composed, GROUP, RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING, RAY_LOOKS_BINDING,
+    RAY_SCENE_BINDING, StageKind, compose_traced, identifiers,
 };
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 use std::collections::HashSet;
@@ -96,6 +96,18 @@ impl CheckedStage {
         })
     }
 
+    /// Whether the stage against the scene reads a terrain hit's look (`RAY_LOOK_FIELDS`), so the
+    /// renderer binds the scene's looks for it (`RAY_LOOKS_BINDING`).
+    pub fn traces_looks(&self) -> bool {
+        self.scene.as_ref().is_some_and(|module| {
+            module.global_variables.iter().any(|(_, g)| {
+                g.binding
+                    .as_ref()
+                    .is_some_and(|b| b.group == GROUP && b.binding == RAY_LOOKS_BINDING)
+            })
+        })
+    }
+
     /// Whether the stage's inputs end with `shaded_tint` (`SHADED_TINT`): its pack's files name
     /// it (`stages::names_shaded_tint`), so the renderer's constructors of them pass it.
     pub fn shaded_tint(&self) -> bool {
@@ -114,41 +126,7 @@ impl CheckedStage {
     /// struct, a copy of it (an argument, a `let`, a `var`) or a pointer to it, in whichever file
     /// of the pack: every one is a member access on a value or pointer of the struct's type.
     pub fn reads_looks(&self) -> bool {
-        let m = &self.module;
-        let looked = |ty: naga::Handle<naga::Type>, index: u32| {
-            // Through a pointer (`ptr<function, MaterialInput>`, a `var`): its pointee.
-            let ty = match m.types[ty].inner {
-                naga::TypeInner::Pointer { base, .. } => base,
-                _ => ty,
-            };
-            let t = &m.types[ty];
-            let naga::TypeInner::Struct { members, .. } = &t.inner else {
-                return false;
-            };
-            let field = members.get(index as usize).and_then(|f| f.name.as_deref());
-            LOOK_FIELDS.iter().any(|(name, fields)| {
-                t.name.as_deref() == Some(*name) && field.is_some_and(|f| fields.contains(&f))
-            })
-        };
-        let reads = |f: &naga::Function, info: &naga::valid::FunctionInfo| {
-            f.expressions.iter().any(|(_, e)| {
-                let naga::Expression::AccessIndex { base, index } = *e else {
-                    return false;
-                };
-                // The struct, or a pointer to one, by handle or by value.
-                let ty = match &info[base].ty {
-                    naga::proc::TypeResolution::Handle(ty) => Some(*ty),
-                    naga::proc::TypeResolution::Value(naga::TypeInner::Pointer {
-                        base, ..
-                    }) => Some(*base),
-                    naga::proc::TypeResolution::Value(_) => None,
-                };
-                ty.is_some_and(|ty| looked(ty, index))
-            })
-        };
-        m.functions.iter().any(|(h, f)| reads(f, &self.info[h]))
-            || (m.entry_points.iter().enumerate())
-                .any(|(i, e)| reads(&e.function, self.info.get_entry_point(i)))
+        reads_fields(&self.module, &self.info, &LOOK_FIELDS)
     }
 
     /// Whether the stage's function, or a function it calls, reads the prelude's `global`
@@ -172,7 +150,7 @@ impl CheckedStage {
 
 /// The fields of the terrain's inputs that only its quads' looks hold, by struct: the vertex
 /// holds their product (`shaded_tint`). `RayHit`'s aren't among them: a terrain hit reads the
-/// ray scene's own store, not the sections' looks.
+/// ray scene's own looks (`RAY_LOOK_FIELDS`), not the arenas'.
 const LOOK_FIELDS: [(&str, &[&str]); 2] = [
     (
         "MaterialInput",
@@ -180,6 +158,64 @@ const LOOK_FIELDS: [(&str, &[&str]); 2] = [
     ),
     ("VertexInput", &["tint", "shade", "ao", "face"]),
 ];
+
+/// A terrain hit's fields that only its quad's look holds: a stage against the scene that reads
+/// one of them binds the scene's looks, and the renderer keeps them (`Report::ray_looks`).
+/// `shaded_tint` isn't among them: the vertex holds it, on a hit too.
+pub(crate) const RAY_LOOK_FIELDS: [(&str, &[&str]); 1] =
+    [("RayHit", &["tint", "shade", "ao", "emission"])];
+
+/// Whether a function of `m`, called or not, reads one of `fields`, by struct: through the
+/// struct, a copy of it (an argument, a `let`, a `var`) or a pointer to it, in whichever file of
+/// the pack, every one is a member access on a value or pointer of the struct's type.
+fn reads_fields(m: &naga::Module, info: &ModuleInfo, fields: &[(&str, &[&str])]) -> bool {
+    let looked = |ty: naga::Handle<naga::Type>, index: u32| {
+        // Through a pointer (`ptr<function, MaterialInput>`, a `var`): its pointee.
+        let ty = match m.types[ty].inner {
+            naga::TypeInner::Pointer { base, .. } => base,
+            _ => ty,
+        };
+        let t = &m.types[ty];
+        let naga::TypeInner::Struct { members, .. } = &t.inner else {
+            return false;
+        };
+        let field = members.get(index as usize).and_then(|f| f.name.as_deref());
+        fields.iter().any(|(name, fields)| {
+            t.name.as_deref() == Some(*name) && field.is_some_and(|f| fields.contains(&f))
+        })
+    };
+    let reads = |f: &naga::Function, info: &naga::valid::FunctionInfo| {
+        f.expressions.iter().any(|(_, e)| {
+            let naga::Expression::AccessIndex { base, index } = *e else {
+                return false;
+            };
+            // The struct, or a pointer to one, by handle or by value.
+            let ty = match &info[base].ty {
+                naga::proc::TypeResolution::Handle(ty) => Some(*ty),
+                naga::proc::TypeResolution::Value(naga::TypeInner::Pointer { base, .. }) => {
+                    Some(*base)
+                }
+                naga::proc::TypeResolution::Value(_) => None,
+            };
+            ty.is_some_and(|ty| looked(ty, index))
+        })
+    };
+    m.functions.iter().any(|(h, f)| reads(f, &info[h]))
+        || (m.entry_points.iter().enumerate())
+            .any(|(i, e)| reads(&e.function, info.get_entry_point(i)))
+}
+
+/// Whether the stage composed as `text` (its build where `trace` misses) reads one of
+/// `RAY_LOOK_FIELDS`; false where it doesn't build, which the check reports.
+pub(crate) fn reads_hit_looks(text: &str) -> bool {
+    let Ok(module) = naga::front::wgsl::parse_str(text) else {
+        return false;
+    };
+    let mut validator = Validator::new(ValidationFlags::all(), Capabilities::default());
+    validator
+        .validate(&module)
+        .is_ok_and(|info| reads_fields(&module, &info, &RAY_LOOK_FIELDS))
+}
 
 #[derive(Debug)]
 pub struct Report {
@@ -205,6 +241,13 @@ impl Report {
     /// nothing for them.
     pub fn looks(&self) -> bool {
         (self.stages.iter()).any(CheckedStage::reads_looks)
+    }
+
+    /// Whether a stage against the scene reads a terrain hit's look (`CheckedStage::traces_looks`):
+    /// the renderer's scene then keeps its quads' looks. Apart from `looks`: the arenas' stay
+    /// as they are.
+    pub fn ray_looks(&self) -> bool {
+        (self.stages.iter()).any(CheckedStage::traces_looks)
     }
 }
 
