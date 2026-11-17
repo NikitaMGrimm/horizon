@@ -398,7 +398,7 @@ translucent surfaces (`input.translucent`), which leave no surface for a post pa
 
 ### `RayHit`
 
-The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `light`, `uv`, `material`, `tags`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both; a terrain hit's `tint`, `shade`, `ao` and `emission` are not yet (see each). What stays is the product `tint.rgb * shade * ao`: a terrain hit's `shaded_tint` is that product now and once the three are apart. An entity hit's `shaded_tint` is its `tint` alone, without `shade`. On a miss, and in every stage while the scene isn't there (`frame.has_ray_tracing` 0), `distance` is negative and every other field is 0 (the `bool`s false).
+The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `light`, `uv`, `material`, `tags`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both; a terrain hit's `tint`, `shade`, `ao` and `emission` are not yet (see each). What stays is the product `tint.rgb * shade * ao`: `shaded_tint` is that product on every hit, a terrain hit's now and once the three are apart. On a miss, and in every stage while the scene isn't there (`frame.has_ray_tracing` 0), `distance` is negative and every other field is 0 (the `bool`s false).
 
 | Field | Type | Meaning |
 | --- | --- | --- |

@@ -195,14 +195,16 @@ const PROBE: &str = "
 ";
 
 /// The scene's WGSL for a pack whose post pass names `RAY_ENTITY` (`entities`) or only the
-/// terrain's layers, as the check builds it.
+/// terrain's layers, and `shaded_tint`, as the check builds it.
 fn scene_source(entities: bool) -> String {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
                     [[post]]\nfile = \"post.wgsl\"\n[ray_tracing]\n";
     let layers = if entities { "RAY_ENTITY" } else { "RAY_SOLID" };
     let post = format!(
         "fn post(input: PostInput) -> vec4<f32> {{\n    \
-         return input.color * f32(trace_any_layers(vec3<f32>(0.0), vec3<f32>(1.0, 0.0, 0.0), 1.0, {layers}));\n}}\n"
+         let x = vec3<f32>(1.0, 0.0, 0.0);\n    \
+         let hit = trace_layers(vec3<f32>(0.0), x, 1.0, {layers});\n    \
+         return input.color * f32(trace_any_layers(vec3<f32>(0.0), x, 1.0, {layers})) * hit.shaded_tint;\n}}\n"
     );
     let files = [
         (horizon_shader_api::MANIFEST, manifest),
@@ -596,14 +598,16 @@ fn rays_reach_retained_block_entities_through_their_sections() {
     assert_eq!(gone[..2], got[..2]);
 }
 
-/// Rays toward +z at x 0.3, 10.3, 20.3 and 30.3: each hit's `shade`, `ao`, `back` and `entity`.
+/// Rays toward +z at x 0.3, 10.3, 20.3 and 30.3: each hit's `shade`, `ao`, `back` and `entity`,
+/// then each one's `shaded_tint`.
 const SHADE_PROBE: &str = "
-@group(0) @binding(0) var<storage, read_write> probe_out: array<vec4<f32>, 4>;
+@group(0) @binding(0) var<storage, read_write> probe_out: array<vec4<f32>, 8>;
 @compute @workgroup_size(1) fn probe() {
     for (var i = 0u; i < 4u; i++) {
         let at = vec3<f32>(f32(i) * 10.0 + 0.3, 0.6, 0.0);
         let hit = trace_layers(at, vec3<f32>(0.0, 0.0, 1.0), 100.0, RAY_ENTITY);
         probe_out[i] = vec4<f32>(hit.shade, hit.ao, f32(hit.back), f32(hit.entity));
+        probe_out[i + 4u] = hit.shaded_tint;
     }
 }
 ";
@@ -612,7 +616,8 @@ const SHADE_PROBE: &str = "
 /// `entity_light`, linear), lit as in the Nether when the frame is, its `ao` 1, and `back` says
 /// the ray met the face from behind: a quad shaded by its normal met from behind, one facing the
 /// ray, a two-sided one met from behind (shaded for its back, as vanilla draws that side), and
-/// one that keeps its colour (normal w 1: culled, not shaded).
+/// one that keeps its colour (normal w 1: culled, not shaded). Its `shaded_tint` is `tint`
+/// times that shade, as a terrain hit's is the product.
 #[test]
 fn an_entity_hit_has_vanilla_s_shade_and_says_when_the_ray_met_its_back() {
     let Some((device, queue)) = ray_device() else {
@@ -711,7 +716,7 @@ fn an_entity_hit_has_vanilla_s_shade_and_says_when_the_ray_met_its_back() {
             &traced,
             (&store, &layers, &sprites),
             SHADE_PROBE,
-            4,
+            8,
         );
         let want = [
             (light(normal(normals[0], 1.0), nether), true),
@@ -724,6 +729,15 @@ fn an_entity_hit_has_vanilla_s_shade_and_says_when_the_ray_met_its_back() {
             let case = format!("quad {i}, nether {nether}: {got:?}");
             assert!((got[0] - shade).abs() < 1e-4, "{case}, shade not {shade}");
             assert_eq!(got[1..], [1.0, f32::from(u8::from(back)), 1.0], "{case}");
+        }
+        // `shaded_tint` is `tint * shade * ao` (white quads, `ao` 1), alpha the tint's.
+        for (i, (shaded, (shade, _))) in got[4..].iter().zip(want).enumerate() {
+            let case = format!("quad {i}, nether {nether}: shaded_tint {shaded:?}");
+            assert!(
+                shaded[..3].iter().all(|c| (c - shade).abs() < 1e-4),
+                "{case}, not {shade}"
+            );
+            assert_eq!(shaded[3], 1.0, "{case}");
         }
     }
     // The cases tell the two lights and the two sides apart.

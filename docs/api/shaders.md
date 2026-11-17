@@ -292,13 +292,14 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   is 2 for lava. A pack whose material or vertex stage reads `tint`, `shade`, `ao`, `face` or `emission` makes the
   world load again when it starts, and terrain takes half again its memory; a device whose vertex stage reads no
   storage buffers refuses it. A pack that names `shaded_tint` gets the old `tint` last in `MaterialInput`,
-  `VertexInput` and `RayHit`, free. `RayHit` gains `shade`, `ao` and `back` and is ordered as the reference lists it;
-  an entity hit has vanilla's entity shade, the Nether's in the Nether. A terrain hit's `tint`, `shade`, `ao` and
-  `emission` change value, not type, in a later version (to what `MaterialInput` gives), without a source break; its
-  `shaded_tint` stays their product. `EntityInput.emission` is `full_light: bool`. Gone: the post stage's `history`,
-  `[material] fog` (a check error naming `[frame] fog`), and `frame.fog_start` and `fog_end`; the fog's fields are
-  declared for every pack. [Moving a pack](#shader-api-02-experimental) says what to read instead. A pack that reads
-  none of these is built and draws as before.
+  `VertexInput` and `RayHit`, free (on an entity hit, its `tint` times its `shade`). `RayHit` gains `shade`, `ao` and
+  `back` and is ordered as the reference lists it; an entity hit has vanilla's entity shade, the Nether's in the
+  Nether. A terrain hit's `tint`, `shade`, `ao` and `emission` change value, not type, in a later version (to what
+  `MaterialInput` gives), without a source break; its `shaded_tint` stays their product. `EntityInput.emission` is
+  `full_light: bool`. Gone: the post stage's `history`, `[material] fog` (a check error naming `[frame] fog`), and
+  `frame.fog_start` and `fog_end`; the fog's fields are declared for every pack. [Moving a
+  pack](#shader-api-02-experimental) says what to read instead. A pack that reads none of these is built and draws as
+  before.
 - 2026-11-15: API 0.2 (addition, experimental): `[frame] fog = "pack"` turns Horizon's fog off on what the material
   and entity stages return, and gives every stage `fn vanilla_fog(position: vec3<f32>) -> f32` and the frame's
   `fog_environment` and `fog_render`, the two distances vanilla's fog takes the larger of, which `fog_start` and
