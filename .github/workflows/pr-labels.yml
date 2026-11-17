@@ -1,5 +1,5 @@
 name: pr labels
-# A pull request's kind label (the box ticked in the template) and area labels (the paths it changes):
+# A pull request's kind label (the box ticked in the template), area labels (the paths it changes) and size label:
 # tools/ci/pr_labels.py, CONTRIBUTING.md "Pull requests".
 #
 # Why no pull request's code runs here, though `pull_request_target` gives a token that can write to fork PRs:
