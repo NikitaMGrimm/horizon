@@ -858,10 +858,12 @@ impl NativeMaterial {
     }
 }
 
-/// The terrain shader of a material's composed `source`, for a test's own entry points.
+/// The terrain shader of a material's composed `source`, for a test's own entry points: no
+/// vertex stage, no displacement, no `shaded_tint`, and the quads' looks not bound.
 #[cfg(test)]
 pub(in crate::gfx) fn test_shader(source: &str) -> String {
-    shader_source(source, &[], &[], (false, false), false)
+    let source = source.to_owned() + crate::gfx::looks::NO_LOOK_WGSL;
+    shader_source(&source, &[], &[], (false, false, false), false)
 }
 
 /// The pack's terrain layers, which the renderer's terrain passes draw in place of its own
