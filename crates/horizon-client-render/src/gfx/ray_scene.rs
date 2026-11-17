@@ -89,6 +89,9 @@ impl Renderer {
         &mut self,
         mut pack: Option<crate::gfx::native_pack::NativePack>,
     ) -> Option<String> {
+        // A frame still on the submit thread binds the kept resources `install_kept` destroys:
+        // its submission would fail on them.
+        self.land_frame();
         if let (Some(new), Some(old)) = (&mut pack, &mut self.native) {
             new.carry(old);
         }
@@ -103,7 +106,10 @@ impl Renderer {
             }
             return Some(refused);
         }
-        let traces = pack.as_ref().is_some_and(|p| p.traces);
+        let capabilities = pack
+            .as_ref()
+            .map(crate::gfx::native_pack::NativePack::capabilities);
+        let traces = capabilities.is_some_and(|c| c.ray_scene);
         follow(
             &mut self.ray_scene,
             &self.device,
@@ -111,6 +117,7 @@ impl Renderer {
         );
         // The arenas' looks follow before the next frame (`follow_terrain_looks`).
         self.native = pack;
+        self.executor = capabilities;
         None
     }
 
