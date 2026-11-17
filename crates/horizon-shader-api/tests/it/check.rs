@@ -1460,6 +1460,27 @@ fn a_hit_s_look_fields_bring_the_scene_s_looks() {
     for text in &reads {
         assert!(ray_looks(text, looked), "{text}");
     }
+    // A hit held elsewhere than a local: in a pack struct, an array, a `var<private>`, or
+    // returned from a pack helper and read by its caller.
+    let held = [
+        "struct Held { k: f32, hit: RayHit }\n".to_owned()
+            + &post("let held = Held(1.0, hit);\n    return vec4<f32>(held.hit.tint.rgb, 1.0);"),
+        post(
+            "var hits = array<RayHit, 2>(hit, hit);\n    \
+             return vec4<f32>(hits[u32(input.uv.x)].shade);",
+        ),
+        "var<private> kept: RayHit;\n".to_owned()
+            + &post("kept = hit;\n    return vec4<f32>(kept.emission);"),
+        "fn traced(p: vec3<f32>) -> RayHit { return trace(p, frame.sun_direction, 8.0); }\n"
+            .to_owned()
+            + &post(
+                "let near = traced(view_position(input.uv, input.depth));\n    \
+                 return vec4<f32>(near.ao + hit.distance);",
+            ),
+    ];
+    for text in &held {
+        assert!(ray_looks(text, plain), "{text}");
+    }
     let none = [
         post("return input.color * hit.albedo;"),
         post("return vec4<f32>(hit.shaded_tint.rgb * hit.albedo.rgb, 1.0);"),
