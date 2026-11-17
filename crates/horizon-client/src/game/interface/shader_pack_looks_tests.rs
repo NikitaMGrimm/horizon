@@ -282,10 +282,10 @@ fn pages_past_the_look_limit_are_dropped_when_looks_turn_on() {
         // Without `[shadow]`, as without a pack: the same layout of translucent quads.
         install(game, false);
         frame(game);
-        let renderer = game.renderer.as_mut().unwrap();
-        assert!(renderer.take_dropped_sections(), "dropped when looks turned on");
-        assert!(renderer.section_looks(key).is_none());
-        frame(game);
+        assert!(game.renderer.as_mut().unwrap().section_looks(key).is_none(), "dropped");
+        // The game meshes them again with the looks at once, not without and then again.
+        assert!(!game.streaming.looks);
+        game.update_world();
         assert!(game.streaming.looks, "the game meshes with looks");
         upload(game, key);
         held_as_handed(game, key, "pages within the limit");
