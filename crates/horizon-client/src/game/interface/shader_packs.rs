@@ -339,6 +339,11 @@ impl Game<'_> {
         let looks =
             (self.renderer.as_ref()).map_or((false, false), |r| (r.mesh_looks(), r.ray_looks()));
         if (self.streaming.looks, self.streaming.ray_looks) != looks {
+            log::info!(
+                "terrain meshes again: quad looks {}, ray scene looks {}",
+                looks.0,
+                looks.1
+            );
             (self.streaming.looks, self.streaming.ray_looks) = looks;
             self.all_sections_changed();
         }

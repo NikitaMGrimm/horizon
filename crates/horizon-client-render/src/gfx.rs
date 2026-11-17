@@ -6902,9 +6902,19 @@ impl Renderer {
         let rays =
             self.ray_scene.is_some() && self.native.as_ref().is_some_and(|n| n.traces_looks());
         if rays != self.ray_looks {
+            // Off: the sections' copies go now, not each with its next mesh.
+            let mut dropped = 0;
+            for (_, s, _) in self.sections.iter_mut().filter(|_| !rays) {
+                dropped += s.ray_looks.iter().map(|l| size_of_val(&**l)).sum::<usize>();
+                s.ray_looks = Default::default();
+            }
             log::info!(
                 "Horizon renderer: ray scene looks {}",
-                if rays { "on" } else { "off" }
+                if rays {
+                    "on".to_owned()
+                } else {
+                    format!("off, {dropped} bytes of section copies dropped")
+                }
             );
             self.ray_looks = rays;
         }
