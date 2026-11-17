@@ -201,6 +201,13 @@ impl Game<'_> {
         state.looked = Some(now);
         let stamp = fingerprint(path);
         if stamp == state.stamp {
+            // A pack gone (no stamp) is never read: a renderer made again holds the world for
+            // nothing (`release_world`, which leaves a running pack's alone).
+            if stamp.is_none()
+                && let Some(renderer) = &mut self.renderer
+            {
+                renderer.release_world();
+            }
             return;
         }
         if refused(path, stamp) {

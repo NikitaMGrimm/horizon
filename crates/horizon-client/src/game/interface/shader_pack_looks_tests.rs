@@ -256,6 +256,31 @@ fn a_world_held_for_a_pack_that_no_longer_builds_follows_no_pack() {
     });
 }
 
+/// A world held for its pack by a renderer made again stops waiting when the pack's folder is
+/// gone: the game never reads it (no files, no stamp), so the world follows no pack again.
+#[test]
+#[ignore = "daily"]
+fn a_world_held_for_a_pack_whose_folder_is_gone_follows_no_pack() {
+    let name = "game::shader_pack_looks_tests::a_world_held_for_a_pack_whose_folder_is_gone_follows_no_pack";
+    if run_fresh_cases(name, "HORIZON_TERRAIN_LOOKS", &["1"]) {
+        return;
+    }
+    with_client_game(|game| {
+        let (event_loop, key) = scene(game);
+        install_and_upload(game, key, false);
+        make_again(game, &event_loop);
+        frame(game);
+        assert!(game.renderer.as_ref().unwrap().terrain_looks(), "held for the pack");
+        let files = tempfile::tempdir().unwrap();
+        game.tick_native_shader_pack(&files.path().join("gone"));
+        frame(game);
+        frame(game);
+        let renderer = game.renderer.as_ref().unwrap();
+        assert!(!renderer.terrain_looks(), "no pack to hold it for");
+        assert!(!game.streaming.looks, "the game meshes without looks");
+    });
+}
+
 /// Sections uploaded without looks in a page with more slots than looks fit in a storage
 /// binding (a stand-in limit; a translucent page may be past the real one): when a pack turns
 /// looks on, the renderer drops every section at once, and the pages the game's meshes go to
