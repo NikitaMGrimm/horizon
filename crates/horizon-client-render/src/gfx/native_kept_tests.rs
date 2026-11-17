@@ -1524,7 +1524,6 @@ fn a_timed_frame_times_each_compute_pass_under_its_name() {
             world,
             &view,
             [4, 4],
-            false,
             Some(&mut timing),
             None,
         );
