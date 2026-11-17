@@ -1381,10 +1381,10 @@ pub struct Renderer {
     look_groups: Option<looks::LookGroups>,
     looks_layout: Option<wgpu::BindGroupLayout>,
     /// The world taken from a renderer that ran one of Horizon's packs (`take_world`) keeps
-    /// the looks and layouts that pack had until the game gives this renderer a pack again or
-    /// drops it (`set_native_shader_pack`, `drop_shader_packs`): a renderer made again for
-    /// another frame draws before its pack is back, and following no pack then would mesh the
-    /// world twice.
+    /// the looks and layouts that pack had until the game gives this renderer a pack again,
+    /// drops it or fails to load it (`set_native_shader_pack`, `drop_shader_packs`,
+    /// `release_world`): a renderer made again for another frame draws before its pack is back,
+    /// and following no pack then would mesh the world twice.
     world_held: bool,
     /// The terrain's acceleration structures, with ray tracing on (`ray_scene`).
     ray_scene: Option<surface_setup::ray_query::ray_scene::RayScene>,
@@ -7076,6 +7076,13 @@ impl Renderer {
     /// Whether a `shaders/` pack is still building (`load_shader_pack`).
     pub fn shader_pack_loading(&self) -> bool {
         self.pack_loading.is_some()
+    }
+    /// The game won't give this renderer the pack whose world it holds (`world_held`): its
+    /// load failed. Unless a pack of Horizon's runs, the world follows no pack again.
+    pub fn release_world(&mut self) {
+        if self.native.is_none() {
+            self.world_held = false;
+        }
     }
     /// Drops the running shader pack, of either kind.
     pub fn drop_shader_packs(&mut self) {
