@@ -1,0 +1,47 @@
+name: conflict window
+# Pull requests that conflict with main get a notice and are closed 7 days later unless updated:
+# tools/ci/conflict_window.py, CONTRIBUTING.md "Pull requests".
+#
+# Off until the council decides: nothing is labelled, commented or closed unless the repository variable
+# CONFLICT_WINDOW_ENFORCE is `true`; until then every run prints what it would do. A run started by hand is a dry run
+# unless its dry_run box is unticked.
+#
+# No pull request's code runs here: the checkout is main's script alone, and the script reads the API only. No
+# `pull_request_target` trigger: GitHub hasn't computed a pull request's mergeable state when a push arrives, so the
+# daily run clears the label, and a pull request is read again right before it is closed.
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print what the sweep would do without labelling, commenting or closing.
+        type: boolean
+        default: true
+permissions:
+  contents: read
+jobs:
+  sweep:
+    concurrency:
+      group: conflict-window
+      cancel-in-progress: false
+    # GitHub's runners, never ours: its token closes contributors' pull requests (docs/ci-runners.md).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: |
+            tools/ci/conflict_window.py
+          sparse-checkout-cone-mode: false
+      - name: Sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CONFLICT_WINDOW_ENFORCE: ${{ vars.CONFLICT_WINDOW_ENFORCE == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: python3 tools/ci/conflict_window.py sweep

@@ -170,6 +170,10 @@ it (edited on every push, never repeated): talk to its author in the thread befo
   replaces our commits with yours and erases the fixes we added (it happened on #5188 and #5203). Tell your agent
   too: `git merge origin/main`, never `git rebase` or `git push --force` on a branch a maintainer has touched. If
   our fixes get erased anyway, we finish the work in our own pull request that keeps your commits and credits you.
+- **A pull request that conflicts with `main` is closed 7 days after a notice.** A bot labels it `conflicts` and
+  comments once; merge `main` into it before then. If it still conflicts 7 days after the notice, it is closed.
+  Nothing is lost: once it's updated, reopen it (or ask in a comment and we will). Drafts, pull requests labelled
+  `keep-open` and the Horizon Team's own are left alone. Not in force until the council approves it.
 - **Title: `kind(area): what changes`**, so the queue reads at a glance: `parity(mobs): a ghast's fireball uses its
   ExplosionPower`, `perf(launcher): download the game's files in parallel`, `bug(saves): keep /attribute modifiers
   through a save`. The kind is one of the words below; the area is an area label, several with commas

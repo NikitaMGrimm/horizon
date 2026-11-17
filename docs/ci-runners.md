@@ -26,6 +26,11 @@ mini's) is kept small by [`tools/ci/git-slim.sh`](../tools/ci/git-slim.sh) befor
   writes the set of pull requests the Nightly holds), `native hook stamp` (it pushes a branch). playhorizon is a
   partner's server that the partner can reach, and a checks runner keeps what a fork's job left behind: neither may
   decide or sign what players download. `tests/test_ci_runners.py` pins it.
+- **`conflict window`** (daily, `tools/ci/conflict_window.py`): its token labels, comments on and closes contributors'
+  pull requests that conflict with main (CONTRIBUTING.md "Pull requests"). It writes nothing unless the repository
+  variable `CONFLICT_WINDOW_ENFORCE` is `true`; until then each run prints what it would do. A dry run by hand:
+  `gh workflow run conflict-window.yml` (its `dry_run` input is on by default), or locally
+  `REPO=horizon-rust/horizon python3 tools/ci/conflict_window.py sweep`, which only reads.
 - **Release builds**: Linux on `ubuntu-22.04` (players' binaries must link against its older glibc; our Linux
   machines have newer ones), Windows on `windows-latest` (no Windows machine). macOS builds already run on the Mac
   mini.
