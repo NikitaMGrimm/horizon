@@ -996,6 +996,8 @@ struct Unpacker {
     /// The look of each quad of `store`, while the native pack's rays read them (`set_looks`):
     /// a part's are written with its vertices, from its section's copy. It grows with `store`.
     looks: Option<wgpu::Buffer>,
+    /// Whether the log said the look store couldn't be made, since it last was.
+    looks_logged: bool,
 }
 
 impl Unpacker {
@@ -1008,6 +1010,7 @@ impl Unpacker {
             pipeline: unpack_pipeline(device),
             store,
             looks: None,
+            looks_logged: false,
         })
     }
 
@@ -1020,6 +1023,12 @@ impl Unpacker {
             self.looks = on
                 .then(|| look_buffer(device, self.store.size() / STRIDE))
                 .flatten();
+            if on && self.looks.is_none() && !std::mem::replace(&mut self.looks_logged, true) {
+                log::warn!(
+                    "Horizon renderer: no video memory for the ray tracing look store; hits read                      as without a look until there is"
+                );
+            }
+            self.looks_logged &= self.looks.is_none();
         }
         self.looks.is_some() != before
     }
