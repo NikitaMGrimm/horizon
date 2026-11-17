@@ -862,27 +862,26 @@ impl Manifest {
         {
             return Err(err("`scale` and `output` are keys of [[post]] only".into()));
         }
-        // Compute keys: `[[post]]` and `[[before_world]]` only, which `kept::check` reads.
+        // Compute keys: `[[post]]` and `[[before_world]]` only, and `reads` `[material]`'s too,
+        // which `kept::check` reads.
         let computes = |s: &Stage| {
-            s.compute
-                || s.dispatch.is_some()
-                || s.workgroup.is_some()
-                || !s.reads.is_empty()
-                || !s.writes.is_empty()
+            s.compute || s.dispatch.is_some() || s.workgroup.is_some() || !s.writes.is_empty()
         };
+        let reads = |s: &Stage| computes(s) || !s.reads.is_empty();
         if raw
             .sky
             .iter()
-            .chain(&raw.material)
             .chain(&raw.vertex)
             .chain(&raw.weather)
             .chain(&raw.tonemap)
             .chain(&raw.entity)
-            .any(computes)
+            .any(reads)
+            || raw.material.iter().any(computes)
         {
             return Err(err(
                 "`compute`, `dispatch`, `workgroup`, `reads` and `writes` are keys of [[post]] \
-                 and [[before_world]]"
+                 and [[before_world]], and `reads` of [material]: the terrain reads kept \
+                 resources, compute passes write them"
                     .into(),
             ));
         }
@@ -901,6 +900,9 @@ impl Manifest {
             resets,
         )
         .map_err(err)?;
+        if let Some(m) = &raw.material {
+            crate::kept::material(m, &kept).map_err(err)?;
+        }
         check_post_targets(&raw.post, traced, moving, &kept.resources).map_err(err)?;
         let tracer =
             !raw.post.is_empty() || raw.material.is_some() || !kept.before_world.is_empty();
@@ -1043,7 +1045,10 @@ impl Manifest {
         }
         let mut textures: Vec<PackTexture> = Vec::new();
         for t in raw.textures {
-            if !pack_identifier(&t.id) || textures.iter().any(|o| o.id == t.id) {
+            // The id is declared in every stage's prelude: a word WGSL reserves would be refused
+            // there, at a line of the prelude rather than of the pack.
+            let reserved = naga::keywords::wgsl::RESERVED.contains(&t.id.as_str());
+            if !pack_identifier(&t.id) || reserved || textures.iter().any(|o| o.id == t.id) {
                 return Err(err(format!(
                     "texture id {:?} is not a WGSL identifier, or is declared twice",
                     t.id

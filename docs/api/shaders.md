@@ -165,6 +165,8 @@ names an exact filesystem path; `shaders/` packs still use filenames.
 0.2 is the line this build serves, the line for linear light and HDR
 ([hdr-linear-light.md](../design/hdr-linear-light.md)): `horizon-shader check` and `pack` take it, the game draws it
 and the registry lists it. A pack for another line is refused (`needs shader API 0.1; this Horizon serves 0.2`).
+The launcher goes by the game it installed, not by its own build: it asks that game for its lines
+(`--launch-api`, `content.shader.api`) and offers and installs a registry pack made for one of them.
 A pack draws the world
 into a float frame where the device can (else the 8-bit one): the frame follows the picked pack,
 rebuilding the renderer and remeshing the world when needed. A refused or missing pack, or one whose owner mod is off,
@@ -277,6 +279,13 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-15: API 0.2 (additions, experimental): `[material] reads` (#16011 item 4): the terrain reads kept
+  resources, `x` for this frame's version of a texture a `[[before_world]]` pass writes (in the same frame),
+  `x_previous` for last frame's, and buffers; their declarations join the material's module at the passes'
+  bindings. The check refuses `x` of a texture only `[[post]]` passes write (they run after the terrain draws),
+  `writes` on `[material]`, `reads` on the other stages, and `displacement` or a `[vertex]` file reaching a kept
+  resource, as both also draw the shadow map. The kept resources' frame (the versions' swap and the clears) now starts
+  before the world draws in every pack that keeps them. A material without `reads` composes as before, a test holds.
 - 2026-11-15: API 0.2 (addition, experimental): `[frame] fog = "pack"` turns Horizon's fog off on what the material
   and entity stages return, and gives every stage `fn vanilla_fog(position: vec3<f32>) -> f32` and the frame's
   `fog_environment` and `fog_render`, the two distances vanilla's fog takes the larger of, which `fog_start` and
