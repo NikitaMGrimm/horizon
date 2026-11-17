@@ -9,7 +9,10 @@ check everything above again (horizon-threads through mimalloc, the renderer thr
 prepare, before main's build: dates those crates' files as tools/ci/pin_mtimes.sh dates a pull request's, and
 removes what target/debug still holds of them, so main always builds them anew.
 save, after main's build: moves their entries from target/debug into DIR/path-crates, which the cache keeps.
-restore, on a pull request after pin_mtimes.sh: moves them back, with their times.
+restore, on a pull request after pin_mtimes.sh: moves them back, with their times, unless the pull request changed one
+of those crates since the commit in DIR/../sha. Cargo may not look at such a crate's files: a build script that names
+its inputs (libmimalloc-sys's, through cc's rerun-if-env-changed) reruns only when those change, so a changed C file
+would keep main's build.
 
 Cargo keeps the newest file time, and that file's name, of a crate whose build script names no inputs (naga,
 wgpu-hal), and rebuilds the crate when either differs. With every file at 2001-01-01 the name was whichever the
@@ -102,13 +105,17 @@ def save(root, kept):
 def restore(root, kept):
     if not (kept / "folders").is_file():
         return 0
+    folders = (kept / "folders").read_text().splitlines()
+    built_at = (kept.parent / "sha").read_text().strip()
+    if subprocess.run(["git", "diff", "--quiet", built_at, "--", *folders], cwd=root).returncode:
+        return 0
     moved = 0
     for part in PARTS:
         entries = sorted((kept / part).iterdir()) if (kept / part).is_dir() else []
         for entry in entries:
             move(entry, root / "target/debug" / part / entry.name)
             moved += 1
-    date_manifests([root / line for line in (kept / "folders").read_text().splitlines()])
+    date_manifests([root / folder for folder in folders])
     return moved
 
 

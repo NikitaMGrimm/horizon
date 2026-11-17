@@ -31,6 +31,16 @@ class PathCratesTests(unittest.TestCase):
         self.package("patched-extra", "patched-extra", "pub fn value() {}\n")
         self.package("member", "member", "pub fn value() { patched::value(); patched_extra::value() }\n",
                      'patched = { path = "../third_party/patched" }\npatched-extra = { path = "../patched-extra" }\n')
+        # restore compares the crates with the commit main's build is of, as the workflow records it.
+        self.write(".gitignore", "/target/\n/.ci-built/\n")
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        self.commit("built")
+        self.write(".ci-built/sha", subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.root, text=True))
+
+    def commit(self, message):
+        git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "core.autocrlf=false"]
+        for command in (["add", "-A"], ["commit", "-q", "-m", message]):
+            subprocess.run([*git, *command], cwd=self.root, check=True)
 
     def write(self, name, text):
         path = self.root / name
@@ -77,6 +87,16 @@ class PathCratesTests(unittest.TestCase):
         self.assertEqual({path.name: int(path.stat().st_mtime) for path in [patched, *patched.rglob("*")]},
                          {"patched": 978307200, "src": 978307200, "lib.rs": 978307200, "Cargo.toml": 978307201})
         self.assertNotEqual(int((self.root / "member/src/lib.rs").stat().st_mtime), 978307200)
+
+    def test_a_pull_request_that_changes_a_path_crate_rebuilds_it(self):
+        self.check()
+        self.assertRegex(self.run_script("save"), MOVED)
+        # A pull request's commit changes a file Cargo might not look at: a C source behind a build script that names
+        # its inputs.
+        self.write("third_party/patched/c_src/alloc.c", "int broken(\n")
+        self.commit("a pull request")
+        self.assertIn("handled 0 entries", self.run_script("restore"))
+        self.assertEqual(self.check(), {"patched": False, "patched_extra": True, "member": False})
 
     def test_both_build_jobs_prepare_or_restore_after_they_date_the_files_and_save_on_main(self):
         jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
