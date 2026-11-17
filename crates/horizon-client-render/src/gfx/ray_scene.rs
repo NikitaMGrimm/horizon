@@ -1460,7 +1460,7 @@ mod terrain_tests;
 
 #[cfg(test)]
 #[path = "ray_looks_tests.rs"]
-mod looks_tests;
+pub(in crate::gfx) mod looks_tests;
 
 #[cfg(test)]
 mod tests {

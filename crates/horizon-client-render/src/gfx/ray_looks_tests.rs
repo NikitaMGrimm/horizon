@@ -70,7 +70,11 @@ fn byte(word: u32, i: usize) -> f32 {
 
 /// What the material stage's `MaterialInput` has at the point of quad `corners` weighted `w`,
 /// whose look is `look`: `[tint.rgb, shade]`, `[shaded_tint.rgb, ao]`, `[emission, ..]`.
-fn material(corners: &[TerrainVertex; 4], look: QuadLook, w: [f32; 4]) -> [[f32; 4]; 3] {
+pub(in crate::gfx) fn material(
+    corners: &[TerrainVertex; 4],
+    look: QuadLook,
+    w: [f32; 4],
+) -> [[f32; 4]; 3] {
     let [x, y, z] = look.0;
     let code = (x >> 24) & 7;
     let blend = |f: &dyn Fn(usize) -> f32| (0..4).map(|i| f(i) * w[i]).sum::<f32>();

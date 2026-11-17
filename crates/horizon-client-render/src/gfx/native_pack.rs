@@ -992,6 +992,216 @@ file = \"material.wgsl\"
         }
     }
 
+    /// The material stage's own `MaterialInput` of a quad with a look, drawn and read back,
+    /// against the ray scene's oracle of it (`ray_looks_tests::material`, which its GPU test
+    /// holds a hit to): a pack that shows three of the fields draws what a pack showing the
+    /// oracle's values as constants draws, through the same wrapper and frame. Its corners share
+    /// one colour and one ambient occlusion, so every point has the same values.
+    #[test]
+    fn the_material_s_looks_are_the_ray_oracle_s() {
+        use wgpu::util::DeviceExt;
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some(adapter) = crate::gfx::test_gpu::adapter() else {
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .unwrap();
+        if !(adapter.get_downlevel_capabilities().flags)
+            .contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+        {
+            return;
+        }
+        let (globals, empty) = terrain_layouts(&device);
+        let looks = super::super::looks::layout(&device);
+        let texture = |format, layers, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth_or_array_layers: layers,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let rgba = wgpu::TextureFormat::Rgba8Unorm;
+        let sampled = wgpu::TextureUsages::TEXTURE_BINDING;
+        let shape = TerrainShape {
+            looks: Some(&looks),
+            ..terrain_shape(&globals, &empty)
+        };
+        // Group 0 with `view_proj` the identity (its first field), the rest blank.
+        let array = texture(rgba, 2, sampled).create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let plain = texture(rgba, 1, sampled).create_view(&Default::default());
+        let sampler = device.create_sampler(&Default::default());
+        let mut words = vec![0.0f32; 4096];
+        for i in 0..4 {
+            words[i * 5] = 1.0;
+        }
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&words),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let resource = |binding: u32| match binding {
+            0 => uniform.as_entire_binding(),
+            2 | 4 => wgpu::BindingResource::Sampler(&sampler),
+            3 | 12 => wgpu::BindingResource::TextureView(&plain),
+            _ => wgpu::BindingResource::TextureView(&array),
+        };
+        let entries: Vec<_> = (0..=12)
+            .map(|binding| wgpu::BindGroupEntry {
+                binding,
+                resource: resource(binding),
+            })
+            .collect();
+        let terrain = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &globals,
+            entries: &entries,
+        });
+        let look = crate::mesher::QuadLook::new(0x80_c0ff, 0.8, 4, [1.0, 0.2, 0.3, 0.6], 12);
+        let page_looks = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[look; 4]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let looks_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &looks,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: page_looks.as_entire_binding(),
+            }],
+        });
+        // One triangle over the whole target, each corner its own colour (low byte R) and AO, so
+        // the pixel read back tells blending before decoding from after, and each corner's byte.
+        let corner = |x: f32, y: f32, color: u32| {
+            // Over opaque texels (bit 15): the blank sprites pass no alpha test.
+            crate::mesher::TerrainVertex::new([x, y, 0.5], [0.0, 0.0], 0x8000, color, 0xf0f0)
+        };
+        let corners = [
+            corner(-1.0, -1.0, 0xff40_80c0),
+            corner(3.0, -1.0, 0xff20_4010),
+            corner(-1.0, 3.0, 0xff10_f030),
+            corner(-1.0, 3.0, 0xff10_f030),
+        ];
+        let vertex = |contents: &[u8]| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents,
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        };
+        let vertices = vertex(bytemuck::cast_slice(&corners[..3]));
+        let origins = vertex(bytemuck::cast_slice(&[0.0f32, 0.0, 0.0, 1.0]));
+        let want = crate::gfx::surface_setup::ray_query::ray_scene::looks_tests::material(
+            &corners,
+            look,
+            // The first pixel's centre, (-0.75, 0.75), on the triangle.
+            [0.5, 0.0625, 0.4375, 0.0],
+        );
+        // What a pack showing `shown` draws.
+        let draw = |shown: &str| -> [u8; 4] {
+            let material = format!(
+                "fn material(input: MaterialInput) -> Surface {{\n    \
+                 let k = input.shaded_tint;\n    return Surface(vec4<f32>({shown}, 1.0));\n}}\n"
+            );
+            let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
+                            [material]\nfile = \"material.wgsl\"\n";
+            let files = [
+                (horizon_shader_api::MANIFEST, manifest),
+                ("material.wgsl", &material),
+            ]
+            .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+            .into();
+            let pack = horizon_shader_api::Pack::from_files(files).unwrap();
+            let report = horizon_shader_api::check(&pack).unwrap();
+            let (pack, _) =
+                NativePack::new(&device, &queue, &shape, report, &[], Default::default()).unwrap();
+            let layers = pack.terrain_layers().unwrap();
+            let target = texture(
+                rgba,
+                1,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            );
+            let depth = texture(
+                wgpu::TextureFormat::Depth32Float,
+                1,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            );
+            let (view, depth) = (
+                target.create_view(&Default::default()),
+                depth.create_view(&Default::default()),
+            );
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: Default::default(),
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &depth,
+                        depth_ops: Some(Default::default()),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+                pass.set_pipeline(layers.solid);
+                pass.set_bind_group(0, &terrain, &[]);
+                pass.set_bind_group(super::super::looks::GROUP, &looks_group, &[]);
+                layers.bind(&mut pass);
+                pass.set_vertex_buffer(0, vertices.slice(..));
+                pass.set_vertex_buffer(1, origins.slice(..));
+                pass.draw(0..3, 0..1);
+            }
+            let buffer = crate::gfx::copy_frame(&device, &mut encoder, &target, [4, 4]);
+            queue.submit([encoder.finish()]);
+            buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let pixel = buffer.slice(..).get_mapped_range().unwrap()[..4].try_into();
+            pixel.unwrap()
+        };
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let fields = [
+            (
+                "input.tint.r, input.tint.g, input.shade",
+                [want[0][0], want[0][1], want[0][3]],
+            ),
+            (
+                "input.ao, input.emission, k.r",
+                [want[1][3], want[2][0], want[1][0]],
+            ),
+        ];
+        for (shown, [a, b, c]) in fields {
+            let got = draw(shown);
+            let oracle = draw(&format!("{a:?}, {b:?}, {c:?}"));
+            assert!(
+                got.iter().zip(oracle).all(|(g, o)| g.abs_diff(o) <= 1) && got != [0; 4],
+                "{shown}: {got:?}, the oracle's {oracle:?}"
+            );
+        }
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            panic!("{e}");
+        }
+    }
+
     fn option(id: &str, kind: OptionKind) -> PackOption {
         PackOption {
             id: id.into(),
