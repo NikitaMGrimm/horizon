@@ -34,7 +34,7 @@ EFFECTS = [
     ("horizon-checks", "`verify` and `launcher` of the pull requests whose number ends in 0 wait, so those pull "
                        "requests can't merge.",
      "An organisation owner sets `SELF_HOSTED_CI` to `off` (or `light`), then the authors push again or a Team "
-     "member re-runs the checks."),
+     "member re-runs the checks. Forks' pull requests see no repository variable: they wait for the runners."),
     ("horizon-parity-main", "parity-main doesn't run, so no newer commit of main is green for the Nightly: Nightlies "
                             "keep shipping the last green commit or nothing.",
      "Nothing to do on GitHub: the harnesses need the maintainer's Minecraft. Merge on `verify` as usual; label "
