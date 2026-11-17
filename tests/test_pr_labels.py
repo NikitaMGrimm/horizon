@@ -231,6 +231,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("pull_request_target", text)
         self.assertIn("ref: main", text)
         self.assertIn("persist-credentials: false", text)
+        # Two pushes in a row run one after the other (one size label); edits run alone.
+        self.assertIn("group: pr-labels-${{ github.event.pull_request.number }}-${{ github.event.action == 'edited' && "
+                      "github.run_id || 'files' }}"
+                      "\n      cancel-in-progress: false", text)
         for bad in ("contents: write", "issues: write", "head.sha", "head.ref", "github.event.pull_request.body"):
             self.assertNotIn(bad, text)
         # The checkout fetches the script alone.
