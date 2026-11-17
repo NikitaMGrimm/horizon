@@ -1107,49 +1107,69 @@ file = \"material.wgsl\"
             layout: &globals,
             entries: &entries,
         });
-        let look = crate::mesher::QuadLook::new(0x80_c0ff, 0.8, 4, [1.0, 0.2, 0.3, 0.6], 12);
-        let page_looks = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&[look; 4]),
-            usage: wgpu::BufferUsages::STORAGE,
+        // A tinted look with a light level and uneven corner AO, and none (code 0: the vertex
+        // colour, shade and AO 1, no light).
+        let looked = crate::mesher::QuadLook::new(0x80_c0ff, 0.8, 4, [1.0, 0.2, 0.3, 0.6], 12);
+        let groups = [looked, crate::mesher::QuadLook::default()].map(|look| {
+            let page_looks = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&[look; 4]),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &looks,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: page_looks.as_entire_binding(),
+                }],
+            });
+            (look, group)
         });
-        let looks_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &looks,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: page_looks.as_entire_binding(),
-            }],
-        });
-        // One triangle over the whole target, each corner its own colour (low byte R) and AO, so
-        // the pixel read back tells blending before decoding from after, and each corner's byte.
+        // One quad over the whole target, both its triangles (corners 0, 1, 2 and 0, 2, 3, the
+        // corner `vertex_index & 3`), each corner its own colour (low byte R) and AO: a pixel
+        // read back tells blending before decoding from after, and each corner's byte.
         let corner = |x: f32, y: f32, color: u32| {
             // Over opaque texels (bit 15): the blank sprites pass no alpha test.
             crate::mesher::TerrainVertex::new([x, y, 0.5], [0.0, 0.0], 0x8000, color, 0xf0f0)
         };
         let corners = [
             corner(-1.0, -1.0, 0xff40_80c0),
-            corner(3.0, -1.0, 0xff20_4010),
-            corner(-1.0, 3.0, 0xff10_f030),
-            corner(-1.0, 3.0, 0xff10_f030),
+            corner(1.0, -1.0, 0xff20_4010),
+            corner(1.0, 1.0, 0xff10_f030),
+            corner(-1.0, 1.0, 0xffc0_2080),
         ];
-        let vertex = |contents: &[u8]| {
+        let buffer = |contents: &[u8], usage| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
                 contents,
-                usage: wgpu::BufferUsages::VERTEX,
+                usage,
             })
         };
-        let vertices = vertex(bytemuck::cast_slice(&corners[..3]));
-        let origins = vertex(bytemuck::cast_slice(&[0.0f32, 0.0, 0.0, 1.0]));
-        let want = crate::gfx::surface_setup::ray_query::ray_scene::looks_tests::material(
-            &corners,
-            look,
-            // The first pixel's centre, (-0.75, 0.75), on the triangle.
-            [0.5, 0.0625, 0.4375, 0.0],
+        let vertex = wgpu::BufferUsages::VERTEX;
+        let vertices = buffer(bytemuck::cast_slice(&corners), vertex);
+        let origins = buffer(bytemuck::cast_slice(&[0.0f32, 0.0, 0.0, 1.0]), vertex);
+        let indices = buffer(
+            bytemuck::cast_slice(&[0u16, 1, 2, 0, 2, 3]),
+            wgpu::BufferUsages::INDEX,
         );
-        // What a pack showing `shown` draws.
-        let draw = |shown: &str| -> [u8; 4] {
+        // Pixels (column, row) off the diagonal, two on each triangle, and the corners' weights
+        // at their centres.
+        let pixels = [(0, 0), (1, 0), (3, 3), (3, 2)];
+        let weights = |(i, j): (usize, usize)| {
+            let (x, y) = ((i as f32 + 0.5) / 2.0 - 1.0, 1.0 - (j as f32 + 0.5) / 2.0);
+            if y < x {
+                let b2 = (y + 1.0) / 2.0;
+                let b1 = (x + 1.0) / 2.0 - b2;
+                [1.0 - b1 - b2, b1, b2, 0.0]
+            } else {
+                let b2 = (x + 1.0) / 2.0;
+                let b3 = (y + 1.0) / 2.0 - b2;
+                [1.0 - b2 - b3, 0.0, b2, b3]
+            }
+        };
+        // What a pack showing `shown` draws over the quad with `looks`, at `pixels`.
+        let draw = |shown: &str, looks: &wgpu::BindGroup| -> Vec<[u8; 4]> {
             let material = format!(
                 "fn material(input: MaterialInput) -> Surface {{\n    \
                  let k = input.shaded_tint;\n    return Surface(vec4<f32>({shown}, 1.0));\n}}\n"
@@ -1199,11 +1219,12 @@ file = \"material.wgsl\"
                 });
                 pass.set_pipeline(layers.solid);
                 pass.set_bind_group(0, &terrain, &[]);
-                pass.set_bind_group(super::super::looks::GROUP, &looks_group, &[]);
+                pass.set_bind_group(super::super::looks::GROUP, looks, &[]);
                 layers.bind(&mut pass);
                 pass.set_vertex_buffer(0, vertices.slice(..));
                 pass.set_vertex_buffer(1, origins.slice(..));
-                pass.draw(0..3, 0..1);
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(0..6, 0, 0..1);
             }
             let buffer = crate::gfx::copy_frame(&device, &mut encoder, &target, [4, 4]);
             queue.submit([encoder.finish()]);
@@ -1211,27 +1232,36 @@ file = \"material.wgsl\"
                 .slice(..)
                 .map_async(wgpu::MapMode::Read, |r| r.unwrap());
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            let pixel = buffer.slice(..).get_mapped_range().unwrap()[..4].try_into();
-            pixel.unwrap()
+            let frame = buffer.slice(..).get_mapped_range().unwrap();
+            let row = crate::gfx::padded_row(4) as usize;
+            (pixels.iter())
+                .map(|&(i, j)| frame[j * row + i * 4..][..4].try_into().unwrap())
+                .collect()
         };
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let fields = [
-            (
-                "input.tint.r, input.tint.g, input.shade",
-                [want[0][0], want[0][1], want[0][3]],
-            ),
-            (
-                "input.ao, input.emission, k.r",
-                [want[1][3], want[2][0], want[1][0]],
-            ),
+        type Want = [[f32; 4]; 3];
+        let fields: [(&str, fn(&Want) -> [f32; 3]); 2] = [
+            ("input.tint.r, input.tint.g, input.shade", |w| {
+                [w[0][0], w[0][1], w[0][3]]
+            }),
+            ("input.ao, input.emission, k.r", |w| {
+                [w[1][3], w[2][0], w[1][0]]
+            }),
         ];
-        for (shown, [a, b, c]) in fields {
-            let got = draw(shown);
-            let oracle = draw(&format!("{a:?}, {b:?}, {c:?}"));
-            assert!(
-                got.iter().zip(oracle).all(|(g, o)| g.abs_diff(o) <= 1) && got != [0; 4],
-                "{shown}: {got:?}, the oracle's {oracle:?}"
-            );
+        let material = crate::gfx::surface_setup::ray_query::ray_scene::looks_tests::material;
+        for (look, group) in &groups {
+            for (shown, of) in fields {
+                let got = draw(shown, group);
+                for (k, &pixel) in pixels.iter().enumerate() {
+                    let [a, b, c] = of(&material(&corners, *look, weights(pixel)));
+                    let oracle = draw(&format!("{a:?}, {b:?}, {c:?}"), group)[k];
+                    assert!(
+                        got[k].iter().zip(oracle).all(|(g, o)| g.abs_diff(o) <= 1),
+                        "{look:?}, {shown} at {pixel:?}: {:?}, the oracle's {oracle:?}",
+                        got[k]
+                    );
+                }
+            }
         }
         if let Some(e) = pollster::block_on(scope.pop()) {
             panic!("{e}");
