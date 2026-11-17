@@ -60,7 +60,7 @@ the frame stores gamma (`[frame] blend`, below).
 - **Linear:** `MaterialInput` `albedo`, `tint`, `lightmap` and `colored_light`; `VertexInput.tint`; `SkyInput.color`;
   `WeatherInput.color`; `Frame` `sky_color` and `fog_color`; `block_texture`, `block_texture_level` and
   `block_light_color`; `RayHit` `albedo` and `tint`; every colour texture a stage samples (`scene_color`, `previous`,
-  `history`, the pack's targets, `opaque_color`, `reflection`, `shadow_color`).
+  the pack's targets and kept resources, `opaque_color`, `reflection`, `shadow_color`).
 - **Data:** depth, normals, `light` levels, `emission`, every channel of the LabPBR maps, and the pack's
   `[[textures]]`.
 - **`[[lights]]` and `[[particle_lights]]` colours** are written in vanilla's gamma, and Horizon decodes
@@ -131,8 +131,7 @@ the lit rgb, alpha kept. Horizon's own takes the distance at each corner and int
 point, so a pack's copy may round a step apart on large faces. Mixing the linear values instead is fog as light
 scatters, a little denser in the middle tones. A post pass fogs what the stages don't draw from `scene_depth`
 (`vanilla_fog(view_position(uv, depth))`), and traced hits from `hit.position`, which Horizon never fogs.
-`[material] fog = false`, from before, turns off the material's fog alone and brings none of these names; a manifest
-sets one of the two keys.
+`[material] fog`, from before, is gone: the check refuses it and names `[frame] fog`.
 
 ";
 
@@ -358,10 +357,11 @@ adds it to the light colour, and the expression above leaves it out.
 const MOTION_NOTES: &str = "\
 ### Motion guide
 
-How each pixel's surface moved since last frame, for temporal passes (TAA, denoisers, light caches) that reproject
-`history` or a target of their own. With `[motion]` in the manifest (it has no keys, and needs a `[[post]]` pass)
-every post pass's prelude also has the names below; a pack without the key has none of them, and no other stage does.
-`horizon-shader check` takes it; **the game doesn't draw it yet** and refuses a pack with `[motion]`.
+How each pixel's surface moved since last frame, for temporal passes (TAA, denoisers, light caches) that reproject a
+kept resource of their own (`<name>_previous`). With `[motion]` in the manifest (it has no keys, and needs a
+`[[post]]` pass) every post pass's prelude also has the names below; a pack without the key has none of them, and no
+other stage does. `horizon-shader check` takes it; **the game doesn't draw it yet** and refuses a pack with
+`[motion]`.
 
 - `var scene_motion: texture_2d<f32>` (binding {binding}): the engine's objects (z 1 matched, xy the delta; w 1
   nothing to match), and at depth 0 the sky's motion (xy; w 1 behind last frame's view). Read it through `motion_at`.
@@ -509,7 +509,7 @@ pub fn markdown() -> String {
             last post pass draws the picture itself and Horizon's own resolve, which does TAA, FXAA and TAA upscaling, is the\n\
             step it replaces. The world is still rendered at `resolutionScale` before the pack reads it.\n\n\
             A pack that wants smooth edges draws them itself, in a post pass: a spatial filter (FXAA, SMAA and the like) works on\n\
-            `previous` as it is. A temporal pass cannot do what TAA does here, even though `history` and\n\
+            `previous` as it is. A temporal pass cannot do what TAA does here, even though a kept resource and\n\
             `frame.previous_view_projection` give it the last frame: nothing moves the camera by a fraction of a texel from one\n\
             frame to the next, so a still camera gives it the same picture twice and there is no sub-pixel detail to gather.\n\n\
             Without a pack the settings apply as the player set them.\n\n";

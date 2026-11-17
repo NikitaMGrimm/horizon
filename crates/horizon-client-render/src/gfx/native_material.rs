@@ -20,7 +20,7 @@ const PREFIX: &str = "horizon_terrain_";
 /// The entries around the pack's `material`: vanilla's vertex work without the lightmap
 /// product, then the material, the alpha test and fog as `fs_solid` and `fs_translucent` do.
 const ENTRIES: &str = "
-// The manifest's `[material] fog`: false when the pack fogs its surfaces itself.
+// The manifest's `[frame] fog`: false when the pack fogs what it draws itself.
 override horizon_material_fog: bool = true;
 fn horizon_material_fogged(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
     if horizon_material_fog {

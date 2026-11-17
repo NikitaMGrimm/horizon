@@ -200,7 +200,7 @@ shared WGSL. No engine BRDF or mandatory energy scale is introduced. Existing fi
 | LabPBR normal/height | Raw data: normal xy, AO, height; no colour conversion. Height moves rays/sampling unless `[displacement]` explicitly moves geometry. |
 | LabPBR specular | Raw perceptual smoothness, F0/metal code, porosity/subsurface, emissiveness. Do not rename smoothness to roughness without conversion, or treat metal codes as F0. |
 | `MaterialInput.emission` / `emission_threshold` | Legacy block source hint and the bright-texel mask threshold. Neither is LabPBR emission or emitted radiance. |
-| `EntityInput.emission` / `light_source` | Full-bright layer flag versus artistic source strength. Full-bright eyes are not a physical intensity measurement. |
+| `EntityInput.full_light` / `light_source` | Full-bright layer flag versus artistic source strength. Full-bright eyes are not a physical intensity measurement. |
 | Emissive overlay | Linear sampled RGB plus its own mask, composited once inside the pack's material model. It does not change the surface's engine coverage. |
 
 Material helpers already sample block `_n`/`_s` maps. `EntityInput` has no maps or tangent; #16011 item 1 adds

@@ -59,10 +59,12 @@ stars = true               # optional: false when the pack draws its own stars
 [material]
 file = "material.wgsl"
 files = ["pbr.wgsl"]       # optional, on any stage: WGSL put after `shared`, before this stage's file
-fog = false                # optional: the pack fogs its surfaces itself (Horizon does when absent or true)
 
 [vertex]                   # needs [material]: where corners of terrain are drawn, for the world and the shadow map; shares the material's module
 file = "vertex.wgsl"
+
+[frame]                    # optional
+fog = "pack"               # optional: the pack fogs what its stages draw itself (Horizon does under "engine", the default)
 
 [weather]                  # the colour of rain and snow streaks
 file = "weather.wgsl"
@@ -287,11 +289,13 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 - 2026-11-16: API 0.2 (**breaking**, experimental): the terrain's own inputs. `MaterialInput` and `VertexInput` have
   the quad's `tint` without its shade and ambient occlusion, the face's `shade`, the corner's `ao` and its `face`;
   `MaterialInput.emission` is the block state's light level over 15 (one candle 3/15, four 12/15); `VertexInput.fluid`
-  is 2 for lava. A pack that reads `tint`, `shade`, `ao`, `face` or `emission` makes the world load again when it
-  starts, and terrain takes half again its memory; a device whose vertex stage reads no storage buffers refuses it. A
-  pack that names `shaded_tint` gets the old `tint` last in `MaterialInput`, `VertexInput` and `RayHit`, free.
-  `RayHit` gains `shade`, `ao` and `back` and is ordered as the reference lists it; an entity hit has vanilla's entity
-  shade, the Nether's in the Nether. `EntityInput.emission` is `full_light: bool`. Gone: the post stage's `history`,
+  is 2 for lava. A pack whose material or vertex stage reads `tint`, `shade`, `ao`, `face` or `emission` makes the
+  world load again when it starts, and terrain takes half again its memory; a device whose vertex stage reads no
+  storage buffers refuses it. A pack that names `shaded_tint` gets the old `tint` last in `MaterialInput`,
+  `VertexInput` and `RayHit`, free. `RayHit` gains `shade`, `ao` and `back` and is ordered as the reference lists it;
+  an entity hit has vanilla's entity shade, the Nether's in the Nether. A terrain hit's `tint`, `shade`, `ao` and
+  `emission` change value, not type, in a later version (to what `MaterialInput` gives), without a source break; its
+  `shaded_tint` stays their product. `EntityInput.emission` is `full_light: bool`. Gone: the post stage's `history`,
   `[material] fog` (a check error naming `[frame] fog`), and `frame.fog_start` and `fog_end`; the fog's fields are
   declared for every pack. [Moving a pack](#shader-api-02-experimental) says what to read instead. A pack that reads
   none of these is built and draws as before.

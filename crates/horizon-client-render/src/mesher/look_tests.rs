@@ -55,7 +55,7 @@ const BASE: i32 = MIN_Y + 4;
 /// The blocks of the emission table, each with vanilla's light level (`None`: drawn as a block
 /// entity, so no terrain quad), one every other block along x and z. The water of a
 /// waterlogged one gives off what water does, nothing. A lit candle gives 3 a candle.
-const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 22] = [
+const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 23] = [
     ("minecraft:torch", &[], Some(14)),
     ("minecraft:lantern", &[], Some(15)),
     ("minecraft:lantern", &[("waterlogged", "true")], Some(15)),
@@ -82,6 +82,8 @@ const BLOCKS: [(&str, &[(&str, &str)], Option<u8>); 22] = [
     ("minecraft:ender_chest", &[], None),
     ("minecraft:stone", &[], Some(0)),
     ("minecraft:water", &[], Some(0)),
+    // Its petals' faces have their own `light_emission` (`cross_emissive`).
+    ("minecraft:open_eyeblossom", &[], Some(0)),
 ];
 
 fn place(i: usize) -> (i32, i32) {
@@ -212,6 +214,19 @@ fn emission_is_the_blocks_light_level() {
             None => assert!(levels.is_empty(), "{name} has terrain quads"),
         }
     }
+    // A face's own `light_emission` reaches its vertices' block light instead (`light`): the
+    // eyeblossom's petals have 15, its other faces the light around them.
+    let (x, z) = place(BLOCKS.len() - 1);
+    let middle =
+        |q: &[TerrainVertex; 4], axis: usize| q.iter().map(|v| v.pos[axis]).sum::<f32>() / 4.0;
+    let blocks: Vec<u16> = (mesh.solid.as_chunks::<4>().0.iter())
+        .filter(|q| middle(q, 0).floor() == x as f32 && middle(q, 2).floor() == z as f32)
+        .map(|q| q[0].light >> 8)
+        .collect();
+    assert!(
+        blocks.contains(&240) && blocks.iter().any(|&b| b < 240),
+        "the eyeblossom's quads' block light: {blocks:?}"
+    );
 }
 
 /// `shade` is the shade the mesher gave the quad, not one of its normal: a torch's element
