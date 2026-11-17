@@ -4018,7 +4018,11 @@ pub fn prepare_command(cmd: Command) -> Result<(Command, RuntimeGuard), String> 
         Ok(leases) => leases,
         // Leases keep cleanup away from what a running game uses, and only Horizon's own game
         // runs from what the launcher cleans up: Java Edition starts without them (#18018).
-        Err(error) if !crate::run_leases::is_horizon(&cmd) => {
+        // A busy tree is a cleanup that ends soon, and its message says to wait for it.
+        Err(error)
+            if !crate::run_leases::is_horizon(&cmd)
+                && !matches!(error, crate::native_cache::Error::Busy) =>
+        {
             warning = Some(crate::i18n::trf(
                 "Starting without marking the game's folders as in use: {error}",
                 &[("error", &crate::native_mods::cache_error(error))],
@@ -4027,7 +4031,7 @@ pub fn prepare_command(cmd: Command) -> Result<(Command, RuntimeGuard), String> 
         }
         Err(error @ crate::native_cache::Error::Io(_)) => {
             return Err(crate::i18n::trf(
-                "{error}. Make sure your account can write to that folder, then try again.",
+                "{error}. Make sure your account can write to the game's and the launcher's folders, then try again.",
                 &[("error", &crate::native_mods::cache_error(error))],
             ));
         }
