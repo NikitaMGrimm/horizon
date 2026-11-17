@@ -28,17 +28,17 @@ struct HorizonShadowOut {
     @location(4) base: vec3<f32>,
 }
 // `color` is the vertex colour: the tint, and the fluid flag in its alpha's high nibble
-// (mesher.rs's `fluid_face`). `look` the quad's (`horizon_look`): its tint, without the shade and
-// ambient occlusion the vertex colour has, is what the light passes through.
-fn horizon_shadow_vertex(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
-    look: vec3<u32>) -> HorizonShadowOut {
+// (mesher.rs's `fluid_face`). What the light passes through is that colour, whether or not the
+// sections carry their quads' looks: a pack's `shadow_color` doesn't depend on its other inputs.
+fn horizon_shadow_vertex(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>)
+    -> HorizonShadowOut {
     let clip = frame.shadow_view_proj * vec4(pos, 1.0);
     let xy = shadow_distort(clip.xy);
     var out: HorizonShadowOut;
     out.clip = vec4(xy, clamp(clip.z, 0.0, 1.0), 1.0);
     out.uv = uv;
     out.layer = layer;
-    out.tint = select(color.rgb, unpack4x8unorm(look.x).rgb, ((look.x >> 24u) & 7u) != 0u);
+    out.tint = color.rgb;
     let high = u32(round(color.a * 255.0)) >> 4u;
     out.fluid = u32(high >= 8u && (high & 7u) < 6u);
     out.base = pos;
@@ -51,7 +51,7 @@ fn horizon_shadow_terrain(c: HorizonCorner, origin: vec4<f32>, slot: u32, corner
     let look = horizon_look(slot);
     let pos = horizon_material_displace(c.position + origin.xyz, atlas, c.layer, c.color, c.light,
         look, horizon_look_ao(look, corner));
-    return horizon_shadow_vertex(pos, atlas, c.layer, c.color, look);
+    return horizon_shadow_vertex(pos, atlas, c.layer, c.color);
 }
 @vertex fn horizon_shadow_vs(@builtin(vertex_index) vertex: u32,
     @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
@@ -149,7 +149,7 @@ fn horizon_shadow_taken(base: vec3<f32>, layer: u32) -> bool {
 @vertex fn horizon_shadow_vs_displaced(@builtin(vertex_index) v: u32,
     @builtin(instance_index) instance: u32) -> HorizonShadowOut {
     let p = horizon_displace_point(v, instance);
-    var out = horizon_shadow_vertex(p.position, p.uv, p.layer, p.color, p.look);
+    var out = horizon_shadow_vertex(p.position, p.uv, p.layer, p.color);
     out.base = p.base;
     return out;
 }
