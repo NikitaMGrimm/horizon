@@ -137,7 +137,9 @@ impl Game<'_> {
         };
         if let Some(source) = source {
             let lod = horizon_client::lod::Lod::new(source, self.worker_context());
-            lod.set_looks(self.streaming.looks, self.streaming.nether_shading);
+            // Far tiles are never in the ray scene: the arenas' looks alone.
+            let looks = self.renderer.as_ref().is_some_and(|r| r.terrain_looks());
+            lod.set_looks(looks, self.streaming.nether_shading);
             self.lod = Some(lod);
             self.lod_observe.extend(self.world.chunks.keys().copied());
         }
