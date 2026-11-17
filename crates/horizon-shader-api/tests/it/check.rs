@@ -1210,8 +1210,8 @@ fn the_retained_block_entities_store_is_the_layer_s_last_binding() {
 }
 
 /// `Report::looks`: a stage reads a field only the terrain's quad looks hold (`tint`, `shade`,
-/// `ao`, `face`, `emission`), by member on the three structs, through a `var` too; the prelude
-/// reads none, nor do an entity stage's `tint` and a pack's own `shade`.
+/// `ao`, `face`, `emission`), by member on `MaterialInput` or `VertexInput`, through a `var` too;
+/// the prelude reads none, nor do an entity stage's `tint` and a pack's own `shade`.
 #[test]
 fn looks_are_read_by_the_terrain_fields_alone() {
     let dir = |path: &str| Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
@@ -1248,4 +1248,125 @@ fn looks_are_read_by_the_terrain_fields_alone() {
     assert!(material(
         "    var i = input;\n    i.light.x = 1.0;\n    return Surface(vec4(i.emission));"
     ));
+}
+
+/// The sample with its material stage's file `material`, its other `files` (the stage's own,
+/// before its file) and, with `vertex`, a vertex stage of that file: whether it reads the looks.
+fn reads_looks(material: &str, files: &[(&str, &str)], vertex: Option<&str>) -> bool {
+    let mut pack = sample();
+    // The sample's `[reflection]` is switched by this option of the material's.
+    let material = format!("override reflections: bool = true;\n{material}");
+    pack.files
+        .insert("material.wgsl".into(), material.into_bytes());
+    for (name, text) in files {
+        pack.files.insert((*name).into(), text.as_bytes().to_vec());
+    }
+    let manifest = String::from_utf8(pack.files[MANIFEST].clone()).unwrap();
+    let names: Vec<String> = files
+        .iter()
+        .map(|(name, _)| format!("\"{name}\""))
+        .collect();
+    let stage = "file = \"material.wgsl\"";
+    let listed = format!("{stage}\nfiles = [{}]", names.join(", "));
+    let mut manifest = manifest.replacen(stage, &listed, 1);
+    if let Some(vertex) = vertex {
+        manifest.push_str("\n[vertex]\nfile = \"vertex.wgsl\"\n");
+        pack.files
+            .insert("vertex.wgsl".into(), vertex.as_bytes().to_vec());
+    }
+    pack.files.insert(MANIFEST.into(), manifest.into_bytes());
+    check(&Pack::from_files(pack.files).unwrap())
+        .unwrap()
+        .looks()
+}
+
+/// Every way a stage reaches a look field turns the looks on: through a pointer to the struct
+/// (a helper taking `ptr<function, _>` or `ptr<private, _>`, on both structs), a copy passed to
+/// a helper, a `let`, an array or a struct holding it, a swizzle after the member, and a helper
+/// in another of the stage's files, called or not.
+#[test]
+fn looks_are_read_through_pointers_copies_and_other_files() {
+    const PLAIN: &str =
+        "fn material(input: MaterialInput) -> Surface {\n    return Surface(input.albedo);\n}\n";
+    assert!(!reads_looks(PLAIN, &[], None));
+    let forms = [
+        (
+            "a function pointer",
+            "fn glow(p: ptr<function, MaterialInput>) -> f32 { return (*p).emission; }\n\
+             fn material(input: MaterialInput) -> Surface {\n    var i = input;\n    \
+             return Surface(vec4(glow(&i)));\n}\n",
+        ),
+        (
+            "a private pointer",
+            "var<private> kept: MaterialInput;\n\
+             fn shade_of(p: ptr<private, MaterialInput>) -> f32 { return (*p).shade; }\n\
+             fn material(input: MaterialInput) -> Surface {\n    kept = input;\n    \
+             return Surface(vec4(shade_of(&kept)));\n}\n",
+        ),
+        (
+            "a copy passed to a helper",
+            "fn tinted(i: MaterialInput) -> vec4<f32> { return i.albedo * i.tint; }\n\
+             fn material(input: MaterialInput) -> Surface {\n    return Surface(tinted(input));\n}\n",
+        ),
+        (
+            "a let and a swizzle",
+            "fn material(input: MaterialInput) -> Surface {\n    let i = input;\n    \
+             return Surface(vec4(i.tint.rgb, 1.0));\n}\n",
+        ),
+        (
+            "an array",
+            "fn material(input: MaterialInput) -> Surface {\n    \
+             var a = array<MaterialInput, 2>(input, input);\n    \
+             return Surface(vec4(f32(a[1].face)));\n}\n",
+        ),
+        (
+            "a struct holding it",
+            "struct Wrap { inner: MaterialInput }\n\
+             fn material(input: MaterialInput) -> Surface {\n    let w = Wrap(input);\n    \
+             return Surface(vec4(w.inner.ao));\n}\n",
+        ),
+    ];
+    let mut missed: Vec<&str> = (forms.iter())
+        .filter(|(_, material)| !reads_looks(material, &[], None))
+        .map(|(form, _)| *form)
+        .collect();
+    // In the stage's own other file, a helper the stage never calls.
+    let lib = (
+        "lib.wgsl",
+        "fn lit(i: MaterialInput) -> f32 { return i.ao; }\n",
+    );
+    if !reads_looks(PLAIN, &[lib], None) {
+        missed.push("another file");
+    }
+    // The vertex stage's input through a pointer.
+    let vertex = "fn shade_of(p: ptr<function, VertexInput>) -> f32 { return (*p).shade; }\n\
+                  fn vertex(input: VertexInput) -> vec3<f32> {\n    var i = input;\n    \
+                  return input.position * shade_of(&i);\n}\n";
+    if !reads_looks(PLAIN, &[], Some(vertex)) {
+        missed.push("a vertex pointer");
+    }
+    assert!(missed.is_empty(), "missed: {missed:?}");
+    let plain = "fn vertex(input: VertexInput) -> vec3<f32> { return input.position; }\n";
+    assert!(!reads_looks(PLAIN, &[], Some(plain)));
+}
+
+/// What doesn't read a look field leaves the looks off, however near it comes: a post pass
+/// that samples `shadow_color` (it holds the vertex colour, looks or none), and a traced post
+/// pass reading a hit's `tint`, `shade`, `ao` and `emission` (the ray scene's own store holds
+/// them, not the sections' looks).
+#[test]
+fn shadow_color_and_ray_hits_leave_the_looks_off() {
+    let shadowed = "fn post(input: PostInput) -> vec4<f32> {\n    \
+                    let size = vec2<f32>(textureDimensions(shadow_color));\n    \
+                    let c = textureLoad(shadow_color, vec2<i32>(input.uv * size), 0);\n    \
+                    return input.color * c;\n}\n";
+    let report = post_pack(shadowed, TONEMAP, "[shadow]\n").unwrap();
+    assert!(report.stages.iter().any(|s| s.reads("shadow_color")));
+    assert!(!report.looks());
+    let traced_hit = "fn post(input: PostInput) -> vec4<f32> {\n    \
+                      let p = view_position(input.uv, input.depth);\n    \
+                      let hit = trace(p, frame.sun_direction, frame.ray_distance);\n    \
+                      let c = hit.tint.rgb * hit.shade * hit.ao + vec3(hit.emission);\n    \
+                      return vec4<f32>(input.color.rgb * c, 1.0);\n}\n";
+    assert!(!traced(traced_hit).unwrap().looks());
 }

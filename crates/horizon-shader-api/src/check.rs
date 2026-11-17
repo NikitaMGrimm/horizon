@@ -110,10 +110,17 @@ impl CheckedStage {
     }
 
     /// Whether a function of the stage, called or not, reads one of `LOOK_FIELDS`: where only
-    /// the terrain's quad looks hold the value, not the vertex.
+    /// the terrain's quad looks hold the value, not the vertex. A field is read through its
+    /// struct, a copy of it (an argument, a `let`, a `var`) or a pointer to it, in whichever file
+    /// of the pack: every one is a member access on a value or pointer of the struct's type.
     pub fn reads_looks(&self) -> bool {
         let m = &self.module;
         let looked = |ty: naga::Handle<naga::Type>, index: u32| {
+            // Through a pointer (`ptr<function, MaterialInput>`, a `var`): its pointee.
+            let ty = match m.types[ty].inner {
+                naga::TypeInner::Pointer { base, .. } => base,
+                _ => ty,
+            };
             let t = &m.types[ty];
             let naga::TypeInner::Struct { members, .. } = &t.inner else {
                 return false;
@@ -128,7 +135,7 @@ impl CheckedStage {
                 let naga::Expression::AccessIndex { base, index } = *e else {
                     return false;
                 };
-                // The struct, or a pointer to one (a `var`).
+                // The struct, or a pointer to one, by handle or by value.
                 let ty = match &info[base].ty {
                     naga::proc::TypeResolution::Handle(ty) => Some(*ty),
                     naga::proc::TypeResolution::Value(naga::TypeInner::Pointer {
@@ -164,14 +171,14 @@ impl CheckedStage {
 }
 
 /// The fields of the terrain's inputs that only its quads' looks hold, by struct: the vertex
-/// holds their product (`shaded_tint`).
-const LOOK_FIELDS: [(&str, &[&str]); 3] = [
+/// holds their product (`shaded_tint`). `RayHit`'s aren't among them: a terrain hit reads the
+/// ray scene's own store, not the sections' looks.
+const LOOK_FIELDS: [(&str, &[&str]); 2] = [
     (
         "MaterialInput",
         &["tint", "shade", "ao", "face", "emission"],
     ),
     ("VertexInput", &["tint", "shade", "ao", "face"]),
-    ("RayHit", &["tint", "shade", "ao", "emission"]),
 ];
 
 #[derive(Debug)]
@@ -193,10 +200,11 @@ pub struct Report {
 
 impl Report {
     /// Whether the pack reads the terrain's own inputs, which the vertex doesn't hold: a stage
-    /// reads one of `LOOK_FIELDS` (`CheckedStage::reads_looks`) or `shadow_color`: what needs
-    /// the renderer's sections to carry their quads' looks.
+    /// reads one of `LOOK_FIELDS` (`CheckedStage::reads_looks`), what needs the renderer's
+    /// sections to carry their quads' looks. Nothing else does: a pack naming none of them pays
+    /// nothing for them.
     pub fn looks(&self) -> bool {
-        (self.stages.iter()).any(|s| s.reads_looks() || s.reads("shadow_color"))
+        (self.stages.iter()).any(CheckedStage::reads_looks)
     }
 }
 
