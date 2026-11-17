@@ -54,6 +54,24 @@ fn game() -> Game<'static> {
     game
 }
 
+/// `OldMinecartBehavior.getKnownMovement`: x and z clamped to 0.4, y as is,
+/// and no motion at all once any component is NaN.
+#[test]
+fn a_cart_carries_its_known_movement_and_none_for_a_nan() {
+    use horizon_core::geometry::Vec3;
+    assert_eq!(
+        super::cart_known_movement(Vec3::new(1.5, -2.0, -0.7)),
+        Vec3::new(0.4, -2.0, -0.4)
+    );
+    for nan in [
+        Vec3::new(f64::NAN, 1.0, 0.4),
+        Vec3::new(0.1, f64::NAN, 0.2),
+        Vec3::new(0.1, 1.0, f64::NAN),
+    ] {
+        assert_eq!(super::cart_known_movement(nan), Vec3::ZERO, "{nan:?}");
+    }
+}
+
 /// `BlockAttachedEntity.setPos`: the block it hangs in is the floor of the
 /// requested position; its bounds follow from it.
 #[test]

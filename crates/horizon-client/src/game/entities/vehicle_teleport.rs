@@ -83,8 +83,12 @@ pub(in crate::game) enum TeleportMotion {
 
 /// `AbstractMinecart.getKnownMovement` with `OldMinecartBehavior`: the cart's
 /// motion clamped to 0.4 either way along x and z, what a teleport's
-/// `PositionMoveRotation.of(this)` carries over.
+/// `PositionMoveRotation.of(this)` carries over. A motion with any NaN
+/// component is none at all.
 pub(super) fn cart_known_movement(velocity: Vec3) -> Vec3 {
+    if velocity.x.is_nan() || velocity.y.is_nan() || velocity.z.is_nan() {
+        return Vec3::ZERO;
+    }
     Vec3::new(
         velocity.x.clamp(-0.4, 0.4),
         velocity.y,

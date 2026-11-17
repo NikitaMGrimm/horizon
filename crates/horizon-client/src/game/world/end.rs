@@ -2035,23 +2035,30 @@ mod tests {
                 [2.5, 100.0, 2.5],
                 0,
             );
+            let id = game.dropped.last().unwrap().id;
+            let target = Vec3::new(12.5, 100.0, 12.5);
             let motion = Vec3::new(0.117, 0.25, -0.05);
-            game.dropped[0].velocity = motion;
-            let id = game.dropped[0].id;
+            game.dropped
+                .iter_mut()
+                .find(|d| d.id == id)
+                .unwrap()
+                .velocity = motion;
             let arrival = GatewayArrival {
                 traveller: Arriving::Live(id),
                 job: GatewayJob::Known {
                     exit: [12, 100, 12],
                     exact: true,
                 },
-                target: Vec3::new(12.5, 100.0, 12.5),
+                target,
             };
             assert!(game.arrive_through_gateway(arrival).is_none());
             // Entity.teleportSameDimension with the gateway's Relative.DELTA: the
             // entity is at the exit and its motion is kept.
-            let item = &game.dropped[0];
-            assert_eq!(item.id, id);
-            assert!((item.position.x - 12.5).abs() < 1.0, "{:?}", item.position);
+            let item = game.dropped.iter().find(|d| d.id == id).unwrap();
+            let (at, to) = (item.position, target);
+            for (a, t) in [(at.x, to.x), (at.y, to.y), (at.z, to.z)] {
+                assert!((a - t).abs() < 1e-3, "{at:?}");
+            }
             assert_eq!(item.velocity, motion);
         });
     }
