@@ -749,3 +749,81 @@ fn a_pack_that_reads_hit_looks_binds_the_scene_s_or_none() {
     let plain = pack(&device, &queue, &scene, manifest, &[("p.wgsl", &plain)]);
     assert!(!plain.traces_looks());
 }
+
+/// A pack whose `[[before_world]]`, compute `[[post]]` and fragment post passes each read a
+/// hit's `tint`, `shade` and `emission`: every pass binds the scene's look store, or the stand-in
+/// without one, beside its kept resources. The first two write theirs into `hit`, the last shows
+/// the three passes' mean, which is the look's only when each read it, with no validation error.
+#[test]
+fn every_kind_of_pass_reads_a_hit_s_looks() {
+    let Some((_, device, queue)) = ray_device() else {
+        return;
+    };
+    let scene = Scene::new(&device, &queue, 4.0, 1);
+    // `hit` of six floats (`buffer` is in bytes): the two writing passes' three each.
+    let manifest = format!(
+        "{}[[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
+         writes = [\"hit\"]\n[[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = [1, 1, 1]\n\
+         workgroup = [1, 1, 1]\nwrites = [\"hit\"]\n[[post]]\nfile = \"l.wgsl\"\nreads = [\"hit\"]\n",
+        HIT.replace("buffer = 16", "buffer = 24")
+    );
+    let ray = "trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0)";
+    let writes = |at: usize| {
+        format!(
+            "fn compute(input: ComputeInput) {{\n    let h = {ray};\n    \
+             hit[{at}] = h.tint.r;\n    hit[{}] = h.shade;\n    hit[{}] = h.emission;\n}}\n",
+            at + 1,
+            at + 2
+        )
+    };
+    let post = format!(
+        "fn post(input: PostInput) -> vec4<f32> {{\n    let h = {ray};\n    \
+         let mine = vec3<f32>(h.tint.r, h.shade, h.emission);\n    \
+         let theirs = vec3<f32>(hit[0], hit[1], hit[2]) + vec3<f32>(hit[3], hit[4], hit[5]);\n    \
+         return vec4<f32>((mine + theirs) / 3.0, 1.0);\n}}\n"
+    );
+    let files = [
+        ("w.wgsl", writes(0)),
+        ("c.wgsl", writes(3)),
+        ("l.wgsl", post),
+    ];
+    let files = files.each_ref().map(|(n, t)| (*n, t.as_str()));
+    let world = World::new(&device);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let mut pack = pack(&device, &queue, &scene, &manifest, &files);
+    assert!(pack.traces_looks(), "the passes read hit looks");
+    let look = crate::mesher::QuadLook([1 << 24 | 0x40, !0, 12]);
+    let looks = wgpu::util::DeviceExt::create_buffer_init(
+        &device,
+        &wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::bytes_of(&look),
+            usage: wgpu::BufferUsages::STORAGE,
+        },
+    );
+    let at = |generation, looks| Traced {
+        generation,
+        looks,
+        ..scene.traced()
+    };
+    let decode = |c: f32| c.powf(2.2);
+    let (none, looked) = ([1.0, 1.0, 0.0], [decode(64.0 / 255.0), decode(0.5), 0.8]);
+    for (n, (traced, want)) in [
+        (at(1, None), none),
+        (at(2, Some(&looks)), looked),
+        (at(3, None), none),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let got = frame(
+            (&device, &queue, &world),
+            &mut pack,
+            n as u32 + 1,
+            Some(&traced),
+        );
+        assert!(shows(got, want), "frame {n}: {got:?}, {want:?} expected");
+    }
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
+}
