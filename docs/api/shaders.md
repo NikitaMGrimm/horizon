@@ -288,9 +288,10 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 - 2026-11-17: API 0.2 (value change, experimental): a terrain hit's `tint`, `shade`, `ao` and `emission` are what
   `MaterialInput` gives for the same point; its `shaded_tint` is unchanged. A pack whose stages read one of them makes
-  the world load again when it starts, and the ray scene keeps twelve bytes a face of its terrain in video memory and
-  as many in memory; until a section is meshed again its hits read as a face without a look (`tint` the product,
-  `shade` and `ao` 1, `emission` 0). A pack that reads none of them is built and draws as before.
+  the world load again when it starts, and the ray scene keeps twelve bytes a face in video memory for the terrain
+  within its reach and as many in memory for every loaded section; until a section is meshed again its hits read as
+  a face without a look (`tint` the product, `shade` and `ao` 1, `emission` 0). A pack that reads none of them is
+  built and draws as before.
 - 2026-11-16: API 0.2 (**breaking**, experimental): the terrain's own inputs. `MaterialInput` and `VertexInput` have
   the quad's `tint` without its shade and ambient occlusion, the face's `shade`, the corner's `ao` and its `face`;
   `MaterialInput.emission` is the block state's light level over 15 (one candle 3/15, four 12/15); `VertexInput.fluid`
