@@ -259,3 +259,49 @@ fn shade_is_the_shade_the_quad_was_given() {
         }
     }
 }
+
+/// `blocks` (each its name and place in the section) alone in the world's lowest section,
+/// meshed and sorted as a shader pack's terrain is, and its solid quads' compact records (as
+/// the arena holds them while every pass reads that layout): what the ray scene unpacks and
+/// traces (`gfx/ray_terrain_tests.rs`).
+pub(crate) fn meshed_alone(blocks: &[(&str, [i32; 3])]) -> (SectionMesh, Vec<[u32; 6]>) {
+    let f = fixture();
+    let mut chunk = Chunk::empty(0, 0);
+    for &(name, [x, y, z]) in blocks {
+        chunk.set(x, MIN_Y + y, z, state(&f, name, &[]));
+    }
+    let region = [[Some(&chunk); 3]; 3];
+    let mut mesher = Mesher {
+        nether_shading: false,
+        shader_pack_lighting: false,
+        separate_ao: false,
+        shader_pack: true,
+        looks: false,
+        assets: &f.assets,
+        render: &f.render,
+        tables: &f.tables,
+        biomes: &f.biomes,
+        visibility: f.visibility.clone(),
+        zoom: BiomeZoom::new(0),
+        blend_radius: 0,
+        smooth_lighting: true,
+        cutout_leaves: true,
+        opaque_ice: false,
+        translucent_layers: &[],
+        leaf_culling: LeafCullingMode::Off,
+        hidden_states: &[],
+        part_tables: Default::default(),
+    };
+    let mut mesh = mesher.mesh(&region, 0);
+    // `sort_solid`'s order, keeping the tints it drops when the renderer doesn't read records.
+    mesh.solid_tints
+        .resize(mesh.solid.len() / 4, packed::UNKNOWN_TINT);
+    sides::sort_sourced(
+        &mut mesh.solid,
+        &mut mesh.solid_tints,
+        &mut mesh.solid_sources,
+        &mut mesh.solid_looks,
+    );
+    let records = packed::layout(&mesh.solid, &mesh.solid_tints);
+    (mesh, records)
+}

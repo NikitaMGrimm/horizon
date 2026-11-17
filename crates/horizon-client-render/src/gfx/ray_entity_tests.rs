@@ -138,7 +138,7 @@ fn ray_only_quads_lie_past_every_draw_and_before_the_shadow_only_ones() {
 }
 
 /// A device with ray queries, if this machine has one.
-fn ray_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+pub(super) fn ray_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = crate::gfx::test_gpu::instance();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
     let features = adapter.features() & wgpu::Features::EXPERIMENTAL_RAY_QUERY;
@@ -194,27 +194,34 @@ const PROBE: &str = "
 }
 ";
 
-/// The scene's WGSL for a pack whose post pass names `RAY_ENTITY`, as the check builds it.
-fn scene_source() -> String {
+/// The scene's WGSL for a pack whose post pass names `RAY_ENTITY` (`entities`) or only the
+/// terrain's layers, as the check builds it.
+fn scene_source(entities: bool) -> String {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
                     [[post]]\nfile = \"post.wgsl\"\n[ray_tracing]\n";
-    let post = "fn post(input: PostInput) -> vec4<f32> {\n    \
-                return input.color * f32(trace_any_layers(vec3<f32>(0.0), vec3<f32>(1.0, 0.0, 0.0), 1.0, RAY_ENTITY));\n}\n";
+    let layers = if entities { "RAY_ENTITY" } else { "RAY_SOLID" };
+    let post = format!(
+        "fn post(input: PostInput) -> vec4<f32> {{\n    \
+         return input.color * f32(trace_any_layers(vec3<f32>(0.0), vec3<f32>(1.0, 0.0, 0.0), 1.0, {layers}));\n}}\n"
+    );
     let files = [
         (horizon_shader_api::MANIFEST, manifest),
-        ("post.wgsl", post),
+        ("post.wgsl", post.as_str()),
     ]
     .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
     .into();
     let pack = horizon_shader_api::Pack::from_files(files).unwrap();
     let report = horizon_shader_api::check(&pack).unwrap();
     let post = &report.stages[0];
-    assert!(post.traces_entities());
+    assert_eq!(post.traces_entities(), entities);
     post.scene_source.clone().unwrap()
 }
 
 /// A 1×1 white texture: the atlas as a 2D view, the sprite arrays as an array view.
-fn white(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureView, wgpu::TextureView) {
+pub(super) fn white(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (wgpu::TextureView, wgpu::TextureView) {
     use wgpu::util::DeviceExt;
     let white = device.create_texture_with_data(
         queue,
@@ -244,7 +251,7 @@ fn white(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::TextureView, wgpu
 }
 
 /// A storage buffer of `size` bytes, zeros.
-fn empty(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+pub(super) fn empty(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size,
@@ -254,9 +261,9 @@ fn empty(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
 }
 
 /// Runs `probe` (writing `outputs` vec4s to `probe_out`) after the scene's WGSL against
-/// `traced`, whose terrain store and sprite tables are empty (`store`, `layers`, `sprites`), once
+/// `traced` with its terrain store and sprite tables (`store`, `layers`, `sprites`), once
 /// `encoder`'s builds are done. What it wrote.
-fn run_probe(
+pub(super) fn run_probe(
     (device, queue): (&wgpu::Device, &wgpu::Queue),
     mut encoder: wgpu::CommandEncoder,
     traced: &Traced<'_>,
@@ -278,7 +285,7 @@ fn run_probe(
     });
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
-        source: wgpu::ShaderSource::Wgsl((scene_source() + probe).into()),
+        source: wgpu::ShaderSource::Wgsl((scene_source(traced.entities.is_some()) + probe).into()),
     });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -288,18 +295,21 @@ fn run_probe(
         compilation_options: Default::default(),
         cache: None,
     });
-    let e = traced.entities.as_ref().unwrap();
     let mut scene = vec![
         (48, traced.tlas.as_binding()),
         (49, store.as_entire_binding()),
         (50, space.as_entire_binding()),
         (51, layers.as_entire_binding()),
-        (60, wgpu::BindingResource::Buffer(e.vertices.clone())),
-        (61, wgpu::BindingResource::TextureView(e.atlas)),
-        (62, wgpu::BindingResource::Sampler(e.sampler)),
-        (63, e.retained.as_entire_binding()),
     ];
     scene.extend((52..60).map(|b| (b, wgpu::BindingResource::TextureView(sprites))));
+    if let Some(e) = traced.entities.as_ref() {
+        scene.extend([
+            (60, wgpu::BindingResource::Buffer(e.vertices.clone())),
+            (61, wgpu::BindingResource::TextureView(e.atlas)),
+            (62, wgpu::BindingResource::Sampler(e.sampler)),
+            (63, e.retained.as_entire_binding()),
+        ]);
+    }
     let group = |index: u32, entries: Vec<(u32, wgpu::BindingResource<'_>)>| {
         let entries: Vec<_> = entries
             .into_iter()

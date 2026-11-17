@@ -1673,7 +1673,7 @@ fn row_masks_match_cell_definition() {
 #[cfg(test)]
 mod leaf_culling_tests;
 #[cfg(test)]
-mod look_tests;
+pub(crate) mod look_tests;
 #[cfg(test)]
 mod opaque_ice_tests;
 #[cfg(test)]

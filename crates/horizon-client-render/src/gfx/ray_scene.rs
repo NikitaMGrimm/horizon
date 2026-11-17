@@ -1365,6 +1365,10 @@ mod retained;
 mod entity_tests;
 
 #[cfg(test)]
+#[path = "ray_terrain_tests.rs"]
+mod terrain_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
