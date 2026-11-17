@@ -158,7 +158,9 @@ impl Game<'_> {
             .as_mut()
             .is_some_and(Renderer::take_dropped_sections)
         {
-            self.streaming.looks = self.renderer.as_ref().is_some_and(|r| r.terrain_looks());
+            let r = self.renderer.as_ref();
+            self.streaming.looks = r.is_some_and(|r| r.mesh_looks());
+            self.streaming.ray_looks = r.is_some_and(|r| r.ray_looks());
             self.clear_lod();
             self.all_sections_changed();
         }

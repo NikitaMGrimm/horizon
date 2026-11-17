@@ -630,8 +630,11 @@ pub struct Streaming {
     /// (`Mesher::shader_pack`).
     pub shader_pack: bool,
     /// A shader API 0.2 pack reads the terrain's own inputs: quads carry their looks
-    /// (`Mesher::looks`, `Renderer::terrain_looks`).
+    /// (`Mesher::looks`, `Renderer::mesh_looks`).
     pub looks: bool,
+    /// The ray scene keeps them (`Renderer::ray_looks`): with `looks`, what meshes the world
+    /// again when it changes.
+    pub ray_looks: bool,
     /// `BiomeManager`'s zoom seed (the hashed world seed) and `biomeBlendRadius`.
     pub biome_zoom: BiomeZoom,
     pub biome_blend: i32,
@@ -1236,6 +1239,7 @@ impl Streaming {
             separate_ao: false,
             shader_pack: false,
             looks: false,
+            ray_looks: false,
             biome_zoom: BiomeZoom::new(0),
             biome_blend: 2,
             smooth_lighting: true,

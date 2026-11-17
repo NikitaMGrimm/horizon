@@ -280,18 +280,29 @@ fn shade_is_the_shade_the_quad_was_given() {
 /// the arena holds them while every pass reads that layout): what the ray scene unpacks and
 /// traces (`gfx/ray_terrain_tests.rs`).
 pub(crate) fn meshed_alone(blocks: &[(&str, [i32; 3])]) -> (SectionMesh, Vec<[u32; 6]>) {
+    let blocks: Vec<_> = blocks.iter().map(|&(n, at)| (n, &[][..], at)).collect();
+    meshed(&blocks, false, false)
+}
+
+/// `meshed_alone` for blocks with properties, the quads with their looks (`looks`), under the
+/// Nether's shading (`nether`) or not.
+pub(crate) fn meshed(
+    blocks: &[(&str, &[(&str, &str)], [i32; 3])],
+    looks: bool,
+    nether: bool,
+) -> (SectionMesh, Vec<[u32; 6]>) {
     let f = fixture();
     let mut chunk = Chunk::empty(0, 0);
-    for &(name, [x, y, z]) in blocks {
-        chunk.set(x, MIN_Y + y, z, state(&f, name, &[]));
+    for &(name, properties, [x, y, z]) in blocks {
+        chunk.set(x, MIN_Y + y, z, state(&f, name, properties));
     }
     let region = [[Some(&chunk); 3]; 3];
     let mut mesher = Mesher {
-        nether_shading: false,
+        nether_shading: nether,
         shader_pack_lighting: false,
         separate_ao: false,
         shader_pack: true,
-        looks: false,
+        looks,
         assets: &f.assets,
         render: &f.render,
         tables: &f.tables,

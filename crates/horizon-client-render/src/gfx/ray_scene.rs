@@ -44,13 +44,15 @@ use horizon_shader_api::stages::{RAY_ENTITY, RAY_SOLID, RAY_TRANSLUCENT};
 use crate::block_entity_render::StaticSectionSnapshot;
 use crate::fast_hash::FxHashMap;
 use crate::gfx::{Renderer, SectionGpu, SectionKey, arena::Arena, resident::Resident};
-use crate::mesher::{TerrainVertex, Vertex};
+use crate::mesher::{QuadLook, TerrainVertex, Vertex};
 use retained::Retained;
 
 /// BLAS builds per frame at most: a world that just loaded builds over a few frames.
 const BUILDS_PER_FRAME: usize = 512;
 /// Bytes per vertex in the store.
 const STRIDE: u64 = std::mem::size_of::<TerrainVertex>() as u64;
+/// Bytes per quad in the look store.
+const LOOK: u64 = std::mem::size_of::<QuadLook>() as u64;
 /// Vertices the store starts with.
 const FIRST_STORE: u64 = 1 << 20;
 /// Vertices the store holds at most: an instance's custom data holds its first quad in 24 bits.
@@ -157,6 +159,7 @@ impl Renderer {
             return;
         };
         rt.nether = frame.nether_lighting;
+        rt.set_looks(&self.device, self.ray_looks);
         crate::spans::time("ray scene", || {
             rt.prepare(
                 &self.device,
@@ -394,6 +397,12 @@ impl Layer {
             Self::Translucent => s.translucent,
         }
     }
+
+    /// Section `s`'s looks of its quads in it, one a quad in the store's order, while the scene
+    /// keeps them (`SectionGpu::ray_looks`); else none.
+    fn looks(self, s: &SectionGpu) -> &[QuadLook] {
+        &s.ray_looks[self as usize]
+    }
 }
 
 /// A section's quads of one layer: what a BLAS and a slot of the store hold.
@@ -453,6 +462,8 @@ pub(in crate::gfx) struct Traced<'a> {
     pub solid_instances: u32,
     /// The sections' vertices: an instance's custom data is its quads' first here.
     pub store: &'a wgpu::Buffer,
+    /// The look of each quad of `store`, while the native pack's rays read them.
+    pub looks: Option<&'a wgpu::Buffer>,
     /// Where translucent terrain's instances end: the next is the entity layer's.
     pub translucent_instances: u32,
     /// The entity layer, while the native pack's rays read it.
@@ -549,6 +560,7 @@ impl RayScene {
             tlas: &self.tlas,
             solid_instances: self.solid_instances,
             store: &self.unpacker.store,
+            looks: self.unpacker.looks.as_ref(),
             translucent_instances: self.translucent_instances,
             entities,
             generation: self.generation,
@@ -556,6 +568,11 @@ impl RayScene {
             nether: self.nether,
             distance,
         })
+    }
+
+    /// Keeps the quads' looks (`on`: the native pack's rays read them) or none.
+    fn set_looks(&mut self, device: &wgpu::Device, on: bool) {
+        self.generation += u64::from(self.unpacker.set_looks(device, on));
     }
 
     fn mark(&mut self, key: SectionKey) {
@@ -965,6 +982,9 @@ pub(in crate::gfx) struct RtJob {
 struct Unpacker {
     pipeline: wgpu::ComputePipeline,
     store: wgpu::Buffer,
+    /// The look of each quad of `store`, while the native pack's rays read them (`set_looks`):
+    /// a part's are written with its vertices, from its section's copy. It grows with `store`.
+    looks: Option<wgpu::Buffer>,
 }
 
 impl Unpacker {
@@ -976,7 +996,21 @@ impl Unpacker {
         Some(Self {
             pipeline: unpack_pipeline(device),
             store,
+            looks: None,
         })
+    }
+
+    /// A look store beside the store (`on`) or none; whether that changed. Without the video
+    /// memory for one the rays read every quad as without a look, and a later frame asks again.
+    /// Parts written before it came read so until they are meshed again.
+    fn set_looks(&mut self, device: &wgpu::Device, on: bool) -> bool {
+        let before = self.looks.is_some();
+        if on != before {
+            self.looks = on
+                .then(|| look_buffer(device, self.store.size() / STRIDE))
+                .flatten();
+        }
+        self.looks.is_some() != before
     }
 
     /// A store of `vertices` when it holds fewer: the larger one gets the old contents first
@@ -992,7 +1026,11 @@ impl Unpacker {
         if vertices * STRIDE <= self.store.size() {
             return true;
         }
-        let Some(store) = store_buffer(device, vertices) else {
+        let looks = match self.looks {
+            Some(_) => look_buffer(device, vertices).map(Some),
+            None => Some(None),
+        };
+        let (Some(looks), Some(store)) = (looks, store_buffer(device, vertices)) else {
             log::warn!(
                 "Horizon renderer: no video memory for a ray tracing store of {vertices} \
                  vertices; it stays at {}",
@@ -1001,7 +1039,11 @@ impl Unpacker {
             return false;
         };
         encoder.copy_buffer_to_buffer(&self.store, 0, &store, 0, self.store.size());
+        if let (Some(old), Some(new)) = (&self.looks, &looks) {
+            encoder.copy_buffer_to_buffer(old, 0, new, 0, old.size());
+        }
         self.store = store;
+        self.looks = looks;
         true
     }
 
@@ -1015,6 +1057,9 @@ impl Unpacker {
         translucent: &Arena,
         builds: &[Build<'_>],
     ) {
+        if let Some(looks) = &self.looks {
+            write_looks(device, encoder, looks, builds);
+        }
         let (builds, copied): (Vec<_>, Vec<_>) =
             builds.iter().partition(|b| b.part.1 == Layer::Solid);
         for b in copied {
@@ -1134,6 +1179,51 @@ pub(in crate::gfx) fn unpack_page(
 /// draws do (`section_corner`).
 pub(in crate::gfx) fn unpack_shader() -> String {
     crate::gfx::terrain_shader() + include_str!("../rt_unpack.wgsl")
+}
+
+/// Writes the builds' looks into their quads' place in `looks`, in `encoder` after any copy
+/// of a store that grew: each part's section's copy, or none (zeros) where it kept none.
+fn write_looks(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    looks: &wgpu::Buffer,
+    builds: &[Build<'_>],
+) {
+    fn kept<'a>(b: &Build<'a>) -> Option<&'a [QuadLook]> {
+        Some(b.part.1.looks(b.s)).filter(|l| l.len() == b.quads as usize)
+    }
+    let all: Vec<QuadLook> = builds.iter().filter_map(kept).flatten().copied().collect();
+    let staged = (!all.is_empty()).then(|| {
+        wgpu::util::DeviceExt::create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Ray tracing: looks to write"),
+                contents: bytemuck::cast_slice(&all),
+                usage: wgpu::BufferUsages::COPY_SRC,
+            },
+        )
+    });
+    let mut at = 0;
+    for b in builds {
+        let (offset, size) = (b.first / 4 * LOOK, u64::from(b.quads) * LOOK);
+        match staged.as_ref().filter(|_| kept(b).is_some()) {
+            Some(staged) => {
+                encoder.copy_buffer_to_buffer(staged, at, looks, offset, size);
+                at += size;
+            }
+            None => encoder.clear_buffer(looks, offset, Some(size)),
+        }
+    }
+}
+
+/// The look store of a store of `vertices`: a look a quad.
+fn look_buffer(device: &wgpu::Device, vertices: u64) -> Option<wgpu::Buffer> {
+    crate::gfx::arena::try_create(
+        device,
+        "Ray tracing: section looks",
+        vertices / 4 * LOOK,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+    )
 }
 
 fn store_buffer(device: &wgpu::Device, vertices: u64) -> Option<wgpu::Buffer> {
@@ -1367,6 +1457,10 @@ mod entity_tests;
 #[cfg(test)]
 #[path = "ray_terrain_tests.rs"]
 mod terrain_tests;
+
+#[cfg(test)]
+#[path = "ray_looks_tests.rs"]
+mod looks_tests;
 
 #[cfg(test)]
 mod tests {

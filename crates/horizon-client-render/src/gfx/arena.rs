@@ -1135,6 +1135,7 @@ mod tests {
             fading: None,
             leaving: None,
             animated_layers: Box::new([]),
+            ray_looks: Default::default(),
         };
         for split in [true, false] {
             let mut arena = Arena::new(&device, stride, 4 * GRAIN, false);
@@ -1349,6 +1350,7 @@ mod tests {
             fading: None,
             leaving: None,
             animated_layers: Box::new([]),
+            ray_looks: Default::default(),
         };
         translucent.close(0);
         let mut budget = u64::MAX;
@@ -1586,6 +1588,7 @@ mod tests {
                 fading: None,
                 leaving: None,
                 animated_layers: Box::new([]),
+                ray_looks: Default::default(),
             };
             let mut uploads = super::super::upload::Uploads::new(&device);
             let mut encoder = device.create_command_encoder(&Default::default());

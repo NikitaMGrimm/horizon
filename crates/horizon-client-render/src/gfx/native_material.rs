@@ -522,7 +522,7 @@ impl NativeMaterial {
         }
         let pipelines = built?;
         let scene = stage.scene_source.as_deref().and_then(|source| {
-            let terrain = (shape, stage.traces_entities());
+            let terrain = (shape, (stage.traces_entities(), stage.traces_looks()));
             TerrainTrace::new(device, frame, terrain, |group| build(source, group))
         });
         Ok(Self {
@@ -1125,7 +1125,8 @@ mod tests {
             })
             .map(|(handle, _)| handle)
             .collect();
-        assert_eq!(scene.len(), 12);
+        // With the terrain's looks: it reads `hit.emission`.
+        assert_eq!(scene.len(), 13);
         for (i, entry) in module.entry_points.iter().enumerate() {
             let reads = scene
                 .iter()

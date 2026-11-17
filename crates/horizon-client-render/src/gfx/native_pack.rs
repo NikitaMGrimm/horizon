@@ -175,6 +175,13 @@ impl NativePack {
         self.post.traces_entities() || material.is_some_and(|t| t.traces_entities())
     }
 
+    /// Whether the pack's rays read the terrain's looks (`Report::ray_looks`), and its stages
+    /// trace on this device.
+    pub(in crate::gfx) fn traces_looks(&self) -> bool {
+        let material = self.material.as_ref().and_then(|m| m.scene.as_ref());
+        self.post.traces_looks() || material.is_some_and(|t| t.traces_looks())
+    }
+
     /// The pipelines the pack's terrain draws with this frame, and its group 3.
     pub(in crate::gfx) fn terrain(&self) -> Option<(&MaterialPipelines, &wgpu::BindGroup)> {
         Some(self.material.as_ref()?.drawn(&self.frame.group))
@@ -375,6 +382,7 @@ impl NativePack {
         // compute passes keep theirs (`ComputePass::scene`). Whether any of them, compute and
         // before-world passes included, reads the entity layer.
         let entities = post.iter().any(CheckedStage::traces_entities);
+        let looks = post.iter().any(CheckedStage::traces_looks);
         let scenes: Vec<(String, naga::Module)> = (post.iter_mut())
             .filter(|s| s.kind == StageKind::Post)
             .filter_map(|s| Some((s.label.clone(), s.scene.take()?)))
@@ -390,7 +398,7 @@ impl NativePack {
             && !material.as_ref().is_some_and(traced);
         let computes = post.computes_trace();
         if (!scenes.is_empty() || computes) && !refused {
-            let shape = super::native_post::trace::TraceShape::of(terrain, entities);
+            let shape = super::native_post::trace::TraceShape::of(terrain, (entities, looks));
             if !post.trace_scene(device, scenes, constants, &shape, &frame.pbr)
                 && let Some(m) = material.as_mut()
             {

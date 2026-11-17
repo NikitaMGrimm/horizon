@@ -151,6 +151,7 @@ impl Scene {
             tlas: &self.tlas,
             solid_instances: 1,
             store: &self.store,
+            looks: None,
             translucent_instances: 1,
             entities: None,
             generation: self.generation,
@@ -685,4 +686,66 @@ fn passes_that_name_the_entity_layer_trace_beside_kept_resources() {
     }
     let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
+}
+
+/// A post pass that reads a hit's looks, built by `NativePack::new`: its group binds the
+/// scene's look store, and a stand-in without one (a frame before the store is there), each
+/// frame as the scene has it. The white quad reads as without a look (`tint` 1, `shade` 1,
+/// `emission` 0), then as its look says (0x40 red, shade 0.5, light level 12), then without
+/// again, with no validation error. A pack that reads none has no look binding.
+#[test]
+fn a_pack_that_reads_hit_looks_binds_the_scene_s_or_none() {
+    let Some((_, device, queue)) = ray_device() else {
+        return;
+    };
+    let scene = Scene::new(&device, &queue, 4.0, 1);
+    let world = World::new(&device);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let manifest = "[ray_tracing]\n[[post]]\nfile = \"p.wgsl\"\n";
+    let shows_hit = "fn post(input: PostInput) -> vec4<f32> {\n    \
+                     let h = trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0);\n    \
+                     return vec4<f32>(h.tint.r, h.shade, h.emission, 1.0);\n}\n";
+    let mut looking = pack(&device, &queue, &scene, manifest, &[("p.wgsl", shows_hit)]);
+    assert!(looking.traces_looks());
+    let look = crate::mesher::QuadLook([1 << 24 | 0x40, !0, 12]);
+    let looks = wgpu::util::DeviceExt::create_buffer_init(
+        &device,
+        &wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::bytes_of(&look),
+            usage: wgpu::BufferUsages::STORAGE,
+        },
+    );
+    let at = |generation, looks| Traced {
+        generation,
+        looks,
+        ..scene.traced()
+    };
+    let none = [1.0, 1.0, 0.0];
+    let decode = |c: f32| c.powf(2.2);
+    let looked = [decode(64.0 / 255.0), decode(0.5), 0.8];
+    for (n, (traced, want)) in [
+        (at(1, None), none),
+        (at(2, Some(&looks)), looked),
+        (at(3, None), none),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let got = frame(
+            (&device, &queue, &world),
+            &mut looking,
+            n as u32 + 1,
+            Some(&traced),
+        );
+        assert!(shows(got, want), "frame {n}: {got:?}, {want:?} expected");
+    }
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
+    let plain = shows_hit.replace(
+        "h.tint.r, h.shade, h.emission",
+        "h.albedo.r, h.distance, 0.0",
+    );
+    let plain = pack(&device, &queue, &scene, manifest, &[("p.wgsl", &plain)]);
+    assert!(!plain.traces_looks());
 }

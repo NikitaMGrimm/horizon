@@ -161,6 +161,7 @@ fn a_terrain_hit_is_front_from_outside_a_block_and_back_from_inside() {
             tlas: &tlas,
             solid_instances: 1,
             store: &store,
+            looks: None,
             translucent_instances: 2,
             entities: None,
             generation: 0,
