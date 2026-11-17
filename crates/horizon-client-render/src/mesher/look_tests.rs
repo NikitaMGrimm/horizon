@@ -143,7 +143,7 @@ fn each_quads_look_gives_back_its_vertex_colour() {
         assert_eq!(with.translucent_looks.len() * 4, with.translucent.len());
         let mut checked = 0;
         for (quad, look) in quads(&with) {
-            let [a, ao, _] = look.0;
+            let [a, ao] = look.0;
             let code = (a >> 24 & 7) as usize;
             assert!(code > 0, "a quad without its look");
             let shade = SHADES[code - 1];

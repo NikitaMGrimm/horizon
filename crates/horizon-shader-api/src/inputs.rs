@@ -513,7 +513,7 @@ pub fn ray_hit(entities: bool) -> Struct {
 pub const SHADED_TINT: Field = Field {
     name: "shaded_tint",
     ty: "vec4<f32>",
-    doc: "Only in a pack whose files name `shaded_tint`: the colour vanilla multiplies the texture by with the face's shade and ambient occlusion in it, `tint.rgb * shade * ao` as vanilla's vertex carries it (vanilla multiplies them at each corner in 8-bit integers, so it is within two steps of 255 of that product); alpha 1. Draw vanilla's colour with it; `tint`, `shade` and `ao` are for lighting faces yourself, and reading them makes the world load again when the pack starts and terrain take half again its memory. On `RayHit` it is linear light, `tint.rgb * shade * ao` on every hit (an entity hit keeps its `tint`'s alpha), and 0 on a miss.",
+    doc: "Only in a pack whose files name `shaded_tint`: the colour vanilla multiplies the texture by with the face's shade and ambient occlusion in it, `tint.rgb * shade * ao` as vanilla's vertex carries it (vanilla multiplies them at each corner in 8-bit integers, so it is within two steps of 255 of that product); alpha 1. Draw vanilla's colour with it; `tint`, `shade` and `ao` are for lighting faces yourself, and reading them makes the world load again when the pack starts and terrain take a third again its memory. On `RayHit` it is linear light, `tint.rgb * shade * ao` on every hit (an entity hit keeps its `tint`'s alpha), and 0 on a miss.",
 };
 
 /// `input` with `SHADED_TINT` last where `shaded`.

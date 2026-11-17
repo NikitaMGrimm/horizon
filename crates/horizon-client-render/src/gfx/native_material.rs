@@ -93,7 +93,7 @@ fn horizon_material_faded(in: HorizonMaterialOut, color: vec4<f32>) -> vec4<f32>
 }
 // `light`: sky, block, 16 per level. `look` the quad's, `ao` the point's (`horizon_look_ao`).
 fn horizon_material_out(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
-    light: vec2<f32>, look: vec3<u32>, ao: f32) -> HorizonMaterialOut {
+    light: vec2<f32>, look: vec2<u32>, ao: f32) -> HorizonMaterialOut {
     var out: HorizonMaterialOut;
     out.clip = horizon_terrain_globals.view_proj * vec4(pos, 1.0);
     out.uv = uv;
@@ -254,7 +254,7 @@ fn horizon_look_shade(code: u32) -> f32 {
     }
 }
 // Corner `corner`'s ambient occlusion, 0..1 as vanilla's vertex colour holds it; 1 without a look.
-fn horizon_look_ao(look: vec3<u32>, corner: u32) -> f32 {
+fn horizon_look_ao(look: vec2<u32>, corner: u32) -> f32 {
     if ((look.x >> 24u) & 7u) == 0u {
         return 1.0;
     }
@@ -418,7 +418,7 @@ pub(super) fn layer_table(name: &str, table: &[(u32, u32)]) -> String {
 /// Where a corner of terrain is drawn without a vertex stage.
 pub(super) const DISPLACE_VANILLA: &str = "
 fn horizon_material_displace(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
-    light: vec2<u32>, look: vec3<u32>, ao: f32) -> vec3<f32> {
+    light: vec2<u32>, look: vec2<u32>, ao: f32) -> vec3<f32> {
     return pos;
 }
 ";
@@ -430,7 +430,7 @@ fn horizon_material_displace(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: v
 pub(super) const DISPLACE_PACK: &str = "
 override horizon_material_translucent: bool = false;
 fn horizon_material_displace(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
-    light: vec2<u32>, look: vec3<u32>, ao: f32) -> vec3<f32> {
+    light: vec2<u32>, look: vec2<u32>, ao: f32) -> vec3<f32> {
     let fluid = (u32(round(color.a * 255.0)) & 8u) == 0u;
     let lit = min(vec2(f32(light.y), f32(light.x)) / 240.0, vec2(1.0));
     let code = (look.x >> 24u) & 7u;
@@ -1340,7 +1340,7 @@ mod tests {
     let color = vec4(0.5, 0.5, 0.5, f32(v) * (1.0 / 255.0));
     let engine = {PREFIX}terrain_vertex(vec3(0.0), vec2(0.0), 0u, color, vec2(0u), vec3(0.0),
         1.0);
-    let pack = horizon_material_out(vec3(0.0), vec2(0.0), 0u, color, vec2(0.0), vec3(0u), 1.0);
+    let pack = horizon_material_out(vec3(0.0), vec2(0.0), 0u, color, vec2(0.0), vec2(0u), 1.0);
     test_out[v] = vec2(engine.emission, pack.look);
     return vec4(2.0, 2.0, 2.0, 1.0);
 }}

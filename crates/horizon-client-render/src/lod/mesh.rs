@@ -60,7 +60,8 @@ struct Material<L> {
 }
 /// What a far face carries of its quad's look, chosen once per tile: nothing (`()`) where tiles
 /// carry no looks, so the paints, materials and segments a tile keeps and the key its faces
-/// merge by have their sizes before looks; the `QuadLook`'s words (`[u32; 3]`) where they do.
+/// merge by have their sizes before looks; where they do, the `QuadLook`'s words and its
+/// block's light level (`far_look`).
 trait Look: Copy + Ord {
     fn make(look: impl FnOnce() -> [u32; 3]) -> Self;
     fn words(self) -> [u32; 3];
@@ -271,13 +272,16 @@ impl Mesher {
 }
 
 /// A far face's `QuadLook` words (`Mesher::looks`: 0 none, 1 the Overworld's shades, 2 the
-/// Nether's) for its tint 0xRRGGBB and its block's light `level`: no ambient occlusion.
+/// Nether's) for its tint 0xRRGGBB, no ambient occlusion, and its block's light `level`, which
+/// isn't stored: the vertex holds it, and it keeps faces of other levels apart where a pack
+/// takes looks (`FaceKey::merged`).
 fn far_look(looks: u8, rgb: u32, direction: Direction, level: impl Fn() -> u8) -> [u32; 3] {
     if looks == 0 {
         return [0; 3];
     }
     let shade = crate::mesher::cardinal_shade(looks == 2, direction);
-    crate::mesher::QuadLook::new(rgb, shade, direction as u32, [1.0; 4], level()).0
+    let [a, ao] = crate::mesher::QuadLook::new(rgb, shade, direction as u32, [1.0; 4]).0;
+    [a, ao, u32::from(level())]
 }
 
 struct Segment<'a, L> {
@@ -311,8 +315,8 @@ struct FaceKey {
 }
 impl FaceKey {
     /// What faces merge by: all of it but the light level in the colour's alpha, which only a
-    /// shader pack reads (from the look too, which splits them where a pack takes looks), so
-    /// faces merge as they did before it was there; a merged face keeps the first one's.
+    /// shader pack reads (where it takes looks, the far look's level splits them), so faces
+    /// merge as they did before it was there; a merged face keeps the first one's.
     fn merged(&self) -> (Direction, u32, u8, u16, u16, u32, bool) {
         let color = self.color | crate::mesher::LEVEL_BITS;
         let k = self;
@@ -1278,7 +1282,7 @@ fn emit_quad(mesh: &mut SectionMesh, grouped: (FaceKey, impl Look), rect: Rect, 
             false => (&mut mesh.solid_looks, mesh.solid.len() / 4),
         };
         looks.resize(quads, crate::mesher::QuadLook::default());
-        looks.push(crate::mesher::QuadLook(look));
+        looks.push(crate::mesher::QuadLook([look[0], look[1]]));
     }
     let out = if key.translucent {
         &mut mesh.translucent
@@ -1651,7 +1655,7 @@ mod tests {
             let quads = vertices.as_chunks::<4>().0;
             assert!(quads.len() > 20 && looks.len() == quads.len());
             for (q, look) in quads.iter().zip(looks) {
-                let [layer, direction, _] = look.0;
+                let [layer, direction] = look.0;
                 assert_eq!(layer, u32::from(q[0].layer));
                 // A quad's winding gives its normal against the face it shows.
                 let n = face(q);

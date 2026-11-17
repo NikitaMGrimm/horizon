@@ -332,7 +332,7 @@ fn emit(mesher: &Mesher<'_>, quad: &SectionQuad, layer: u16, out: &mut SectionMe
             let axis = n.abs().max_position();
             // `Direction` order: down, up, north, south, west, east.
             let face = [4, 0, 2][axis] + u32::from(n[axis] > 0.0);
-            super::QuadLook::new(quad.color & 0xFF_FFFF, 1.0, face, [1.0; 4], 0)
+            super::QuadLook::new(quad.color & 0xFF_FFFF, 1.0, face, [1.0; 4])
         }
         false => super::QuadLook::default(),
     };

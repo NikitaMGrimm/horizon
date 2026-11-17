@@ -383,7 +383,7 @@ pub(super) fn tesselate(
             sprite_layers.push(layer);
         }
         if looks {
-            let look = super::QuadLook::new(tint, shade, face as u32, [1.0; 4], level);
+            let look = super::QuadLook::new(tint, shade, face as u32, [1.0; 4]);
             target_looks.resize(target.len() / 4, super::QuadLook::default());
             target_looks.extend(std::iter::repeat_n(look, 1 + usize::from(back)));
         }

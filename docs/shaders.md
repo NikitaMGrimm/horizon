@@ -56,9 +56,9 @@ Put the pack folder (or its `.hshader`) in `shaderpacks/` beside `options.txt` (
 it on Options > Video Settings > Shaders > Shader Packs..., which lists Horizon's packs, marked (Horizon), beside packs in the
 `shaders/` format; one runs at a time, and clicking it again turns it off. `HORIZON_SHADER_PACK=<its folder or file
 name>` runs a pack whatever the page says, for development. `HORIZON_TERRAIN_LOOKS=1` makes terrain keep each quad's
-own tint, directional shade, ambient occlusion, face and light level beside its vertices while one of Horizon's packs
+own tint, directional shade, ambient occlusion and face beside its vertices while one of Horizon's packs
 runs, as a pack whose material or vertex stage reads `tint`, `shade`, `ao` or `face` does, for the engine's
-own tests: they take half again the terrain's memory, and the world loads again when such a pack starts or stops. The game checks the pack first, and refuses one that
+own tests: they take a third again the terrain's memory, and the world loads again when such a pack starts or stops. The game checks the pack first, and refuses one that
 fails, with its problems in the chat. While it runs, the game looks at the pack twice a second: save a file
 and the pack is checked and rebuilt in place ("Shader pack ... reloaded"); if the new version fails, the chat says
 where. A stage that fails keeps the last good version drawing; a manifest that is refused (another API line, a

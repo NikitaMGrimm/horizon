@@ -255,7 +255,7 @@ with `tint`, `shade` and `ao` apart; `[material] fog = false` becomes `[frame] f
 `fog_end` become `fog_environment` and `fog_render`; the post stage's `history` becomes a
 `[[resource]]` with `keep = "view"` that a pass writes as its `output` and reads as `<name>_previous` next frame; and
 `EntityInput.emission` is `full_light`. `shaded_tint` and `MaterialInput.emission` cost nothing; reading `tint`,
-`shade`, `ao` or `face` makes the world load again when the pack starts and terrain take half again its memory.
+`shade`, `ao` or `face` makes the world load again when the pack starts and terrain take a third again its memory.
 
 ## Testing a pack frame by frame
 
@@ -290,9 +290,9 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 ## Changelog
 
 - 2026-11-17: API 0.2 (experimental): `MaterialInput.emission` comes with the vertex, as `shaded_tint` does. Only
-  `tint`, `shade`, `ao` and `face` make the world load again when a pack starts, take half again the terrain's memory
-  and need a vertex stage that reads storage buffers; a pack that reads `emission` and none of them pays none of it.
-  Its value doesn't change. No WGSL name changes.
+  `tint`, `shade`, `ao` and `face` make the world load again when a pack starts and need a vertex stage that reads
+  storage buffers; a pack that reads `emission` and none of them pays none of it. Terrain takes a third again its
+  memory for them, not half. No value or WGSL name changes.
 - 2026-11-16: API 0.2 (**breaking**, experimental): the terrain's own inputs. `MaterialInput` and `VertexInput` have
   the quad's `tint` without its shade and ambient occlusion, the face's `shade`, the corner's `ao` and its `face`;
   `MaterialInput.emission` is the block state's light level over 15 (one candle 3/15, four 12/15); `VertexInput.fluid`

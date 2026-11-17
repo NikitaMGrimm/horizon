@@ -389,20 +389,19 @@ impl TerrainSource {
 ///
 /// - word 0: the tint (0xBBGGRR, as the vertex colour holds it), bits 24..27 the face's shade
 ///   (`SHADES`' index + 1; 0: no look), bits 27..30 the face (`Direction` order);
-/// - word 1: each corner's ambient occlusion before the shade (`floor(ao * 255)`), corner 0 low;
-/// - word 2: the light level the surface gives off, 0..15: its block state's (a model face's
-///   own `light_emission` doesn't count), or a fluid's own (lava 15, water 0, also around a
-///   waterlogged light).
+/// - word 1: each corner's ambient occlusion before the shade (`floor(ao * 255)`), corner 0 low.
+///
+/// The light level the surface gives off is the vertex's (`giving_off`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct QuadLook(pub [u32; 3]);
+pub struct QuadLook(pub [u32; 2]);
 /// The directional shades a face can have, by `QuadLook`'s code 1..5.
 /// (A fluid's side takes the top's shade times its own: 0.72 and 0.54 under Nether shading.)
 pub const SHADES: [f32; 7] = [0.5, 0.6, 0.8, 0.9, 1.0, 0.72, 0.54];
 impl QuadLook {
     /// `tint` as 0xRRGGBB, `shade` one of `SHADES` (another reads as 1), `ao` each corner's
     /// brightness 0..1.
-    pub(crate) fn new(tint: u32, shade: f32, face: u32, ao: [f32; 4], emission: u8) -> Self {
+    pub(crate) fn new(tint: u32, shade: f32, face: u32, ao: [f32; 4]) -> Self {
         let code = SHADES
             .iter()
             .position(|&s| (s - shade).abs() < 1e-4)
@@ -413,11 +412,7 @@ impl QuadLook {
             .enumerate()
             .map(|(i, &b)| (lighting::gray(b).clamp(0, 255) as u32) << (8 * i))
             .sum();
-        Self([
-            rgb | code << 24 | (face & 7) << 27,
-            ao,
-            u32::from(emission.min(15)),
-        ])
+        Self([rgb | code << 24 | (face & 7) << 27, ao])
     }
     /// This quad's look on a piece of it whose corners are at `(s, t)` of the quad (`bilinear`).
     fn piece(self, at: [(f32, f32); 4]) -> Self {
@@ -430,12 +425,12 @@ impl QuadLook {
             .iter()
             .enumerate()
             .map(|(i, &a)| a.min(255) << (8 * i));
-        Self([self.0[0], ao.sum(), self.0[2]])
+        Self([self.0[0], ao.sum()])
     }
     /// The same look with another tint (0xRRGGBB): an overlay's.
     fn tinted(self, tint: u32) -> Self {
         let rgb = (tint >> 16 & 255) | (tint & 0xFF00) | (tint & 255) << 16;
-        Self([self.0[0] & !0xFF_FFFF | rgb, self.0[1], self.0[2]])
+        Self([self.0[0] & !0xFF_FFFF | rgb, self.0[1]])
     }
 }
 
@@ -2508,7 +2503,6 @@ impl Mesher<'_> {
                 directional,
                 q.facing as u32,
                 ao_factor,
-                state.emission,
             ),
             false => QuadLook::default(),
         };
