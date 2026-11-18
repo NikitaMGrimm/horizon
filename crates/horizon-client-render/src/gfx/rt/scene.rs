@@ -37,6 +37,8 @@
 //! block entities the renderer keeps on the GPU have a BLAS a section (step 3, `retained.rs`),
 //! their instances after the stream's.
 
+use std::collections::VecDeque;
+
 use glam::DVec3;
 
 use horizon_shader_api::stages::{RAY_ENTITY, RAY_SOLID, RAY_TRANSLUCENT};
@@ -436,7 +438,8 @@ pub struct RayScene {
     /// Parts meshed again or emptied since their BLAS was built.
     dirty: Vec<Part>,
     /// Cached slots that need looks without rebuilding their geometry.
-    look_retries: FxHashSet<Part>,
+    look_retries: VecDeque<Part>,
+    look_retry_limit: usize,
     tlas: wgpu::Tlas,
     /// The TLAS's instances of the solid layer, which come first in it.
     solid_instances: u32,
@@ -532,7 +535,8 @@ impl RayScene {
         Some(Self {
             blas: FxHashMap::default(),
             dirty: Vec::new(),
-            look_retries: FxHashSet::default(),
+            look_retries: VecDeque::new(),
+            look_retry_limit: BUILDS_PER_FRAME,
             tlas: out_of_memory_free(device, || create_tlas(device, 1024))?,
             solid_instances: 0,
             anchor: None,
@@ -599,6 +603,7 @@ impl RayScene {
         if self.unpacker.set_looks(device, on) {
             self.generation += 1;
             self.look_retries.clear();
+            self.look_retry_limit = BUILDS_PER_FRAME;
             if on {
                 self.look_retries.extend(self.blas.keys().copied());
             }
@@ -614,6 +619,7 @@ impl RayScene {
         self.blas.clear();
         self.dirty.clear();
         self.look_retries.clear();
+        self.look_retry_limit = BUILDS_PER_FRAME;
         self.to_compact.clear();
         self.compacting.clear();
         self.anchor = None;
@@ -820,7 +826,9 @@ impl RayScene {
         }
         self.dirty.drain(..taken);
         self.dirty.extend(deferred);
-        self.upload_looks(device, encoder, sections, &builds);
+        self.upload_looks(encoder, sections, &builds, |records| {
+            stage_looks(device, records)
+        });
         if builds.is_empty() && !changed && self.anchor == Some(column) && self.entities.is_none() {
             return;
         }
@@ -903,10 +911,10 @@ impl RayScene {
 
     fn upload_looks(
         &mut self,
-        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         sections: &Resident<SectionGpu>,
         builds: &[Build<'_>],
+        stage: impl FnOnce(&[QuadLook]) -> Option<wgpu::Buffer>,
     ) {
         let Some(looks) = self.unpacker.looks.as_ref() else {
             return;
@@ -921,14 +929,12 @@ impl RayScene {
                 .copied()
                 .chain(builds.iter().map(|b| b.part))
                 .collect();
+            self.look_retries.retain(|part| !pending.contains(part));
+            let count = self.look_retries.len().min(self.look_retry_limit);
             writes.extend(
                 self.look_retries
-                    .extract_if(|_| true)
-                    .take(BUILDS_PER_FRAME)
+                    .drain(..count)
                     .filter_map(|part @ (key, layer)| {
-                        if pending.contains(&part) {
-                            return None;
-                        }
                         let section = sections.find(key)?;
                         let (first, vertices) = self.slots.slot(part)?;
                         let quads = layer.quads(section);
@@ -941,15 +947,19 @@ impl RayScene {
                     }),
             );
         }
-        if !write_looks(encoder, looks, &writes, |records| {
-            stage_looks(device, records)
-        }) {
-            self.look_retries.extend(
-                writes
-                    .iter()
-                    .filter(|w| w.records().is_some())
-                    .map(|w| w.part),
-            );
+        if !write_looks(encoder, looks, &writes, stage) {
+            let failed = writes
+                .iter()
+                .filter(|w| w.records().is_some())
+                .map(|w| w.part);
+            // Retry smaller batches and put failed parts at the back so a large
+            // part cannot prevent smaller ones from getting their looks back.
+            let before = self.look_retries.len();
+            self.look_retries.extend(failed);
+            let count = self.look_retries.len() - before;
+            self.look_retry_limit = self.look_retry_limit.min((count / 2).max(1));
+        } else if self.look_retries.is_empty() {
+            self.look_retry_limit = BUILDS_PER_FRAME;
         }
     }
 }

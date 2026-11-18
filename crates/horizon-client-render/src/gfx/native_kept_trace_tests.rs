@@ -27,7 +27,6 @@ fn ray_device_with_storage_limit(
         eprintln!("no ray queries on {backend:?}: nothing traced");
         return None;
     }
-    eprintln!("tracing on {backend:?}");
     let mut limits = adapter.limits();
     limits.max_storage_buffers_per_shader_stage = limits
         .max_storage_buffers_per_shader_stage
@@ -38,7 +37,9 @@ fn ray_device_with_storage_limit(
         experimental_features: horizon_hdr::experimental_features(),
         ..Default::default()
     };
-    let (device, queue) = pollster::block_on(adapter.request_device(&desc)).ok()?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&desc))
+        .unwrap_or_else(|error| panic!("ray-query test device creation on {backend:?}: {error}"));
+    eprintln!("tracing on {backend:?}");
     Some((instance, device, queue))
 }
 

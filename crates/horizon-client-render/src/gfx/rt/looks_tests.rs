@@ -555,3 +555,50 @@ fn the_look_store_grows_with_the_store_and_a_part_without_looks_reads_none() {
     assert_eq!(looks(&unpacker).size(), 8 * LOOK);
     assert!(unpacker.set_looks(&device, false) && unpacker.looks.is_none());
 }
+
+#[test]
+fn a_refused_staging_batch_retries_smaller_parts_in_turn() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let Some((device, queue)) = super::entity_tests::ray_device() else {
+        eprintln!("no GPU with ray queries: skipped");
+        return;
+    };
+    let mut scene = RayScene::new(&device).unwrap();
+    scene.set_looks(&device, true);
+    let mut sections = Resident::default();
+    let parts = [(0, 2), (1, 1), (2, 1)].map(|(x, quads)| {
+        let key = (x, 0, 0);
+        let part = (key, Layer::Solid);
+        let mut section = crate::gfx::tests::section(quads, 0, None);
+        section.ray_looks[0] = vec![QuadLook([1, 2]); quads as usize].into();
+        sections.insert(key, section);
+        assert!(
+            scene
+                .slots
+                .alloc(part, u64::from(quads) * 4, |_| false)
+                .is_some()
+        );
+        part
+    });
+    scene.look_retries.extend(parts);
+    let mut sizes = Vec::new();
+    for _ in 0..4 {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        scene.upload_looks(&mut encoder, &sections, &[], |records| {
+            sizes.push(records.len());
+            (records.len() == 1)
+                .then(|| stage_looks(&device, records))
+                .flatten()
+        });
+        queue.submit([encoder.finish()]);
+    }
+    assert_eq!(sizes, [4, 2, 1, 1]);
+    assert_eq!(scene.look_retries, [parts[0]]);
+
+    let mut encoder = device.create_command_encoder(&Default::default());
+    scene.upload_looks(&mut encoder, &sections, &[], |records| {
+        stage_looks(&device, records)
+    });
+    queue.submit([encoder.finish()]);
+    assert!(scene.look_retries.is_empty());
+}

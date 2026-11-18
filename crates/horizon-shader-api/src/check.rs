@@ -185,7 +185,11 @@ fn reads_fields(
             t.name.as_deref() == Some(*name) && field.is_some_and(|f| fields.contains(&f))
         })
     };
-    let reads = |f: &naga::Function, info: &naga::valid::FunctionInfo| {
+    struct Reads {
+        field: bool,
+        parameters: Vec<bool>,
+    }
+    let reads = |f: &naga::Function, info: &naga::valid::FunctionInfo, callees: &[Reads]| {
         let field = |base: naga::Handle<naga::Expression>, index| {
             let ty = match &info[base].ty {
                 naga::proc::TypeResolution::Handle(ty) => Some(*ty),
@@ -196,7 +200,8 @@ fn reads_fields(
             };
             ty.is_some_and(|ty| looked(ty, index))
         };
-        let projected_field = |mut pointer| loop {
+        let mut parameters = vec![false; f.arguments.len()];
+        let mut read_pointer = |mut pointer| loop {
             match f.expressions[pointer] {
                 naga::Expression::AccessIndex { base, index } => {
                     if field(base, index) {
@@ -205,10 +210,15 @@ fn reads_fields(
                     pointer = base;
                 }
                 naga::Expression::Access { base, .. } => pointer = base,
+                naga::Expression::FunctionArgument(index) => {
+                    parameters[index as usize] = true;
+                    break false;
+                }
                 _ => break false,
             }
         };
-        f.expressions
+        let reads_field = f
+            .expressions
             .iter()
             .any(|(_, expression)| match *expression {
                 naga::Expression::AccessIndex { base, index }
@@ -221,44 +231,70 @@ fn reads_fields(
                     field(base, index)
                 }
                 // A pointer projection alone could be the destination of a store.
-                naga::Expression::Load { pointer } if reachable_only => projected_field(pointer),
+                naga::Expression::Load { pointer } if reachable_only => read_pointer(pointer),
                 _ => false,
-            })
+            });
+        let reads_field = reads_field
+            || reachable_only
+                && find_statement(&f.body, &mut |statement| {
+                    let naga::Statement::Call {
+                        function,
+                        arguments,
+                        ..
+                    } = statement
+                    else {
+                        return false;
+                    };
+                    let callee = &callees[function.index()];
+                    callee.field
+                        || callee
+                            .parameters
+                            .iter()
+                            .zip(arguments)
+                            .any(|(&read, &arg)| read && read_pointer(arg))
+                })
+                .is_some();
+        Reads {
+            field: reads_field,
+            parameters,
+        }
     };
-    if m.entry_points
-        .iter()
-        .enumerate()
-        .any(|(i, e)| reads(&e.function, info.get_entry_point(i)))
+    if !reachable_only
+        && m.functions
+            .iter()
+            .any(|(h, f)| reads(f, &info[h], &[]).field)
     {
         return true;
     }
-    if !reachable_only {
-        return m.functions.iter().any(|(h, f)| reads(f, &info[h]));
-    }
 
-    let add_calls = |body: &naga::Block, calls: &mut Vec<_>| {
-        let _ = find_statement(body, &mut |statement| {
-            if let naga::Statement::Call { function, .. } = *statement {
-                calls.push(function);
-            }
-            false
-        });
-    };
-    let mut calls = Vec::new();
-    for entry in &m.entry_points {
-        add_calls(&entry.function.body, &mut calls);
-    }
-    let mut seen = HashSet::new();
-    while let Some(handle) = calls.pop() {
-        if seen.insert(handle) {
-            let function = &m.functions[handle];
-            if reads(function, &info[handle]) {
-                return true;
-            }
-            add_calls(&function.body, &mut calls);
+    // Naga stores callees before callers. Summarize pointer parameters as well as direct
+    // reads so a caller can distinguish a member passed for reading from one only written.
+    let mut callees = Vec::new();
+    if reachable_only {
+        for (handle, function) in m.functions.iter() {
+            callees.push(reads(function, &info[handle], &callees));
         }
     }
-    false
+    m.entry_points
+        .iter()
+        .enumerate()
+        .any(|(i, e)| reads(&e.function, info.get_entry_point(i), &callees).field)
+}
+
+#[cfg(test)]
+#[test]
+fn traces_looks_through_a_pointer_parameter_that_reads_the_field() {
+    let shader = |operation| {
+        format!(
+            "struct RayHit {{ ao: f32 }}
+             fn use_ao(p: ptr<function, f32>) {{ {operation} }}
+             fn forward(p: ptr<function, f32>) {{ use_ao(p); }}
+             @compute @workgroup_size(1)
+             fn main() {{ var h: RayHit; if true {{ forward(&h.ao); }} }}"
+        )
+    };
+    assert!(reads_hit_looks(&shader("let ao = *p;")));
+    assert!(!reads_hit_looks(&shader("*p = 1.0;")));
 }
 
 /// Whether the stage composed as `text` (its build where `trace` misses) reads one of
