@@ -291,7 +291,7 @@ fn shade_is_the_shade_the_quad_was_given() {
 /// `blocks` (each its name and place in the section) alone in the world's lowest section,
 /// meshed and sorted as a shader pack's terrain is, and its solid quads' compact records (as
 /// the arena holds them while every pass reads that layout): what the ray scene unpacks and
-/// traces (`gfx/ray_terrain_tests.rs`).
+/// traces (`gfx/rt/terrain_tests.rs`).
 pub(crate) fn meshed_alone(blocks: &[(&str, [i32; 3])]) -> (SectionMesh, Vec<[u32; 6]>) {
     let states: Vec<_> = blocks
         .iter()

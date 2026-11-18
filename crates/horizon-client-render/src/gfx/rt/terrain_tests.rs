@@ -207,7 +207,7 @@ fn trace(
     probe += "}\n";
     let (_, sprites) = white(device, queue);
     let layers = empty(device, 8);
-    let indices = super::super::quad_indices(device, solid.max(translucent));
+    let indices = crate::gfx::rt::query::quad_indices(device, solid.max(translucent));
     let unpack = unpack_pipeline(device);
     let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     let layouts = [

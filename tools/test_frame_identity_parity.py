@@ -715,9 +715,10 @@ def save_log(game, path):
     Path(path).write_text(str(game.ctl('logs', '--lines', 10 ** 9, check=False)), encoding='utf-8')
 
 
-def session_checks(shots, sessions):
+def session_checks(shots, sessions, label='change'):
     """That each session drew what it is for, so a pack that fails to load, or HDR that doesn't turn on, in both
-    builds can't pass as identical: HDR shots have their -hdr.png and only they do, and the pack changes the picture."""
+    builds can't pass as identical: HDR shots have their -hdr.png and only they do, and the pack changes the picture.
+    `label` is the build that drew them: its log names the version of the pack that build draws (`pack_dir`)."""
     problems = []
     for name in sessions:
         graphics, extra, scenes, toggle = SESSIONS[name]
@@ -751,7 +752,7 @@ def session_checks(shots, sessions):
         # 🤖 Agent: and whether the pack loaded (scenes no session without it shoots have nothing to compare with),
         # and the LabPBR maps its displacement needs.
         pack = extra.get('HORIZON_SHADER_PACK')
-        manifest = pack_dir(pack) / 'horizon-shaders.toml' if pack else None
+        manifest = pack_dir(pack, label) / 'horizon-shaders.toml' if pack else None
         if manifest and manifest.exists():
             meta = tomllib.loads(manifest.read_text(encoding='utf-8'))
             if f'shader pack {meta["id"]} {meta["version"]}: ' not in text:
@@ -1008,7 +1009,7 @@ def build_checks(shots, sessions, base_sessions=None):
     is checked on `base_sessions` (the ones it drew with the pack), by default the same as the change."""
     base_sessions = sessions if base_sessions is None else base_sessions
     return [f'{label}: {p}' for label, drawn in (('base', base_sessions), ('change', sessions))
-            for p in session_checks(shots / label, drawn) + hdr_gates(shots / label, drawn)
+            for p in session_checks(shots / label, drawn, label) + hdr_gates(shots / label, drawn)
             + entity_gates(shots / label, drawn)]
 
 

@@ -53,7 +53,8 @@ shared = ["common.wgsl"]   # optional: WGSL put before every stage's file, in or
 [sky]                      # each stage is optional, but a pack has at least one
 file = "sky.wgsl"
 clouds = true              # optional: false when the pack draws its own clouds
-sun = true                 # optional: false when the pack draws its own sun (the moon stays)
+sun = true                 # optional: false when the pack draws its own sun
+moon = true                # optional: false when the pack draws its own moon
 stars = true               # optional: false when the pack draws its own stars
 
 [material]
@@ -162,7 +163,9 @@ removed filename cannot be mapped back to an ID. If several installed packs shar
 filename in lexical order is used and listed. The `HORIZON_SHADER_PACK` development override still
 names an exact filesystem path; `shaders/` packs still use filenames.
 
-## Shader API 0.2 (experimental)
+<a id="shader-api-02-experimental"></a>
+
+## Shader API 0.2
 
 0.2 is the line this build serves, the line for linear light and HDR
 ([hdr-linear-light.md](../design/hdr-linear-light.md)): `horizon-shader check` and `pack` take it, the game draws it
@@ -255,7 +258,7 @@ with `tint`, `shade` and `ao` apart; `[material] fog = false` becomes `[frame] f
 `fog_end` become `fog_environment` and `fog_render`; the post stage's `history` becomes a
 `[[resource]]` with `keep = "view"` that a pass writes as its `output` and reads as `<name>_previous` next frame; and
 `EntityInput.emission` is `full_light`. A terrain hit's `emission` is the block's light level over 15 from
-2026-11-17, as `input.emission`, no longer its brightness class. `shaded_tint` and `MaterialInput.emission` cost
+2026-11-18, as `input.emission`, no longer its brightness class. `shaded_tint` and `MaterialInput.emission` cost
 nothing; reading `tint`, `shade`, `ao` or `face` makes the world load again when the pack starts and terrain take a third again its memory.
 
 ## Testing a pack frame by frame
@@ -277,9 +280,10 @@ it: [the guide](../shaders.md#testing-a-pack-frame-by-frame).
 
 ## Stability
 
-Experimental (API 0.2). The stages ship in the game behind pack selection; see [stability.md](stability.md).
-While the API is experimental, a line is served until the next one is on by default: 0.1 ended when 0.2 was
-([hdr-linear-light.md](../design/hdr-linear-light.md), step 5).
+API 0.2 is final, at the preview level of [stability.md](stability.md): #17834 was its last breaking change. What
+the reference says stays: additions and fixes toward it go on in 0.2, and a change that breaks a 0.2 pack only comes
+with a new line, 0.3, after a deprecation while the game still serves 0.2. API 0.1 has ended: it is refused since #15886,
+when 0.2 went on by default ([hdr-linear-light.md](../design/hdr-linear-light.md), step 5).
 
 ## Not there yet
 
@@ -290,12 +294,19 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
-- 2026-11-17: API 0.2 (experimental): `MaterialInput.emission` comes with the vertex, as `shaded_tint` does. Only
+- 2026-11-18: API 0.2 (preview), a fix toward the reference: a terrain hit's `RayHit.emission` is its block's light
+  level over 15, as `MaterialInput.emission` (one candle 3/15, a lantern 1), no longer its brightness class (7/15,
+  14/15 or 1); an entity hit's stays 0. `MaterialInput.emission` comes with the vertex, as `shaded_tint` does: only
   `tint`, `shade`, `ao` and `face` make the world load again when a pack starts and need a vertex stage that reads
-  storage buffers; a pack that reads `emission` and none of them pays none of it. Terrain takes a third again its
-  memory for them, not half. A terrain hit's `RayHit.emission` is its block's light level over 15, as
-  `MaterialInput.emission` (one candle 3/15, a lantern 1), no longer its brightness class (7/15, 14/15 or 1); an
-  entity hit's stays 0. No WGSL name changes.
+  storage buffers, so a pack that reads `emission` and none of them pays none of it, and terrain takes a third again
+  its memory for them, not half. No WGSL name changes.
+- 2026-11-18: API 0.2 is final (preview): #17834 was the last change that breaks a 0.2 pack. A breaking change now
+  starts 0.3, after a deprecation. No WGSL or manifest change.
+- 2026-11-17: API 0.2 (experimental, #18023): an R-relative kept texture takes its two versions at their size of the
+  post targets' budget, `2 × scale² × bytes a texel / 8` render-size `rgba16float` textures, instead of 2 at any
+  format and scale: `rgba16float` at scale 0.5 takes 0.5, `r32uint` at scale 1 takes 1. Packs that keep small
+  textures fit where they were refused. A `rgba32float` or `rgba32uint` one at scale 1 takes 4 where it took 2, so a
+  pack whose post targets took more than 4 with one of those, or two of them, is now refused; no WGSL name changes.
 - 2026-11-16: API 0.2 (**breaking**, experimental): the terrain's own inputs. `MaterialInput` and `VertexInput` have
   the quad's `tint` without its shade and ambient occlusion, the face's `shade`, the corner's `ao` and its `face`;
   `MaterialInput.emission` is the block state's light level over 15 (one candle 3/15, four 12/15); `VertexInput.fluid`
@@ -310,6 +321,16 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   `frame.fog_start` and `fog_end`; the fog's fields are declared for every pack. [Moving a
   pack](#shader-api-02-experimental) says what to read instead. A pack that reads none of these is built and draws as
   before.
+- 2026-11-16: API 0.2 (additions, experimental): `[sky] moon = false` leaves out Minecraft's moon, as `sun = false`
+  its sun, for a sky that draws its own; and `frame.moon_phase`, the phase of the moon Horizon draws (0 full to 7
+  waxing gibbous), declared only for a pack whose files name `moon_phase`, at the end of `Frame`. A pack that sets
+  neither is built from the same WGSL and drawn as before.
+- 2026-11-16: API 0.2 (additions, experimental): `[entity] reads` and `[sky] reads` (#16011 item 4): the entity and
+  sky stages read kept resources by `[material] reads`' rules: `x` for this frame's version of a texture a
+  `[[before_world]]` pass writes, `x_previous` for last frame's, and buffers, in their fragments only. The check
+  refuses `x` of a texture only `[[post]]` passes write, and `writes` on either stage. An entity or sky stage without
+  `reads` composes and draws as before, a test holds. The reference now says that a compute pass may call
+  `storageBarrier()`.
 - 2026-11-15: API 0.2 (additions, experimental): `[material] reads` (#16011 item 4): the terrain reads kept
   resources, `x` for this frame's version of a texture a `[[before_world]]` pass writes (in the same frame),
   `x_previous` for last frame's, and buffers; their declarations join the material's module at the passes'

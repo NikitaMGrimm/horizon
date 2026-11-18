@@ -253,7 +253,7 @@ pub(super) struct Creatures {
     /// When each player last put a parrot on a shoulder (`timeEntitySatOnShoulder`).
     pub shoulder_time: std::collections::HashMap<[i32; 4], i64>,
     /// The cat spawner's countdown (`CatSpawner.nextTick`).
-    pub cat_tick: i32,
+    pub cat: super::cat_spawner::CatSpawner,
     /// Each level's custom spawners, built when its first tick asks (game/mobs/custom_spawners.rs).
     pub custom_spawners: std::collections::HashMap<super::Dim, mod_api::CustomSpawners>,
     /// Native sounds waiting for the server host to be available.
@@ -2109,7 +2109,18 @@ impl Game<'_> {
             a.spawn_velocity = Some(p.velocity);
             a.spawn_rot = Some((p.pitch, p.yaw));
         }
-        self.creatures.projectiles.push(p);
+        // A projectile that already has a join number (a bounced arrow put back
+        // after its hit) keeps its place in the tick order; a new one goes last.
+        if p.join.is_joined() {
+            let join = p.join;
+            let at = self
+                .creatures
+                .projectiles
+                .partition_point(|q| q.join < join);
+            self.creatures.projectiles.insert(at, p);
+        } else {
+            self.creatures.projectiles.push(p);
+        }
         self.native_projectile_launch(player, &name, id, kind);
         id
     }

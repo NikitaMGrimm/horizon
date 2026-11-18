@@ -222,6 +222,7 @@ impl Mesher {
             });
         let biome = context.biomes.get(span.biome);
         let looks = self.looks;
+        let fluid = styles.fluid != 0;
         let shade = match direction {
             Direction::Up => 1.0,
             Direction::Down => 0.5,
@@ -248,7 +249,7 @@ impl Mesher {
                     // `shade` is the dimension's.
                     let level = || context.tables.facts(span.state).map_or(0, |f| f.emission);
                     Paint {
-                        look: L::make(|| far_look(looks, rgb, direction)),
+                        look: L::make(|| far_look(looks, rgb, direction, fluid)),
                         layer: face.layer,
                         light: span.light,
                         // The HDR tier and light level, as the section mesher writes them, so
@@ -271,12 +272,17 @@ impl Mesher {
 }
 
 /// A far face's `QuadLook` words (`Mesher::looks`: 0 none, 1 the Overworld's shades, 2 the
-/// Nether's) for its tint 0xRRGGBB: no ambient occlusion.
-fn far_look(looks: u8, rgb: u32, direction: Direction) -> [u32; 2] {
+/// Nether's) for its tint 0xRRGGBB: no ambient occlusion. A `fluid`'s side has the top's shade
+/// times the side's, as the section mesher gives it.
+pub(crate) fn far_look(looks: u8, rgb: u32, direction: Direction, fluid: bool) -> [u32; 2] {
     if looks == 0 {
         return [0; 2];
     }
-    let shade = crate::mesher::cardinal_shade(looks == 2, direction);
+    let nether = looks == 2;
+    let mut shade = crate::mesher::cardinal_shade(nether, direction);
+    if fluid && !matches!(direction, Direction::Up | Direction::Down) {
+        shade *= crate::mesher::cardinal_shade(nether, Direction::Up);
+    }
     crate::mesher::QuadLook::new(rgb, shade, direction as u32, [1.0; 4]).0
 }
 
@@ -1546,10 +1552,10 @@ mod tests {
         };
         for rgb in [0xffffff, 0x91bd59, 0x3f76e4, 0x010203] {
             for d in Direction::ALL {
-                let [a, ao] = far_look(1, rgb, d);
+                let [a, ao] = far_look(1, rgb, d, false);
                 assert_eq!((ao, a >> 27 & 7), (u32::MAX, d as u32));
                 let s = crate::mesher::SHADES[(a >> 24 & 7) as usize - 1];
-                let nether = far_look(2, rgb, d)[0];
+                let nether = far_look(2, rgb, d, false)[0];
                 let n = crate::mesher::SHADES[(nether >> 24 & 7) as usize - 1];
                 assert_eq!(n, crate::mesher::cardinal_shade(true, d));
                 for shift in [0, 8, 16] {
@@ -1561,7 +1567,7 @@ mod tests {
                     );
                 }
             }
-            assert_eq!(far_look(0, rgb, Direction::Up), [0; 2]);
+            assert_eq!(far_look(0, rgb, Direction::Up, false), [0; 2]);
         }
         // Each paint's look names its layer and face.
         let looked = |span: &Span, direction: Direction, _: [i32; 2]| {

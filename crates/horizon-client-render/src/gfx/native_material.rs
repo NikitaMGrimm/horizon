@@ -8,10 +8,11 @@
 //! colour. They read the terrain's group 0, the flat draws' group 1 where those run, and the
 //! pack's frame at group 3.
 
-use horizon_shader_api::check::CheckedStage;
-use horizon_shader_api::stages::{GROUP, KeptBinding};
+use horizon_shader_api::{check::CheckedStage, stages::GROUP};
 
-use super::displace::{Displacement, MAX_SECTIONS, Near};
+use super::displace::{Displacement, MAX_SECTIONS};
+use super::external::{DisplacementPrepare, Near, OpaqueCopy, TerrainLayers};
+use super::native_post::kept::StageReads;
 use super::native_post::trace::{TerrainTrace, Traced};
 use super::native_post::{NativeFrame, NativePost, present_constants};
 use super::wgsl_prefix::{TERRAIN, prefixed, section};
@@ -354,42 +355,7 @@ pub struct NativeMaterial {
     /// The stage calls `set_surface`: its solid pipelines also write the surface target.
     pub writes_surface: bool,
     /// `[material] reads`: none without.
-    pub(super) kept: Option<TerrainKept>,
-}
-
-/// The kept resources the terrain reads (`[material] reads`), in its group 3 from binding 64
-/// (`kept_bindings`), for the fragment stage only: the vertex stage and `displacement` also draw
-/// the shadow, which reads none.
-pub(super) struct TerrainKept {
-    pub(super) bindings: Vec<KeptBinding>,
-    /// Their layout entries (`native_kept::layout_entries`).
-    pub(super) entries: Vec<wgpu::BindGroupLayoutEntry>,
-    /// The frame's entries and theirs, the pipelines' group 3 that doesn't trace.
-    layout: wgpu::BindGroupLayout,
-    /// The group a parity (`KeptStore::parity`), made for the frame's group `.0` and the store's
-    /// resources `.1` (`Reads::made`).
-    groups: Option<(wgpu::BindGroup, u32, [wgpu::BindGroup; 2])>,
-}
-
-impl TerrainKept {
-    /// The terrain's kept `bindings` and their layout `entries`, joined with the frame's.
-    pub(super) fn new(
-        device: &wgpu::Device,
-        frame: &NativeFrame,
-        bindings: Vec<KeptBinding>,
-        entries: Vec<wgpu::BindGroupLayoutEntry>,
-    ) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Native shader pack material, kept"),
-            entries: &[frame.entries(), &entries].concat(),
-        });
-        Self {
-            bindings,
-            entries,
-            layout,
-            groups: None,
-        }
-    }
+    pub(super) kept: Option<StageReads>,
 }
 
 /// terrain.wgsl's group 0 (`TerrainShape::globals`): its globals, the sprite arrays and their
@@ -539,7 +505,7 @@ fn module(
 
 impl NativeMaterial {
     /// The pipelines of the pack's material `stage` with the option values `constants`.
-    pub fn new(
+    pub(in crate::gfx) fn new(
         device: &wgpu::Device,
         shape: &TerrainShape<'_>,
         frame: &NativeFrame,
@@ -549,7 +515,7 @@ impl NativeMaterial {
         coverage: horizon_shader_api::Coverage,
         vertex: bool,
         displaced: Option<&DisplacedShape<'_>>,
-        kept: Option<TerrainKept>,
+        kept: Option<StageReads>,
     ) -> Result<Self, String> {
         let writes_surface = horizon_shader_api::stages::calls_set_surface(&stage.source);
         let linear = frame.linear;
@@ -558,14 +524,10 @@ impl NativeMaterial {
             let terrain = (shape, displaced, constants);
             Self::pipelines(device, terrain, (stage, source), group, flags, linear)
         };
-        if let Some(k) = &kept {
-            let group = [frame.entries(), &k.entries].concat();
-            let fragment = wgpu::ShaderStages::FRAGMENT;
-            let limits = device.limits();
-            let over = super::native_post::trace::over_limits;
-            if let Some(why) = over(&group, &terrain_entries(), &limits, fragment) {
-                return Err(format!("{}: {why}", stage.file));
-            }
+        let limits = device.limits();
+        if let Some(why) = (kept.as_ref()).and_then(|k| k.over(frame, &terrain_entries(), &limits))
+        {
+            return Err(format!("{}: {why}", stage.file));
         }
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let built = build(
@@ -598,25 +560,12 @@ impl NativeMaterial {
         scene: Option<&Traced<'_>>,
         post: &NativePost,
     ) {
-        let Self {
-            scene: trace, kept, ..
-        } = self;
-        let kept = kept
-            .as_mut()
-            .map(|k| (&k.bindings, &k.layout, &mut k.groups));
-        let bindings = kept.as_ref().map(|k| k.0);
-        let reads = bindings.and_then(|b| post.reads(b));
-        if let Some(trace) = trace {
+        if let Some(trace) = &mut self.scene {
+            let reads = self.kept.as_ref().and_then(|k| k.reads(post));
             trace.bind(device, frame, scene, reads);
         }
-        if let (Some((_, layout, groups)), Some(reads)) = (kept, reads) {
-            let made = |(group, made, _): &(wgpu::BindGroup, u32, [wgpu::BindGroup; 2])| {
-                *group == frame.group && *made == reads.made()
-            };
-            if !groups.as_ref().is_some_and(made) {
-                let group = |parity| frame.joined(device, layout, &reads.entries(parity));
-                *groups = Some((frame.group.clone(), reads.made(), [0, 1].map(group)));
-            }
+        if let Some(k) = &mut self.kept {
+            k.bind(device, frame, post);
         }
     }
 
@@ -634,8 +583,9 @@ impl NativeMaterial {
         parity: usize,
     ) -> (&'a MaterialPipelines, &'a wgpu::BindGroup) {
         let traced = self.scene.as_ref().and_then(|t| t.drawn(parity));
-        let kept = self.kept.as_ref().and_then(|k| k.groups.as_ref());
-        let group = kept.map_or(group, |(_, _, groups)| &groups[parity]);
+        let group = (self.kept.as_ref())
+            .and_then(|k| k.group(parity))
+            .unwrap_or(group);
         traced.unwrap_or((&self.pipelines, group))
     }
 
@@ -865,44 +815,6 @@ pub(in crate::gfx) fn test_shader(source: &str) -> String {
     shader_source(&source, &[], &[], (false, false, false), false)
 }
 
-/// The pack's terrain layers, which the renderer's terrain passes draw in place of its own
-/// (`NativePack::terrain_layers`).
-#[derive(Clone, Copy)]
-pub struct TerrainLayers<'a> {
-    /// The solid layer (with the cutout test) and the translucent one, for the instanced draws.
-    pub solid: &'a wgpu::RenderPipeline,
-    pub translucent: &'a wgpu::RenderPipeline,
-    /// The solid and translucent layers for the flat draws, where those run.
-    pub flat: Option<&'a (wgpu::RenderPipeline, wgpu::RenderPipeline)>,
-    /// `[displacement]`'s grid of the solid terrain near the camera (gfx/displace.rs).
-    pub displaced: Option<&'a wgpu::RenderPipeline>,
-    /// The solid layers' second target, which they write beside the world's colour.
-    pub surface: Option<&'a wgpu::TextureView>,
-    /// The layers read the world before translucent terrain: the renderer stops there for
-    /// `NativePack::copy_opaque`.
-    pub reads_opaque: bool,
-    /// What the layers read beside the terrain's groups (`bind`).
-    frame: &'a wgpu::BindGroup,
-}
-
-impl TerrainLayers<'_> {
-    /// Binds what the layers read beside the terrain's groups, in each pass that draws them.
-    pub fn bind(&self, pass: &mut wgpu::RenderPass<'_>) {
-        pass.set_bind_group(GROUP, self.frame, &[]);
-    }
-}
-
-/// What the renderer hands the pack where its world pass stops before translucent terrain
-/// (`NativePack::copy_opaque`).
-pub struct OpaqueCopy<'a> {
-    pub device: &'a wgpu::Device,
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    /// The world's depth, and its colour where it can be copied (the scaled target, not the
-    /// window's own).
-    pub depth: &'a wgpu::Texture,
-    pub color: Option<&'a wgpu::TextureView>,
-}
-
 impl super::native_pack::NativePack {
     /// The material stage's terrain layers; none without one.
     pub fn terrain_layers(&self) -> Option<TerrainLayers<'_>> {
@@ -913,7 +825,7 @@ impl super::native_pack::NativePack {
             solid: &pipelines.solid,
             translucent: &pipelines.translucent,
             flat: pipelines.flat.as_ref(),
-            displaced: pipelines.displaced.as_ref(),
+            displaced: (pipelines.displaced.as_ref()).filter(|_| self.displacement.is_some()),
             surface: m.writes_surface.then_some(&self.frame.surface_view),
             reads_opaque: self.frame.reads_opaque,
             frame,
@@ -974,17 +886,6 @@ impl super::native_pack::NativePack {
             layers,
         })
     }
-}
-
-/// What the renderer hands `[displacement]` once a frame, after the visibility walk
-/// (`NativePack::prepare_displacement`).
-pub struct DisplacementPrepare<'a, I> {
-    pub device: &'a wgpu::Device,
-    pub queue: &'a wgpu::Queue,
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    /// The visible sections with solid quads, nearest first.
-    pub sections: I,
-    pub view_proj: glam::Mat4,
 }
 
 /// `[displacement]`'s grid of the solid terrain near the camera and the layer that draws it

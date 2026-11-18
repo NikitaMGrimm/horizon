@@ -12,6 +12,8 @@ pub mod cache;
 mod detail;
 mod kept;
 mod mesh;
+#[cfg(test)]
+pub(crate) use mesh::far_look;
 pub mod packed;
 mod samples;
 use horizon_world::registry::BlockStateId;
