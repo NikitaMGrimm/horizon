@@ -39,7 +39,9 @@ impl Game<'_> {
                     .screenshot_messages
                     .retain(|path| *path != write.save.original);
                 self.ui.screenshot_messages.insert(0, path);
-                self.finish_screenshot(&result, write.message);
+                let hdr = result.as_ref().ok().and_then(|saved| saved.hdr_path.clone());
+                let result = result.map(|saved| saved.size);
+                self.finish_screenshot(&result, hdr.as_deref(), write.message);
             } else if let Err(error) = result {
                 log::warn!("Horizon: couldn't save the world icon: {error}");
             }

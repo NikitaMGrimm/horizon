@@ -10205,7 +10205,7 @@ impl Game<'_> {
                             Ok(pending) => self.save_screenshot(pending),
                             Err(error) => {
                                 let result = Err(error);
-                                self.finish_screenshot(&result, None);
+                                self.finish_screenshot(&result, None, None);
                                 Some(result)
                             }
                         });
