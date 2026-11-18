@@ -2328,12 +2328,10 @@ impl Game<'_> {
             ));
         None
     }
-    /// After a frame: report a finished F2 screenshot in chat, with its HDR copy where one
-    /// was written (`hdr`).
+    /// After a frame: report a finished F2 screenshot in chat.
     pub(super) fn finish_screenshot(
         &mut self,
         result: &std::result::Result<[u32; 2], String>,
-        hdr: Option<&std::path::Path>,
         message: Option<Text>,
     ) {
         if self.ui.screenshot_messages.is_empty() {
@@ -2343,7 +2341,7 @@ impl Game<'_> {
         let message = match result {
             Ok(_) => {
                 log::info!("Saved screenshot to {}", path.display());
-                message.unwrap_or_else(|| screenshot_saved_line(&path, hdr))
+                message.unwrap_or_else(|| screenshot_saved_line(&path, None))
             }
             Err(e) => Text::translate("screenshot.failure", &[Text::literal(e.clone())]),
         };
