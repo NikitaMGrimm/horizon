@@ -470,7 +470,6 @@ impl NativePack {
         // compute passes keep theirs (`ComputePass::scene`). Whether any of them, compute and
         // before-world passes included, reads the entity layer.
         let entities = post.iter().any(CheckedStage::traces_entities);
-        let looks = post.iter().any(CheckedStage::traces_looks);
         let scenes: Vec<(String, naga::Module)> = (post.iter_mut())
             .filter(|s| s.kind == StageKind::Post)
             .filter_map(|s| Some((s.label.clone(), s.scene.take()?)))
@@ -486,7 +485,7 @@ impl NativePack {
             && !material.as_ref().is_some_and(traced);
         let computes = post.computes_trace();
         if (!scenes.is_empty() || computes) && !refused {
-            let shape = super::native_post::trace::TraceShape::of(terrain, (entities, looks));
+            let shape = super::native_post::trace::TraceShape::of(terrain, entities);
             if !post.trace_scene(device, scenes, constants, &shape, &frame.pbr)
                 && let Some(m) = material.as_mut()
             {
@@ -1374,6 +1373,7 @@ file = \"material.wgsl\"
                 for (k, &pixel) in pixels.iter().enumerate() {
                     let [a, b, c] = of(&material(&corners, *look, weights(pixel)));
                     let oracle = draw(&format!("{a:?}, {b:?}, {c:?}"), group)[k];
+                    assert_eq!([got[k][3], oracle[3]], [255; 2], "uncovered {pixel:?}");
                     assert!(
                         got[k].iter().zip(oracle).all(|(g, o)| g.abs_diff(o) <= 1),
                         "{look:?}, {shown} at {pixel:?}: {:?}, the oracle's {oracle:?}",

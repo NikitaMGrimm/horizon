@@ -290,7 +290,7 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 ## Changelog
 
 - 2026-11-18: API 0.2 (value change, experimental): a terrain hit's `tint`, `shade` and `ao` match
-  `MaterialInput`. Reading one makes the world mesh again and costs twelve bytes a face in video memory
+  `MaterialInput`. Reading one queues fresh meshes for loaded sections and costs twelve bytes a face in video memory
   within the ray scene's reach and in memory for every loaded section. Until the section is meshed
   again, `tint` uses the baked vertex colour, with `shade` and `ao` both 1.
 - 2026-11-17: API 0.2 (experimental, #18023): an R-relative kept texture takes its two versions at their size of the

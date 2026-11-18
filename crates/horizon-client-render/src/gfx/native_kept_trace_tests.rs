@@ -13,6 +13,12 @@ const IDENTITY: &str = "fn tonemap(input: TonemapInput) -> vec3<f32> { return in
 
 /// A device with ray queries, as the game opens one for a `[ray_tracing]` pack.
 pub(super) fn ray_device() -> Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)> {
+    ray_device_with_storage_limit(u32::MAX)
+}
+
+fn ray_device_with_storage_limit(
+    storage_buffers: u32,
+) -> Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)> {
     let instance = crate::gfx::test_gpu::instance();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
     let features = adapter.features() & wgpu::Features::EXPERIMENTAL_RAY_QUERY;
@@ -22,9 +28,13 @@ pub(super) fn ray_device() -> Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)
         return None;
     }
     eprintln!("tracing on {backend:?}");
+    let mut limits = adapter.limits();
+    limits.max_storage_buffers_per_shader_stage = limits
+        .max_storage_buffers_per_shader_stage
+        .min(storage_buffers);
     let desc = wgpu::DeviceDescriptor {
         required_features: features,
-        required_limits: adapter.limits(),
+        required_limits: limits,
         experimental_features: horizon_hdr::experimental_features(),
         ..Default::default()
     };
@@ -831,4 +841,46 @@ fn every_kind_of_pass_reads_a_hit_s_looks() {
     }
     let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
+}
+
+#[test]
+fn a_pass_that_skips_hit_looks_keeps_its_storage_buffer_budget() {
+    let Some((_, device, queue)) = ray_device_with_storage_limit(8) else {
+        return;
+    };
+    let mut manifest = HIT.to_owned();
+    for i in 1..=5 {
+        manifest += &format!(
+            "[[resource]]\nname = \"b{i}\"\nbuffer = 16\nelement = \"f32\"\nkeep = \"view\"\n"
+        );
+    }
+    manifest += "[[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
+                 reads = [\"b1\", \"b2\", \"b3\", \"b4\", \"b5\"]\nwrites = [\"hit\"]\n\
+                 [[post]]\nfile = \"l.wgsl\"\nreads = [\"hit\"]\n";
+    // The compute stage fills all eight slots with two scene buffers and six kept buffers.
+    // Only the fragment stage has room for and reads the look store.
+    let writes = TRACES.replace(
+        ".distance;",
+        ".distance + b1[0] + b2[0] + b3[0] + b4[0] + b5[0];",
+    );
+    let show = SHOW.replace(
+        "0.0, 1.0);",
+        "trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0).tint.r, 1.0);",
+    );
+    let scene = Scene::new(&device, &queue, 4.0, 1);
+    let world = World::new(&device);
+    let mut pack = pack(
+        &device,
+        &queue,
+        &scene,
+        &manifest,
+        &[("w.wgsl", &writes), ("l.wgsl", &show)],
+    );
+    let got = frame(
+        (&device, &queue, &world),
+        &mut pack,
+        1,
+        Some(&scene.traced()),
+    );
+    assert!(shows(got, [0.5, 1.0, 1.0]), "{got:?}");
 }

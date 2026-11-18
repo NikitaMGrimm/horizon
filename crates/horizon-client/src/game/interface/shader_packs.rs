@@ -331,23 +331,20 @@ impl Game<'_> {
             self.streaming.separate_ao = separate_ao;
             self.all_sections_changed();
         }
-        // A shader API 0.2 pack whose terrain takes the quads' looks (their tint, shade, ambient
-        // occlusion, face and light level apart): every quad carries its look, so the world
-        // meshes again once when the renderer's sections start or stop carrying them, and never
-        // otherwise. So too when the ray scene starts or stops keeping them, its sections' copies
-        // being made as they upload.
-        let looks = self
+        // The arenas need new meshes when their look layout changes. The ray scene can keep
+        // drawing the resident meshes while replacements with looks arrive.
+        let (looks, ray_looks) = self
             .renderer
             .as_ref()
             .map_or((false, false), |r| (r.terrain_looks(), r.ray_looks()));
-        if (self.streaming.looks, self.streaming.ray_looks) != looks {
-            log::info!(
-                "terrain meshes again: arena quad looks {}, ray scene looks {}",
-                looks.0,
-                looks.1
-            );
-            (self.streaming.looks, self.streaming.ray_looks) = looks;
+        let add_ray_looks = ray_looks && !self.streaming.ray_looks;
+        self.streaming.ray_looks = ray_looks;
+        if self.streaming.looks != looks {
+            self.streaming.looks = looks;
             self.all_sections_changed();
+        } else if add_ray_looks {
+            self.pending_uploads.clear();
+            self.streaming.reload_sections(&mut self.world);
         }
         let selected = picked_pack(&self.settings).to_owned();
         let path = self.native_shaders.resolve_path(

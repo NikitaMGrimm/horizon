@@ -246,7 +246,7 @@ let hit = trace(position * 0.99, direction, 64.0);   // hit.distance < 0.0: noth
 `trace` returns the nearest solid surface along a ray, with what the material stage would get for that point (`albedo`,
 `uv`, `material`, `tags`, `fluid`, `translucent`, `tangent`, and on a terrain hit `tint`, `shade` and `ao`)
 and its `position`, `normal`, `back` and `distance`. `light` excludes dynamic light, and terrain `emission` gives
-the face's brightness class. Reading hit `tint`, `shade` or `ao` makes the world mesh again when the pack starts.
+the face's brightness class. A pack that reads hit `tint`, `shade` or `ao` queues fresh meshes for loaded sections.
 `trace_any` only says whether something is in the way, which is all a shadow needs. Origins are camera-relative,
 as `view_position` gives them, and
 rays pass through the clear texels of leaves and plants, and through water, stained glass and ice, which are in a

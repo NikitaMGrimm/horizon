@@ -35,20 +35,16 @@ pub(in crate::gfx) struct TraceShape<'a> {
     pub materials: &'a [(u32, u32)],
     /// Whether the stages read the entity layer (`CheckedStage::traces_entities`).
     pub entities: bool,
-    /// Whether they read the terrain's looks (`CheckedStage::traces_looks`).
-    pub looks: bool,
 }
 
 impl<'a> TraceShape<'a> {
-    /// `(entities, looks)`: what the stages read (`TraceShape::entities`, `looks`).
-    pub(in crate::gfx) fn of(terrain: &TerrainShape<'a>, (entities, looks): (bool, bool)) -> Self {
+    pub(in crate::gfx) fn of(terrain: &TerrainShape<'a>, entities: bool) -> Self {
         Self {
             sprites: terrain.sprite_views,
             split: terrain.sprites[1] as u32,
             tags: terrain.sprite_tags,
             materials: terrain.sprite_materials,
             entities,
-            looks,
         }
     }
 }
@@ -73,8 +69,11 @@ pub(in crate::gfx) struct Rays {
 pub(super) struct NativeTrace {
     /// Each pass's group layout with the scene's bindings, the post passes' then, in a chain
     /// with kept resources, the compute passes' (`KeptStore::passes`), none for one that
-    /// doesn't trace. Without kept resources the post passes share one.
+    /// doesn't trace. Post passes without kept resources share one when they need the same
+    /// scene bindings.
     layouts: Vec<Option<wgpu::BindGroupLayout>>,
+    /// Which pass layouts include binding 81, in the same order as `layouts`.
+    looks: Vec<bool>,
     /// One pipeline a post pass, in the passes' order.
     pub(super) pipelines: Vec<wgpu::RenderPipeline>,
     /// One a compute pass that traces, in `KeptStore::computes`' order.
@@ -267,14 +266,14 @@ pub(in crate::gfx) fn over_limits(
 }
 
 /// Builds with `build` what runs against the scene, in a group 3 of each of `groups`' entries
-/// and the scene's, for its shader stage, where the device traces rays and each stage holds
-/// them beside its other groups' entries `others`. Else None, and the log says why: what
+/// and the scene's. Each group names its shader stage and whether it reads looks. The device
+/// must hold these bindings beside the other groups' entries `others`. Else None: what
 /// doesn't trace keeps missing every ray, all of it, so that `frame.has_ray_tracing` holds for
 /// every pass.
 fn with_scene<T>(
     device: &wgpu::Device,
     (groups, others): (
-        Vec<(Vec<wgpu::BindGroupLayoutEntry>, wgpu::ShaderStages)>,
+        Vec<(Vec<wgpu::BindGroupLayoutEntry>, wgpu::ShaderStages, bool)>,
         &[wgpu::BindGroupLayoutEntry],
     ),
     shape: &TraceShape<'_>,
@@ -284,9 +283,11 @@ fn with_scene<T>(
     if !crate::gfx::rt::query::on(device) {
         return None;
     }
-    let groups: Vec<_> = (groups.into_iter())
-        .map(|(mut entries, stage)| {
-            entries.extend(scene_entries(stage, shape.entities, shape.looks));
+    let any_looks = groups.iter().any(|(_, _, looks)| *looks);
+    let groups: Vec<_> = groups
+        .into_iter()
+        .map(|(mut entries, stage, looks)| {
+            entries.extend(scene_entries(stage, shape.entities, looks));
             (entries, stage)
         })
         .collect();
@@ -338,7 +339,7 @@ fn with_scene<T>(
         sprites: shape.sprites[..RAY_SPRITE_ARRAYS as usize].to_vec(),
         split: shape.split.max(1),
         entities: shape.entities,
-        no_looks: shape.looks.then(|| {
+        no_looks: any_looks.then(|| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Native shader pack: no looks"),
                 size: std::mem::size_of::<crate::mesher::QuadLook>() as u64,
@@ -364,7 +365,7 @@ impl Rays {
     }
 
     /// The scene's entries of a group 3.
-    fn entries<'a>(&'a self, scene: &Traced<'a>) -> Vec<wgpu::BindGroupEntry<'a>> {
+    fn entries<'a>(&'a self, scene: &Traced<'a>, looks: bool) -> Vec<wgpu::BindGroupEntry<'a>> {
         let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: RAY_SCENE_BINDING,
@@ -409,7 +410,7 @@ impl Rays {
             let entry = |(binding, resource)| wgpu::BindGroupEntry { binding, resource };
             entries.extend(bindings.into_iter().zip(resources).map(entry));
         }
-        if let Some(none) = &self.no_looks {
+        if let Some(none) = self.no_looks.as_ref().filter(|_| looks) {
             entries.push(wgpu::BindGroupEntry {
                 binding: RAY_LOOKS_BINDING,
                 resource: scene.looks.unwrap_or(none).as_entire_binding(),
@@ -465,8 +466,17 @@ impl NativePost {
         if scenes.len() != ordinary || scenes.is_empty() && computes.iter().all(Option::is_none) {
             return false;
         }
+        let looks: Vec<_> = scenes
+            .iter()
+            .map(|(_, module)| has_look_binding(module))
+            .chain(computes.iter().map(|pass| {
+                pass.as_ref()
+                    .is_some_and(|(_, module)| has_look_binding(module))
+            }))
+            .collect();
+        let shared = self.kept.is_none() && looks.windows(2).all(|pair| pair[0] == pair[1]);
         let (fragment, compute) = (wgpu::ShaderStages::FRAGMENT, wgpu::ShaderStages::COMPUTE);
-        // Each pass's own entries, with kept resources; else the chain's, shared.
+        // Only the passes that use looks consume another storage-buffer slot.
         let groups: Vec<_> = match &self.kept {
             Some(k) => (k.passes.iter().enumerate())
                 .filter(|(i, _)| *i < ordinary || computes[i - ordinary].is_some())
@@ -475,13 +485,21 @@ impl NativePost {
                     (
                         [p.entries.as_slice(), &post_pbr_entries(stage)].concat(),
                         stage,
+                        looks[i],
                     )
                 })
                 .collect(),
-            None => vec![(
-                [self.entries.as_slice(), &post_pbr_entries(fragment)].concat(),
-                fragment,
-            )],
+            None => looks
+                .iter()
+                .take(if shared { 1 } else { ordinary })
+                .map(|&looks| {
+                    (
+                        [self.entries.as_slice(), &post_pbr_entries(fragment)].concat(),
+                        fragment,
+                        looks,
+                    )
+                })
+                .collect(),
         };
         let (plan, kept) = (&self.plan, &self.kept);
         let build = |layouts: &[wgpu::BindGroupLayout]| {
@@ -528,13 +546,12 @@ impl NativePost {
                             .flatten()
                     })
                     .collect(),
-                None => {
-                    let shared = made.next();
-                    vec![shared; ordinary]
-                }
+                None if shared => vec![made.next(); ordinary],
+                None => made.map(Some).collect(),
             };
             NativeTrace {
                 layouts,
+                looks,
                 pipelines,
                 computes,
                 rays,
@@ -568,6 +585,14 @@ impl NativePost {
     }
 }
 
+fn has_look_binding(module: &naga::Module) -> bool {
+    module.global_variables.iter().any(|(_, g)| {
+        g.binding
+            .as_ref()
+            .is_some_and(|b| b.group == GROUP && b.binding == RAY_LOOKS_BINDING)
+    })
+}
+
 /// Whether compute pass `c` has a pipeline against the scene.
 fn computes_trace(computes: &[Option<wgpu::ComputePipeline>], c: usize) -> bool {
     computes.get(c).is_some_and(Option::is_some)
@@ -581,8 +606,12 @@ impl NativeTrace {
     }
 
     /// The scene's entries of a pass's group, and the LabPBR maps'.
-    pub(super) fn entries<'a>(&'a self, scene: &Traced<'a>) -> Vec<wgpu::BindGroupEntry<'a>> {
-        let mut entries = self.rays.entries(scene);
+    pub(super) fn entries<'a>(
+        &'a self,
+        pass: usize,
+        scene: &Traced<'a>,
+    ) -> Vec<wgpu::BindGroupEntry<'a>> {
+        let mut entries = self.rays.entries(scene, self.looks[pass]);
         let maps = [PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING].into_iter();
         entries.extend(
             maps.zip(&self.pbr)
@@ -602,14 +631,14 @@ impl TerrainTrace {
     pub(in crate::gfx) fn new(
         device: &wgpu::Device,
         frame: &NativeFrame,
-        (terrain, reads): (&TerrainShape<'_>, (bool, bool)),
+        (terrain, (entities, looks)): (&TerrainShape<'_>, (bool, bool)),
         kept: &[wgpu::BindGroupLayoutEntry],
         build: impl FnOnce(&wgpu::BindGroupLayout) -> Result<MaterialPipelines, String>,
     ) -> Option<Self> {
         let fragment = wgpu::ShaderStages::FRAGMENT;
-        let own = vec![([&frame.entries[..], kept].concat(), fragment)];
+        let own = vec![([&frame.entries[..], kept].concat(), fragment, looks)];
         let others = terrain_entries();
-        let shape = TraceShape::of(terrain, reads);
+        let shape = TraceShape::of(terrain, entities);
         let build = |layouts: &[wgpu::BindGroupLayout]| build(&layouts[0]);
         let (layouts, pipelines, rays) = with_scene(device, (own, &others), &shape, build)?;
         Some(Self {
@@ -651,7 +680,7 @@ impl TerrainTrace {
         };
         if !self.group.as_ref().is_some_and(made) {
             let join = |parity| {
-                let mut entries = self.rays.entries(scene);
+                let mut entries = self.rays.entries(scene, self.traces_looks());
                 entries.extend(reads.map(|r| r.entries(parity)).unwrap_or_default());
                 frame.joined(device, &self.layout, &entries)
             };

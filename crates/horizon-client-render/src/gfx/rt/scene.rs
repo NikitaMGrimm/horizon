@@ -593,7 +593,14 @@ impl RayScene {
 
     /// Keeps the quads' looks (`on`: the native pack's rays read them) or none.
     fn set_looks(&mut self, device: &wgpu::Device, on: bool) {
-        self.generation += u64::from(self.unpacker.set_looks(device, on));
+        if self.unpacker.set_looks(device, on) {
+            self.generation += 1;
+            if on {
+                // The store may have been refused while these parts built. Rebuild them to
+                // write their retained looks into the newly allocated store.
+                self.dirty.extend(self.blas.keys().copied());
+            }
+        }
     }
 
     fn mark(&mut self, key: SectionKey) {
