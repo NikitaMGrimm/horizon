@@ -2,7 +2,7 @@
 
 A design note, before any code: what a colour means to a shader pack from API 0.2 on, how the frame stores the
 picture, and how HDR output stops reading light from the frame's alpha. Part of [#3125](https://github.com/horizon-rust/horizon/issues/3125)
-and [#1441](https://github.com/horizon-rust/horizon/issues/1441). The shader API is experimental, which needs a
+and [#1441](https://github.com/horizon-rust/horizon/issues/1441). The shader API was experimental when this was written, which needs a
 design note for a new line ([api/stability.md](../api/stability.md)); this is that note.
 
 ## Why
