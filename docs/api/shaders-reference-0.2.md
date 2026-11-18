@@ -3,8 +3,10 @@
 Generated from `crates/horizon-shader-api` (`HORIZON_WRITE_DOCS=1 cargo test -p horizon-shader-api --test it reference::`
 rewrites it; the test fails when it drifts). The API's design and pack format: [shaders.md](shaders.md).
 
-**Experimental** ([stability.md](stability.md)): `horizon-shader check` takes 0.2 packs, the game draws them and
-the registry lists them, and anything here may change in any release.
+**Preview** ([stability.md](stability.md)), final: `horizon-shader check` takes 0.2 packs, the registry lists them and
+the game draws them. The game alone refuses two keys for now, which a later Horizon draws: `[frame] primaries =
+"bt2020"` and `[motion]`. What this page says stays; a change that breaks a 0.2 pack only comes with a new line
+(0.3), after a deprecation.
 The design: [hdr-linear-light.md](../design/hdr-linear-light.md).
 
 ## Colour
@@ -407,7 +409,7 @@ glass or entities) and has no albedo, so direct light that must be right there i
 
 ### `RayHit`
 
-The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `uv`, `material`, `tags`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives for the same point. Its `light` excludes dynamic light. On a terrain hit, `tint`, `shade`, `ao` and `shaded_tint` also match the material input. A stage that reads a hit's `tint`, `shade` or `ao` has the scene keep its terrain's looks, twelve bytes a face in video memory for the faces within its reach and as many in memory for every loaded section, from each section's next mesh on: when a pack starts reading these fields, loaded sections are queued for remeshing. Until a section's replacement is ready its hits read as a face without a look (`tint` the baked vertex colour, `shade` and `ao` 1). The scene holds the faces flat: under `[displacement]` a fragment shades from its displaced point, a hit from the face. `shaded_tint` stays the baked vertex colour on terrain and uses `tint.rgb * shade` on entity hits. On a miss, and in every stage while the scene isn't there (`frame.has_ray_tracing` 0), `distance` is negative and every other field is 0 (the `bool`s false).
+The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `uv`, `material`, `tags`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives for the same point. Its `light` excludes dynamic light. On a terrain hit, `tint`, `shade` and `ao` follow `MaterialInput` in API 0.2. Terrain `emission` still gives the face's brightness class (see the field). A stage that reads a hit's `tint`, `shade` or `ao` has the scene keep its terrain's looks, twelve bytes a face in video memory for the faces within its reach and as many in memory for every loaded section, from each section's next mesh on: when a pack starts reading these fields, loaded sections are queued for remeshing. Until a section's replacement is ready its hits read as a face without a look (`tint` the baked vertex colour, `shade` and `ao` 1). The scene holds the faces flat: under `[displacement]` a fragment shades from its displaced point, a hit from the face. `shaded_tint` stays the baked vertex colour on terrain and uses `tint.rgb * shade` on entity hits. On a miss, and in every stage while the scene isn't there (`frame.has_ray_tracing` 0), `distance` is negative and every other field is 0 (the `bool`s false).
 
 | Field | Type | Meaning |
 | --- | --- | --- |
