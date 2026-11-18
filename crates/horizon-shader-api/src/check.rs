@@ -186,11 +186,7 @@ fn reads_fields(
         })
     };
     let reads = |f: &naga::Function, info: &naga::valid::FunctionInfo| {
-        f.expressions.iter().any(|(_, e)| {
-            let naga::Expression::AccessIndex { base, index } = *e else {
-                return false;
-            };
-            // The struct, or a pointer to one, by handle or by value.
+        let field = |base: naga::Handle<naga::Expression>, index| {
             let ty = match &info[base].ty {
                 naga::proc::TypeResolution::Handle(ty) => Some(*ty),
                 naga::proc::TypeResolution::Value(naga::TypeInner::Pointer { base, .. }) => {
@@ -199,7 +195,35 @@ fn reads_fields(
                 naga::proc::TypeResolution::Value(_) => None,
             };
             ty.is_some_and(|ty| looked(ty, index))
-        })
+        };
+        let projected_field = |mut pointer| loop {
+            match f.expressions[pointer] {
+                naga::Expression::AccessIndex { base, index } => {
+                    if field(base, index) {
+                        break true;
+                    }
+                    pointer = base;
+                }
+                naga::Expression::Access { base, .. } => pointer = base,
+                _ => break false,
+            }
+        };
+        f.expressions
+            .iter()
+            .any(|(_, expression)| match *expression {
+                naga::Expression::AccessIndex { base, index }
+                    if !reachable_only
+                        || !matches!(
+                            info[base].ty.inner_with(&m.types),
+                            naga::TypeInner::Pointer { .. }
+                        ) =>
+                {
+                    field(base, index)
+                }
+                // A pointer projection alone could be the destination of a store.
+                naga::Expression::Load { pointer } if reachable_only => projected_field(pointer),
+                _ => false,
+            })
     };
     if m.entry_points
         .iter()

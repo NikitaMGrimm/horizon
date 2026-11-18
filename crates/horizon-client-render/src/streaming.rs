@@ -1278,6 +1278,11 @@ impl Streaming {
     /// `LevelExtractor.allChanged`: discard mesh work made before the reload and
     /// rebuild every loaded, lit section.
     pub fn reload_sections(&mut self, world: &mut World) {
+        self.shared
+            .queue
+            .lock()
+            .unwrap()
+            .retain(|job| !matches!(job.job, Job::Mesh(..)));
         self.meshing.clear();
         self.compile_started.clear();
         Self::mark_loaded_sections_dirty(world, &self.lit);

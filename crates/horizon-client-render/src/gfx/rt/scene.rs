@@ -42,7 +42,7 @@ use glam::DVec3;
 use horizon_shader_api::stages::{RAY_ENTITY, RAY_SOLID, RAY_TRANSLUCENT};
 
 use crate::block_entity_render::StaticSectionSnapshot;
-use crate::fast_hash::FxHashMap;
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::gfx::{Renderer, SectionGpu, SectionKey, arena::Arena, resident::Resident};
 use crate::mesher::{QuadLook, TerrainVertex, Vertex};
 use retained::Retained;
@@ -435,6 +435,8 @@ pub struct RayScene {
     blas: FxHashMap<Part, wgpu::Blas>,
     /// Parts meshed again or emptied since their BLAS was built.
     dirty: Vec<Part>,
+    /// Cached slots that need looks without rebuilding their geometry.
+    look_retries: FxHashSet<Part>,
     tlas: wgpu::Tlas,
     /// The TLAS's instances of the solid layer, which come first in it.
     solid_instances: u32,
@@ -530,6 +532,7 @@ impl RayScene {
         Some(Self {
             blas: FxHashMap::default(),
             dirty: Vec::new(),
+            look_retries: FxHashSet::default(),
             tlas: out_of_memory_free(device, || create_tlas(device, 1024))?,
             solid_instances: 0,
             anchor: None,
@@ -595,10 +598,9 @@ impl RayScene {
     fn set_looks(&mut self, device: &wgpu::Device, on: bool) {
         if self.unpacker.set_looks(device, on) {
             self.generation += 1;
+            self.look_retries.clear();
             if on {
-                // The store may have been refused while these parts built. Rebuild them to
-                // write their retained looks into the newly allocated store.
-                self.dirty.extend(self.blas.keys().copied());
+                self.look_retries.extend(self.blas.keys().copied());
             }
         }
     }
@@ -611,6 +613,7 @@ impl RayScene {
         self.slots.clear();
         self.blas.clear();
         self.dirty.clear();
+        self.look_retries.clear();
         self.to_compact.clear();
         self.compacting.clear();
         self.anchor = None;
@@ -775,7 +778,7 @@ impl RayScene {
                     let (unpacker, generation) = (&mut self.unpacker, &mut self.generation);
                     let first = self.slots.alloc(part, u64::from(quads) * 4, |vertices| {
                         // Asked only for a larger store: true is a new one.
-                        let grown = unpacker.fit(device, encoder, vertices);
+                        let grown = unpacker.fit(device, encoder, vertices, look_buffer);
                         *generation += u64::from(grown);
                         grown
                     });
@@ -816,6 +819,7 @@ impl RayScene {
         }
         self.dirty.drain(..taken);
         self.dirty.extend(deferred);
+        self.upload_looks(device, encoder, sections, &builds);
         if builds.is_empty() && !changed && self.anchor == Some(column) && self.entities.is_none() {
             return;
         }
@@ -894,6 +898,58 @@ impl RayScene {
         entries.extend(retained.into_iter().flat_map(|r| r.builds(indices)));
         encoder.build_acceleration_structures(entries.iter(), std::iter::once(&self.tlas));
         self.anchor = Some(column);
+    }
+
+    fn upload_looks(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        sections: &Resident<SectionGpu>,
+        builds: &[Build<'_>],
+    ) {
+        let Some(looks) = self.unpacker.looks.as_ref() else {
+            return;
+        };
+        let mut writes: Vec<_> = builds.iter().map(LookWrite::from).collect();
+        if !self.look_retries.is_empty() {
+            // A dirty section's records may belong to a replacement mesh. Its normal build
+            // will write the looks once the new geometry can take its slot.
+            let pending: FxHashSet<_> = self
+                .dirty
+                .iter()
+                .copied()
+                .chain(builds.iter().map(|b| b.part))
+                .collect();
+            writes.extend(
+                self.look_retries
+                    .extract_if(|_| true)
+                    .take(BUILDS_PER_FRAME)
+                    .filter_map(|part @ (key, layer)| {
+                        if pending.contains(&part) {
+                            return None;
+                        }
+                        let section = sections.find(key)?;
+                        let (first, vertices) = self.slots.slot(part)?;
+                        let quads = layer.quads(section);
+                        (vertices == u64::from(quads) * 4).then_some(LookWrite {
+                            part,
+                            first,
+                            quads,
+                            section,
+                        })
+                    }),
+            );
+        }
+        if !write_looks(encoder, looks, &writes, |records| {
+            stage_looks(device, records)
+        }) {
+            self.look_retries.extend(
+                writes
+                    .iter()
+                    .filter(|w| w.records().is_some())
+                    .map(|w| w.part),
+            );
+        }
     }
 }
 
@@ -1033,22 +1089,29 @@ impl Unpacker {
 
     /// A look store beside the store (`on`) or none; whether that changed. Without the video
     /// memory for one the rays read every quad as without a look, and a later frame asks again.
-    /// Parts written before it came read so until they are meshed again.
+    /// The scene fills slots already resident once the store is available.
     fn set_looks(&mut self, device: &wgpu::Device, on: bool) -> bool {
         let before = self.looks.is_some();
         if on != before {
             self.looks = on
                 .then(|| look_buffer(device, self.store.size() / STRIDE))
                 .flatten();
-            if on && self.looks.is_none() && !std::mem::replace(&mut self.looks_logged, true) {
-                log::warn!(
-                    "Horizon renderer: no video memory for the ray tracing look store; \
-                     hits use vertex colours until it can be allocated"
-                );
+            if on && self.looks.is_none() {
+                self.log_look_refusal();
+            } else {
+                self.looks_logged = false;
             }
-            self.looks_logged &= self.looks.is_none();
         }
         self.looks.is_some() != before
+    }
+
+    fn log_look_refusal(&mut self) {
+        if !std::mem::replace(&mut self.looks_logged, true) {
+            log::warn!(
+                "Horizon renderer: no video memory for the ray tracing look store; \
+                 hits use vertex colours until it can be allocated"
+            );
+        }
     }
 
     /// A store of `vertices` when it holds fewer: the larger one gets the old contents first
@@ -1060,15 +1123,12 @@ impl Unpacker {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         vertices: u64,
+        grow_looks: impl FnOnce(&wgpu::Device, u64) -> Option<wgpu::Buffer>,
     ) -> bool {
         if vertices * STRIDE <= self.store.size() {
             return true;
         }
-        let looks = match self.looks {
-            Some(_) => look_buffer(device, vertices).map(Some),
-            None => Some(None),
-        };
-        let (Some(looks), Some(store)) = (looks, store_buffer(device, vertices)) else {
+        let Some(store) = store_buffer(device, vertices) else {
             log::warn!(
                 "Horizon renderer: no video memory for a ray tracing store of {vertices} \
                  vertices; it stays at {}",
@@ -1077,11 +1137,16 @@ impl Unpacker {
             return false;
         };
         encoder.copy_buffer_to_buffer(&self.store, 0, &store, 0, self.store.size());
-        if let (Some(old), Some(new)) = (&self.looks, &looks) {
-            encoder.copy_buffer_to_buffer(old, 0, new, 0, old.size());
-        }
         self.store = store;
-        self.looks = looks;
+        if let Some(old) = self.looks.take() {
+            self.looks = grow_looks(device, vertices);
+            if let Some(new) = &self.looks {
+                encoder.copy_buffer_to_buffer(&old, 0, new, 0, old.size());
+            } else {
+                // Optional looks cannot set the geometry store's permanent capacity limit.
+                self.log_look_refusal();
+            }
+        }
         true
     }
 
@@ -1095,9 +1160,6 @@ impl Unpacker {
         translucent: &Arena,
         builds: &[Build<'_>],
     ) {
-        if let Some(looks) = &self.looks {
-            write_looks(device, encoder, looks, builds);
-        }
         let (builds, copied): (Vec<_>, Vec<_>) =
             builds.iter().partition(|b| b.part.1 == Layer::Solid);
         for b in copied {
@@ -1219,32 +1281,50 @@ pub(in crate::gfx) fn unpack_shader() -> String {
     crate::gfx::terrain_shader() + include_str!("../../rt_unpack.wgsl")
 }
 
-/// Writes the builds' looks into their quads' place in `looks`, in `encoder` after any copy
-/// of a store that grew: each part's section's copy, or none (zeros) where it kept none.
+struct LookWrite<'a> {
+    part: Part,
+    first: u64,
+    quads: u32,
+    section: &'a SectionGpu,
+}
+
+impl<'a> From<&Build<'a>> for LookWrite<'a> {
+    fn from(build: &Build<'a>) -> Self {
+        Self {
+            part: build.part,
+            first: build.first,
+            quads: build.quads,
+            section: build.s,
+        }
+    }
+}
+
+impl LookWrite<'_> {
+    fn records(&self) -> Option<&[QuadLook]> {
+        let looks = self.part.1.looks(self.section);
+        (looks.len() == self.quads as usize).then_some(looks)
+    }
+}
+
+/// Writes the looks of new builds and cached slots. A refused staging allocation clears the
+/// affected slots before they can be traced and leaves their records eligible for retry.
 fn write_looks(
-    device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     looks: &wgpu::Buffer,
-    builds: &[Build<'_>],
-) {
-    fn kept<'a>(b: &Build<'a>) -> Option<&'a [QuadLook]> {
-        Some(b.part.1.looks(b.s)).filter(|l| l.len() == b.quads as usize)
-    }
-    let all: Vec<QuadLook> = builds.iter().filter_map(kept).flatten().copied().collect();
-    let staged = (!all.is_empty()).then(|| {
-        wgpu::util::DeviceExt::create_buffer_init(
-            device,
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Ray tracing: looks to write"),
-                contents: bytemuck::cast_slice(&all),
-                usage: wgpu::BufferUsages::COPY_SRC,
-            },
-        )
-    });
+    writes: &[LookWrite<'_>],
+    stage: impl FnOnce(&[QuadLook]) -> Option<wgpu::Buffer>,
+) -> bool {
+    let all: Vec<QuadLook> = writes
+        .iter()
+        .filter_map(LookWrite::records)
+        .flatten()
+        .copied()
+        .collect();
+    let staged = (!all.is_empty()).then(|| stage(&all)).flatten();
     let mut at = 0;
-    for b in builds {
-        let (offset, size) = (b.first / 4 * LOOK, u64::from(b.quads) * LOOK);
-        match staged.as_ref().filter(|_| kept(b).is_some()) {
+    for write in writes {
+        let (offset, size) = (write.first / 4 * LOOK, u64::from(write.quads) * LOOK);
+        match staged.as_ref().filter(|_| write.records().is_some()) {
             Some(staged) => {
                 encoder.copy_buffer_to_buffer(staged, at, looks, offset, size);
                 at += size;
@@ -1252,6 +1332,22 @@ fn write_looks(
             None => encoder.clear_buffer(looks, offset, Some(size)),
         }
     }
+    all.is_empty() || staged.is_some()
+}
+
+fn stage_looks(device: &wgpu::Device, records: &[QuadLook]) -> Option<wgpu::Buffer> {
+    let bytes = bytemuck::cast_slice(records);
+    let buffer = out_of_memory_free(device, || {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ray tracing: looks to write"),
+            size: bytes.len() as u64,
+            usage: wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: true,
+        })
+    })?;
+    buffer.get_mapped_range_mut(..).ok()?.copy_from_slice(bytes);
+    buffer.unmap();
+    Some(buffer)
 }
 
 /// The look store of a store of `vertices`: a look a quad.

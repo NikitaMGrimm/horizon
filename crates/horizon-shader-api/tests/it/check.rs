@@ -1453,7 +1453,9 @@ fn a_hit_s_look_fields_bring_the_scene_s_looks() {
     };
     let reads = [
         post("return vec4<f32>(hit.tint.rgb, 1.0);"),
-        post("let h = hit;\n    return vec4<f32>(h.shade);"),
+        post("var h = hit; return vec4<f32>(h.tint.r);"),
+        "fn component(p: ptr<function, RayHit>) -> f32 { return (*p).ao; }\n".to_owned()
+            + &post("var h = hit; return vec4<f32>(component(&h));"),
         post("if input.uv.x > 0.5 { return vec4<f32>(lit(hit)); }\n    return input.color;"),
     ];
     for text in &reads {
@@ -1484,6 +1486,7 @@ fn a_hit_s_look_fields_bring_the_scene_s_looks() {
         post("return input.color * hit.albedo;"),
         post("return vec4<f32>(hit.shaded_tint.rgb * hit.albedo.rgb, 1.0);"),
         post("return input.color * lit(hit);"),
+        post("var h = hit; h.ao = 1.0; return vec4<f32>(h.distance);"),
     ];
     for text in &none {
         assert!(!ray_looks(text, plain), "{text}");

@@ -247,7 +247,8 @@ let hit = trace(position * 0.99, direction, 64.0);   // hit.distance < 0.0: noth
 `uv`, `material`, `tags`, `fluid`, `translucent`, `tangent`, and on a terrain hit `tint`, `shade` and `ao`)
 and its `position`, `normal`, `back` and `distance`. `light` excludes dynamic light. Terrain `emission` comes
 from the vertex and gives the block's light level over 15. A pack that reads hit `tint`, `shade` or `ao` queues
-fresh meshes for loaded sections.
+fresh meshes for loaded sections. A hit without a usable look record uses baked vertex colour and 1 for both
+`shade` and `ao`.
 `trace_any` only says whether something is in the way, which is all a shadow needs. Origins are camera-relative,
 as `view_position` gives them, and
 rays pass through the clear texels of leaves and plants, and through water, stained glass and ice, which are in a

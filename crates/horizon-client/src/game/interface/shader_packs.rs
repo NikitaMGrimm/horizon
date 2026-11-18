@@ -343,7 +343,8 @@ impl Game<'_> {
             self.streaming.looks = looks;
             self.all_sections_changed();
         } else if add_ray_looks {
-            self.pending_uploads.clear();
+            self.streaming
+                .free(std::mem::take(&mut self.pending_uploads));
             self.streaming.reload_sections(&mut self.world);
         }
         let selected = picked_pack(&self.settings).to_owned();

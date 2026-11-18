@@ -859,10 +859,11 @@ fn a_pass_that_skips_hit_looks_keeps_its_storage_buffer_budget() {
                  [[post]]\nfile = \"l.wgsl\"\nreads = [\"hit\"]\n";
     // The compute stage fills all eight slots with two scene buffers and six kept buffers.
     // Its unused helper must not request another binding. The fragment stage reads the looks.
-    let writes = TRACES.replace(
-        ".distance;",
-        ".distance + b1[0] + b2[0] + b3[0] + b4[0] + b5[0];",
-    ) + "fn unused_look(hit: RayHit) -> f32 { return hit.tint.r; }\n";
+    let writes = "fn unused_look(hit: RayHit) -> f32 { return hit.tint.r; }\n\
+                  fn compute(input: ComputeInput) {\n    \
+                  var seen = trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0);\n    \
+                  seen.ao = 1.0;\n    \
+                  hit[0] = seen.distance + b1[0] + b2[0] + b3[0] + b4[0] + b5[0];\n}\n";
     let show = SHOW.replace(
         "0.0, 1.0);",
         "trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0).tint.r, 1.0);",
@@ -874,13 +875,21 @@ fn a_pass_that_skips_hit_looks_keeps_its_storage_buffer_budget() {
         &queue,
         &scene,
         &manifest,
-        &[("w.wgsl", &writes), ("l.wgsl", &show)],
+        &[("w.wgsl", writes), ("l.wgsl", &show)],
     );
-    let got = frame(
-        (&device, &queue, &world),
-        &mut pack,
-        1,
-        Some(&scene.traced()),
+    let look = crate::mesher::QuadLook([1 << 24 | 0x40, !0]);
+    let looks = wgpu::util::DeviceExt::create_buffer_init(
+        &device,
+        &wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::bytes_of(&look),
+            usage: wgpu::BufferUsages::STORAGE,
+        },
     );
-    assert!(shows(got, [0.5, 1.0, 1.0]), "{got:?}");
+    let traced = Traced {
+        looks: Some(&looks),
+        ..scene.traced()
+    };
+    let got = frame((&device, &queue, &world), &mut pack, 1, Some(&traced));
+    assert!(shows(got, [0.5, 1.0, decode(64.0 / 255.0)]), "{got:?}");
 }

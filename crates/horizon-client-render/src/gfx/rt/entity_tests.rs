@@ -156,7 +156,15 @@ pub(super) fn ray_device_of(adapter: &wgpu::Adapter) -> Option<(wgpu::Device, wg
         experimental_features: crate::gfx::rt::query::experimental(features),
         ..Default::default()
     };
-    pollster::block_on(adapter.request_device(&descriptor)).ok()
+    Some(
+        pollster::block_on(adapter.request_device(&descriptor)).unwrap_or_else(|error| {
+            let info = adapter.get_info();
+            panic!(
+                "ray-query device creation on {} ({:?}): {error}",
+                info.name, info.backend
+            );
+        }),
+    )
 }
 
 /// A quad of the stream facing +z at depth `z`, from `x` to `x + 1` and 0 to 1 high.

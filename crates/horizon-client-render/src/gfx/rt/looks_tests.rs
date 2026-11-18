@@ -491,30 +491,43 @@ fn the_look_store_grows_with_the_store_and_a_part_without_looks_reads_none() {
         section(&[]),
         section(&[look(7)]),
     );
-    let build = |s, first| {
-        let (size, blas) = new_blas(&device, 1).unwrap();
-        let quads = Layer::Solid.quads(s).max(1);
-        Build {
-            part: ((0, 0, 0), Layer::Solid),
-            s,
-            quads,
-            size,
-            blas,
-            first,
-        }
+    let write = |s, first| LookWrite {
+        part: ((0, 0, 0), Layer::Solid),
+        section: s,
+        quads: Layer::Solid.quads(s).max(1),
+        first,
     };
     let mut encoder = device.create_command_encoder(&Default::default());
     let looks = |u: &Unpacker| u.looks.clone().unwrap();
-    write_looks(&device, &mut encoder, &looks(&unpacker), &[build(&two, 0)]);
-    // Four quads: the first two keep theirs. The first's slot goes to a part without looks.
-    assert!(unpacker.fit(&device, &mut encoder, 16));
-    assert_eq!(looks(&unpacker).size(), 4 * LOOK);
-    write_looks(
-        &device,
+    let stage = |records: &[QuadLook]| stage_looks(&device, records);
+    assert!(write_looks(
         &mut encoder,
         &looks(&unpacker),
-        &[build(&none, 0), build(&one, 8)],
-    );
+        &[write(&two, 0)],
+        stage
+    ));
+    // The larger store retains both records. A refused staging allocation must clear the
+    // reused first slot, and an upload with no look must clear the reused last slot.
+    assert!(unpacker.fit(&device, &mut encoder, 16, look_buffer));
+    assert_eq!(looks(&unpacker).size(), 4 * LOOK);
+    assert!(write_looks(
+        &mut encoder,
+        &looks(&unpacker),
+        &[write(&one, 12)],
+        stage
+    ));
+    assert!(!write_looks(
+        &mut encoder,
+        &looks(&unpacker),
+        &[write(&one, 0)],
+        |_| None
+    ));
+    assert!(write_looks(
+        &mut encoder,
+        &looks(&unpacker),
+        &[write(&none, 12), write(&one, 8)],
+        stage,
+    ));
     let read = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: 4 * LOOK,
@@ -532,5 +545,13 @@ fn the_look_store_grows_with_the_store_and_a_part_without_looks_reads_none() {
         got,
         [QuadLook::default(), look(4), look(7), QuadLook::default()]
     );
+    let mut encoder = device.create_command_encoder(&Default::default());
+    // Refusing a bigger optional look store leaves room for more geometry.
+    assert!(unpacker.fit(&device, &mut encoder, 32, |_, _| None));
+    assert_eq!(unpacker.store.size(), 32 * STRIDE);
+    assert!(unpacker.looks.is_none());
+    queue.submit([encoder.finish()]);
+    assert!(unpacker.set_looks(&device, true));
+    assert_eq!(looks(&unpacker).size(), 8 * LOOK);
     assert!(unpacker.set_looks(&device, false) && unpacker.looks.is_none());
 }

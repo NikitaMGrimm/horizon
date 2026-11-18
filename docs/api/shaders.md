@@ -296,9 +296,9 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 ## Changelog
 
 - 2026-11-18: API 0.2 (terrain ray-hit fix): a terrain hit's `tint`, `shade` and `ao` match
-  `MaterialInput` once the section is remeshed. Reading any of them queues fresh meshes for loaded
-  sections and costs eight bytes per face in CPU memory for loaded sections and in video memory
-  within the ray scene's reach. Until the replacement mesh is ready, `tint` uses the baked vertex
+  `MaterialInput` when a usable look record is available. Reading any of them queues fresh meshes for
+  loaded sections and costs eight bytes per face in CPU memory for loaded sections and in video
+  memory within the ray scene's reach. Without a usable record, `tint` uses the baked vertex
   colour, with `shade` and `ao` both 1. `shaded_tint` and `emission` come from the vertex.
 - 2026-11-18: API 0.2 (preview), a fix toward the reference: a terrain hit's `RayHit.emission` is its block's light
   level over 15, as `MaterialInput.emission` (one candle 3/15, a lantern 1), no longer its brightness class (7/15,
