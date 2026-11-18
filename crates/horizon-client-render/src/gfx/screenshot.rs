@@ -215,6 +215,9 @@ impl HdrScreenshot {
             &hdr_icc::content_light_levels(&self.pixels),
         )?;
         writer.write_image_data(&self.pixels)?;
+        // Dropping the writer would end the file and flush it, but swallow either's error: the
+        // chat line then links an HDR copy that isn't whole.
+        writer.finish()?;
         Ok(())
     }
 }
