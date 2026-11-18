@@ -1054,7 +1054,7 @@ file = \"material.wgsl\"
             entries: &entries,
         });
         // A page's looks: one quad's, at its four vertices' slots.
-        let look = crate::mesher::QuadLook::new(0x80_c0ff, 0.8, 2, [1.0, 0.8, 0.6, 1.0], 15);
+        let look = crate::mesher::QuadLook::new(0x80_c0ff, 0.8, 2, [1.0, 0.8, 0.6, 1.0]);
         let page_looks = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&[look; 4]),
@@ -1225,9 +1225,9 @@ file = \"material.wgsl\"
             layout: &globals,
             entries: &entries,
         });
-        // A tinted look with a light level and uneven corner AO, and none (code 0: the vertex
-        // colour, shade and AO 1, no light).
-        let looked = crate::mesher::QuadLook::new(0x80_c0ff, 0.8, 4, [1.0, 0.2, 0.3, 0.6], 12);
+        // A tinted look with uneven corner AO, and the fallback to vertex colour and unit
+        // shade and AO. Both draws use the light level in the same vertices.
+        let looked = crate::mesher::QuadLook::new(0x80_c0ff, 0.8, 4, [1.0, 0.2, 0.3, 0.6]);
         let groups = [looked, crate::mesher::QuadLook::default()].map(|look| {
             let page_looks = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
@@ -1252,10 +1252,10 @@ file = \"material.wgsl\"
             crate::mesher::TerrainVertex::new([x, y, 0.5], [0.0, 0.0], 0x8000, color, 0xf0f0)
         };
         let corners = [
-            corner(-1.0, -1.0, 0xff40_80c0),
-            corner(1.0, -1.0, 0xff20_4010),
-            corner(1.0, 1.0, 0xff10_f030),
-            corner(-1.0, 1.0, 0xffc0_2080),
+            corner(-1.0, -1.0, 0x3f40_80c0),
+            corner(1.0, -1.0, 0x3f20_4010),
+            corner(1.0, 1.0, 0x3f10_f030),
+            corner(-1.0, 1.0, 0x3fc0_2080),
         ];
         let buffer = |contents: &[u8], usage| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

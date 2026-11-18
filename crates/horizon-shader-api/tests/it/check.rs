@@ -1176,9 +1176,9 @@ fn a_traced_pack_that_doesn_t_name_ray_entity_composes_as_before() {
         hashes,
         [
             "1af2ec758e6f343986c676a7df695a1bf820ac9f498840422bbb8ef72df65cc4",
-            "2b2706674c6dc94fbe34f226497bb471838674ec890c6c50a2d0b6e03f956a4e",
+            "89fcc776fe9b408a89e71fcc10716a5d2744d79e6c1581889de27752c25e4e6a",
             "e646501b8bcd9097579a8bcb14e11710439d85617dfc61b044bde4e0490c8681",
-            "52c92655779561cdabbf3a8052bbd7f0f1f1a7656def6cb7a2518499bc0d7172",
+            "6c25d87e7bd62b1d8ba9fccc35d6ef6426a845e344e3bf45c197afdf1bdb7db2",
         ]
     );
 }
@@ -1190,10 +1190,7 @@ fn a_traced_pack_that_reads_no_hit_look_composes_as_before() {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
                     [material]\nfile = \"material.wgsl\"\n[[post]]\nfile = \"post.wgsl\"\n\
                     [tonemap]\nfile = \"tonemap.wgsl\"\n[ray_tracing]\n";
-    let plain = |text: &str| {
-        text.replace("hit.tint", "hit.albedo")
-            .replace("hit.emission", "hit.light.x")
-    };
+    let plain = |text: &str| text.replace("hit.tint", "hit.albedo");
     let (material, post) = (plain(REFLECTING), plain(SHADOWED));
     let files = [
         (MANIFEST, manifest),
@@ -1205,7 +1202,7 @@ fn a_traced_pack_that_reads_no_hit_look_composes_as_before() {
     .into();
     let pack = Pack::from_files(files).unwrap();
     let report = check(&pack).unwrap();
-    // The material still reads its own `input.tint`: the arena's looks, another bit.
+    // Both stages still read `hit.emission`. Only `input.tint` needs the arena's looks.
     assert!(!report.ray_looks() && report.looks());
     let stages = [
         (StageKind::Post, "post.wgsl"),
@@ -1222,10 +1219,10 @@ fn a_traced_pack_that_reads_no_hit_look_composes_as_before() {
     assert_eq!(
         hashes,
         [
-            "6f8b2d85a9472217a514cf65608dcfa8743f847923eb1a6706ae0a2eb016eb25",
-            "d77da0b10574512e69789de461e904d5aed8e4b3e93ce170dae0733e00b50998",
-            "596986641ff69096210701d224647968de1cc5d4e4ded91ff56433dd4d4e6c94",
-            "0fa088341da7a3d090f9009b487dc252935a00dc0d4759f413eca8dc4aeb8ea6",
+            "63fdd95b1f17608e158dbd7106ec22583c6cf5337f542bf31d6028d436d6e833",
+            "867893c5981df7efb562ecb414a836bed778dbf8323f0e76c2b675f6188227e5",
+            "dd8aade96c75cdd11a2866b8ab9164c7a7d36355d317dc527de0b1eba4f4880c",
+            "1e944762ceee869009feb9a014806d08aa635aa706fb2683cdf1b28e4b325880",
         ]
     );
 }
@@ -1257,8 +1254,9 @@ fn the_retained_block_entities_store_is_the_layer_s_last_binding() {
 }
 
 /// `Report::looks`: a stage reads a field only the terrain's quad looks hold (`tint`, `shade`,
-/// `ao`, `face`, `emission`), by member on `MaterialInput` or `VertexInput`, through a `var` too;
-/// the prelude reads none, nor do an entity stage's `tint` and a pack's own `shade`.
+/// `ao`, `face`), by member on `MaterialInput` or `VertexInput`, through a `var` too; the
+/// prelude reads none, nor do an entity stage's `tint`, a pack's own `shade`, and `emission` and
+/// `shaded_tint`, which the vertex holds.
 #[test]
 fn looks_are_read_by_the_terrain_fields_alone() {
     let dir = |path: &str| Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
@@ -1293,7 +1291,11 @@ fn looks_are_read_by_the_terrain_fields_alone() {
     ));
     assert!(material("    return Surface(input.albedo * input.tint);"));
     assert!(material(
-        "    var i = input;\n    i.light.x = 1.0;\n    return Surface(vec4(i.emission));"
+        "    var i = input;\n    i.light.x = 1.0;\n    return Surface(vec4(f32(i.face)));"
+    ));
+    assert!(!material(
+        "    var i = input;\n    i.light.x = 1.0;\n    \
+         return Surface(i.shaded_tint * (1.0 + i.emission));"
     ));
 }
 
@@ -1339,7 +1341,7 @@ fn looks_are_read_through_pointers_copies_and_other_files() {
     let forms = [
         (
             "a function pointer",
-            "fn glow(p: ptr<function, MaterialInput>) -> f32 { return (*p).emission; }\n\
+            "fn glow(p: ptr<function, MaterialInput>) -> f32 { return (*p).ao; }\n\
              fn material(input: MaterialInput) -> Surface {\n    var i = input;\n    \
              return Surface(vec4(glow(&i)));\n}\n",
         ),

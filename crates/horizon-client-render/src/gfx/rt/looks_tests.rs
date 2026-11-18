@@ -1,7 +1,7 @@
 //! A terrain hit's looks on a GPU with ray queries: blocks meshed with their quads' looks, written
 //! into the store as `ray_terrain_tests` writes them (either layout of the arena) with the look
 //! store beside it, and every quad traced on both its triangles through the scene's WGSL. The
-//! hit's tint, shade and AO match the material stage. Its face emission class stays the same
+//! hit's tint, shade and AO match the material stage. The hit's emission comes from the vertex
 //! regardless of the look binding. Needs prepared resources, like the mesher's geometry tests.
 
 use std::collections::BTreeSet;
@@ -71,7 +71,7 @@ pub(in crate::gfx) fn material(
     look: QuadLook,
     w: [f32; 4],
 ) -> [[f32; 4]; 3] {
-    let [x, y, z] = look.0;
+    let [x, y] = look.0;
     let code = (x >> 24) & 7;
     let blend = |f: &dyn Fn(usize) -> f32| (0..4).map(|i| f(i) * w[i]).sum::<f32>();
     let color = [0, 1, 2].map(|c| blend(&|i| byte(corners[i].color, c)));
@@ -89,7 +89,7 @@ pub(in crate::gfx) fn material(
     };
     let [r, g, b] = tint.map(decode);
     let [sr, sg, sb] = color.map(decode);
-    let emission = (z & 15) as f32 / 15.0;
+    let emission = (15 - (corners[0].color >> 28)) as f32 / 15.0;
     [
         [r, g, b, decode(shade)],
         [sr, sg, sb, decode(ao)],
@@ -330,7 +330,8 @@ fn tally(mesh: &SectionMesh, looks: &[QuadLook], rays: &[Ray], got: &[[[f32; 4];
             false => (&mesh.translucent, solid),
         };
         let near = |want: &[[f32; 4]; 3]| {
-            (0..2).all(|r| (0..4).all(|c| (got[r][c] - want[r][c]).abs() <= NEAR))
+            (got[2][0] - want[2][0]).abs() <= NEAR
+                && (0..2).all(|r| (0..4).all(|c| (got[r][c] - want[r][c]).abs() <= NEAR))
         };
         let found = (quads.as_chunks::<4>().0.iter().enumerate()).find_map(|(q, corners)| {
             let w = weights(corners, ray.point)?;
@@ -343,7 +344,7 @@ fn tally(mesh: &SectionMesh, looks: &[QuadLook], rays: &[Ray], got: &[[[f32; 4];
             continue;
         };
         t.agree += 1;
-        let [x, y, _] = look.0;
+        let [x, y] = look.0;
         let code = (x >> 24) & 7;
         t.codes.insert(code);
         t.tinted |= code != 0 && x & 0xff_ffff != 0xff_ffff;
@@ -479,7 +480,7 @@ fn the_look_store_grows_with_the_store_and_a_part_without_looks_reads_none() {
     // Two quads.
     let mut unpacker = Unpacker::new(&device, 8).unwrap();
     assert!(unpacker.set_looks(&device, true) && !unpacker.set_looks(&device, true));
-    let look = |n: u32| QuadLook([n, n + 1, n + 2]);
+    let look = |n: u32| QuadLook([n, n + 1]);
     let section = |looks: &[QuadLook]| {
         let mut s = crate::gfx::tests::section(looks.len().max(1) as u32, 0, None);
         s.ray_looks[0] = looks.into();

@@ -56,9 +56,9 @@ Put the pack folder (or its `.hshader`) in `shaderpacks/` beside `options.txt` (
 it on Options > Video Settings > Shaders > Shader Packs..., which lists Horizon's packs, marked (Horizon), beside packs in the
 `shaders/` format; one runs at a time, and clicking it again turns it off. `HORIZON_SHADER_PACK=<its folder or file
 name>` runs a pack whatever the page says, for development. `HORIZON_TERRAIN_LOOKS=1` makes terrain keep each quad's
-own tint, directional shade, ambient occlusion, face and light level beside its vertices while one of Horizon's packs
-runs, as a pack whose material or vertex stage reads `tint`, `shade`, `ao`, `face` or `emission` does, for the engine's
-own tests: they take half again the terrain's memory, and the world loads again when such a pack starts or stops. The game checks the pack first, and refuses one that
+own tint, directional shade, ambient occlusion and face beside its vertices while one of Horizon's packs
+runs, as a pack whose material or vertex stage reads `tint`, `shade`, `ao` or `face` does, for the engine's
+own tests: they take a third again the terrain's memory, and the world loads again when such a pack starts or stops. The game checks the pack first, and refuses one that
 fails, with its problems in the chat. While it runs, the game looks at the pack twice a second: save a file
 and the pack is checked and rebuilt in place ("Shader pack ... reloaded"); if the new version fails, the chat says
 where. A stage that fails keeps the last good version drawing; a manifest that is refused (another API line, a
@@ -245,8 +245,9 @@ let hit = trace(position * 0.99, direction, 64.0);   // hit.distance < 0.0: noth
 
 `trace` returns the nearest solid surface along a ray, with what the material stage would get for that point (`albedo`,
 `uv`, `material`, `tags`, `fluid`, `translucent`, `tangent`, and on a terrain hit `tint`, `shade` and `ao`)
-and its `position`, `normal`, `back` and `distance`. `light` excludes dynamic light, and terrain `emission` gives
-the face's brightness class. A pack that reads hit `tint`, `shade` or `ao` queues fresh meshes for loaded sections.
+and its `position`, `normal`, `back` and `distance`. `light` excludes dynamic light. Terrain `emission` comes
+from the vertex and gives the block's light level over 15. A pack that reads hit `tint`, `shade` or `ao` queues
+fresh meshes for loaded sections.
 `trace_any` only says whether something is in the way, which is all a shadow needs. Origins are camera-relative,
 as `view_position` gives them, and
 rays pass through the clear texels of leaves and plants, and through water, stained glass and ice, which are in a

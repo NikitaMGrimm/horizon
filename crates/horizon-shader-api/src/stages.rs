@@ -583,11 +583,10 @@ pub fn look_shade(name: &str) -> String {
 const RAY_LOOKS: &str = "\
 // One look a quad of `horizon_ray_store`, at its first corner's index over 4 (`mesher::QuadLook`):
 // the tint (bits 0-23) with the shade code (24-26, 0 where the quad has no look) and the face, the
-// four corners' ambient occlusion a byte each. The third word is shared with the arena's
-// record. Zero past the buffer.
+// four corners' ambient occlusion a byte each. Zero past the buffer.
 @group(3) @binding(81) var<storage, read> horizon_ray_looks: array<u32>;
 fn horizon_ray_look(quad: u32) -> vec2<u32> {
-    let first = quad * 3u;
+    let first = quad * 2u;
     if first + 1u >= arrayLength(&horizon_ray_looks) {
         return vec2<u32>(0u);
     }
@@ -922,18 +921,15 @@ fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, laye
         material = horizon_ray_layers[layer * 2u];
         tags = horizon_ray_layers[layer * 2u + 1u];
     }
-    // The colour's alpha byte, as the terrain reads it (mesher.rs's `fluid_face` and
-    // `emitting`): a fluid quad's high nibble is 8 + its face, every other quad's 0xF; the low
-    // nibble is 15 minus the face's HDR tier, codes above 4 the same tiers shining all over.
+    // The colour's alpha byte, as the terrain reads it (mesher.rs's `emitting` and `giving_off`):
+    // bit 3 clear on a fluid quad, the high nibble 15 minus the block's light level, so the
+    // byte 0xFF, which means nothing, gives level 0, as `MaterialInput.emission` reads it.
     let flags = horizon_ray_word(t.corners.x, 5u) >> 24u;
-    let high = flags >> 4u;
-    let fluid_quad = high >= 8u && (high & 7u) < 6u;
+    let fluid_quad = (flags & 8u) == 0u;
     // Water is in the translucent layer and lava in the solid one, as their passes draw them.
     let translucent = hit.instance_index >= horizon_ray_space.solid_instances;
     let fluid = select(0u, select(2u, 1u, translucent), fluid_quad);
-    let code = 15u - (flags & 15u);
-    let tier = select(code, code - 4u, code > 4u);
-    let emission = select(min(f32(tier) * 7.0 / 15.0, 1.0), 0.0, tier == 0u);
+    let emission = f32(15u - (flags >> 4u)) / 15.0;
 ?|    // The quad's look, read as the material stage reads it: the tint flat and apart from the
 ?|    // shade, the shade from its code, the corners' ambient occlusion blended over the triangle
 ?|    // and decoded once. Without a look, use the vertex colour, with shade and AO 1.

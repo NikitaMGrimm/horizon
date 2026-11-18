@@ -63,7 +63,7 @@ impl Scene {
             [-8.0, 8.0, z],
         ];
         // `TerrainVertex`: the position, the uv, the layer and the light, the colour.
-        // The colour's alpha carries brightness class 7/15.
+        // The colour's alpha carries light level 12 and HDR class 1.
         let words: Vec<u32> = (corners.iter())
             .flat_map(|p| {
                 [
@@ -72,7 +72,7 @@ impl Scene {
                     p[2].to_bits(),
                     0,
                     0x8000,
-                    0xfeff_ffff,
+                    0x3eff_ffff,
                 ]
             })
             .collect();
@@ -705,7 +705,7 @@ fn passes_that_name_the_entity_layer_trace_beside_kept_resources() {
 /// A post pass that reads a hit's looks, built by `NativePack::new`: its group binds the
 /// scene's look store, and a stand-in without one (a frame before the store is there), each
 /// frame as the scene has it. The white quad's tint and shade follow the look store. Its
-/// emission stays at brightness class 7/15, and an emission-only pack has no look binding.
+/// emission comes from the vertex, and an emission-only pack has no look binding.
 #[test]
 fn a_pack_that_reads_hit_looks_binds_the_scene_s_or_none() {
     let Some((_, device, queue)) = ray_device() else {
@@ -720,7 +720,7 @@ fn a_pack_that_reads_hit_looks_binds_the_scene_s_or_none() {
                      return vec4<f32>(h.tint.r, h.shade, h.emission, 1.0);\n}\n";
     let mut looking = pack(&device, &queue, &scene, manifest, &[("p.wgsl", shows_hit)]);
     assert!(looking.traces_looks());
-    let look = crate::mesher::QuadLook([1 << 24 | 0x40, !0, 12]);
+    let look = crate::mesher::QuadLook([1 << 24 | 0x40, !0]);
     let looks = wgpu::util::DeviceExt::create_buffer_init(
         &device,
         &wgpu::util::BufferInitDescriptor {
@@ -734,9 +734,9 @@ fn a_pack_that_reads_hit_looks_binds_the_scene_s_or_none() {
         looks,
         ..scene.traced()
     };
-    let none = [1.0, 1.0, 7.0 / 15.0];
+    let none = [1.0, 1.0, 12.0 / 15.0];
     let decode = |c: f32| c.powf(2.2);
-    let looked = [decode(64.0 / 255.0), decode(0.5), 7.0 / 15.0];
+    let looked = [decode(64.0 / 255.0), decode(0.5), 12.0 / 15.0];
     for (n, (traced, want)) in [
         (at(1, None), none),
         (at(2, Some(&looks)), looked),
@@ -759,7 +759,7 @@ fn a_pack_that_reads_hit_looks_binds_the_scene_s_or_none() {
     let mut plain = pack(&device, &queue, &scene, manifest, &[("p.wgsl", &plain)]);
     assert!(!plain.traces_looks());
     let got = frame((&device, &queue, &world), &mut plain, 1, Some(&at(1, None)));
-    assert!(shows(got, [7.0 / 15.0; 3]), "{got:?}");
+    assert!(shows(got, [12.0 / 15.0; 3]), "{got:?}");
 }
 
 /// A pack whose `[[before_world]]`, compute `[[post]]` and fragment post passes each read a
@@ -804,7 +804,7 @@ fn every_kind_of_pass_reads_a_hit_s_looks() {
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut pack = pack(&device, &queue, &scene, &manifest, &files);
     assert!(pack.traces_looks(), "the passes read hit looks");
-    let look = crate::mesher::QuadLook([1 << 24 | 0x40, !0, 12]);
+    let look = crate::mesher::QuadLook([1 << 24 | 0x40, !0]);
     let looks = wgpu::util::DeviceExt::create_buffer_init(
         &device,
         &wgpu::util::BufferInitDescriptor {
@@ -820,8 +820,8 @@ fn every_kind_of_pass_reads_a_hit_s_looks() {
     };
     let decode = |c: f32| c.powf(2.2);
     let (none, looked) = (
-        [1.0, 1.0, 7.0 / 15.0],
-        [decode(64.0 / 255.0), decode(0.5), 7.0 / 15.0],
+        [1.0, 1.0, 12.0 / 15.0],
+        [decode(64.0 / 255.0), decode(0.5), 12.0 / 15.0],
     );
     for (n, (traced, want)) in [
         (at(1, None), none),

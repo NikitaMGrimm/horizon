@@ -684,6 +684,8 @@ fn falling_block_visible(state: BlockStateId, cell: BlockStateId) -> bool {
 pub struct Resources {
     core: WorldCore,
     rest: std::sync::OnceLock<WorldRest>,
+    /// Immutable reach flags share the lifetime of these facts, including across a resource reload.
+    block_entity_reach: std::sync::OnceLock<Arc<[u8]>>,
 }
 
 struct WorldCore {
@@ -1714,17 +1716,8 @@ struct Game<'a> {
     upload_pace: upload_pace::UploadPace,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::JoinedFrusta>,
-    /// Whether the renderer's section-occlusion graph is active for this view.
-    entity_section_visibility_valid: bool,
-    /// The camera section in the current world layout.
-    entity_section_camera: Option<(i32, i32, i32)>,
-    sync_occlusion_culler: Option<horizon_client::voxel_occlusion::Culler>,
-    async_occlusion_culler: Option<Box<occlusion_culling::AsyncOcclusionCuller>>,
-    async_occlusion_culling_failed: bool,
+    occlusion: entity_culling::EntityOcclusion,
     async_particle_culler: RefCell<particle_culling::ParticleAsyncState>,
-    /// `Renderer::pack_shadow_casters` for this frame's entities: (keep what the culler hides,
-    /// build the player's model in first person); (false, false) without a shader pack.
-    pack_shadow_casters: (bool, bool),
     /// A scripted flight from the control socket (`fly`).
     flight: Option<control::Flight>,
     /// The running agent action from the control socket (game/runtime/agent/mod.rs).
@@ -5678,18 +5671,13 @@ impl Game<'_> {
             let view = self.view_frustum;
             // Beams and structure outlines reach far outside their block
             // (BlockEntityRenderer.shouldRenderOffScreen): never culled.
+            // Both flags are one byte per state, worked out once (`block_entity_reach`): a frame
+            // asks them of every block entity within 256 blocks.
+            let reach = block_entity_reach(&self.res);
             let off_screen = |state: u32| {
-                let name = &*self.res.facts().get(BlockStateId(state)).name;
-                matches!(
-                    name,
-                    "minecraft:beacon"
-                        | "minecraft:end_gateway"
-                        | "minecraft:structure_block"
-                        | "minecraft:test_instance_block"
-                )
-            };
-            let long_range = |state: u32| {
-                &*self.res.facts().get(BlockStateId(state)).name == "minecraft:end_gateway"
+                reach
+                    .get(state as usize)
+                    .is_some_and(|flags| flags & 1 != 0)
             };
             let in_view = |p: &[i32; 3]| {
                 view.is_none_or(|v| {
@@ -5704,8 +5692,7 @@ impl Game<'_> {
                     self.settings.chunk_fade,
                     camera,
                     view,
-                    &off_screen,
-                    long_range,
+                    Some(&reach),
                 )
                 .filter(|(block, section_inside)| {
                     let (pos, state) = **block;
@@ -5718,7 +5705,7 @@ impl Game<'_> {
             // in the view or not (`Renderer::shadow_pass_block_entities`, #8464): those the
             // view leaves out go in hidden from the camera.
             let shadow_only: Vec<&([i32; 3], u32)> =
-                if self.pack_ids.is_some() && self.pack_shadow_casters.0 {
+                if self.pack_ids.is_some() && self.occlusion.shadow_casters.0 {
                     let listed: HashSet<[i32; 3]> = camera_list.iter().map(|b| b.0).collect();
                     r.shadow_pass_block_entities(camera)
                         .filter(|(pos, state)| {
@@ -5743,7 +5730,7 @@ impl Game<'_> {
                 }
                 let name = &*self.res.facts().get(BlockStateId(state)).name;
                 if self.settings.horizon.entity_culling == EntityCullingMode::Off
-                    || self.pack_shadow_casters.0
+                    || self.occlusion.shadow_casters.0
                     || name == "minecraft:end_portal"
                     || name == "minecraft:end_gateway"
                     || hi.y - lo.y > 2.0
@@ -5826,13 +5813,7 @@ impl Game<'_> {
                     );
             } else {
                 let cache_candidates = r
-                    .visible_block_entities_in_frustum(
-                        self.settings.chunk_fade,
-                        camera,
-                        None,
-                        |_| false,
-                        |_| false,
-                    )
+                    .visible_block_entities_in_frustum(self.settings.chunk_fade, camera, None, None)
                     .filter(|(block, _)| self.live_block_entity_render(block.0, block.1))
                     .map(|(block, _)| block);
                 (
@@ -11038,13 +11019,8 @@ impl<'a> Game<'a> {
             tick_script: tick_script::TickScript::from_env(),
             agent: agent::Agent::default(),
             view_frustum: None,
-            entity_section_visibility_valid: false,
-            entity_section_camera: None,
-            sync_occlusion_culler: None,
-            async_occlusion_culler: None,
-            async_occlusion_culling_failed: false,
+            occlusion: Default::default(),
             async_particle_culler: RefCell::new(Default::default()),
-            pack_shadow_casters: (false, false),
             pending_uploads: Vec::new(),
             upload_pace: Default::default(),
             frame_graph: Default::default(),
@@ -11744,3 +11720,26 @@ mod sign_chain_tests;
 #[cfg(test)]
 #[path = "game/interface/tests/sign_use_tests.rs"]
 mod sign_use_tests;
+
+/// For each block state, whether its block entity draws off screen (1: beacons, end gateways,
+/// structure and test instance blocks, `BlockEntityRenderer.shouldRenderOffScreen`) and far
+/// (2: end gateways), by its name. Worked out once for these facts and reused while they live.
+fn block_entity_reach(resources: &Resources) -> Arc<[u8]> {
+    resources
+        .block_entity_reach
+        .get_or_init(|| {
+            resources
+                .facts()
+                .states
+                .iter()
+                .map(|state| match &*state.name {
+                    "minecraft:end_gateway" => 3,
+                    "minecraft:beacon"
+                    | "minecraft:structure_block"
+                    | "minecraft:test_instance_block" => 1,
+                    _ => 0,
+                })
+                .collect()
+        })
+        .clone()
+}

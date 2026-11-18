@@ -495,7 +495,7 @@ fn a_traced_material_reads_kept_resources() {
         .to_owned()
         + MATERIAL;
     let shade = 1 << 24;
-    let look = crate::mesher::QuadLook([shade, !0, 0]);
+    let look = crate::mesher::QuadLook([shade, !0]);
     let looks = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::bytes_of(&look),
@@ -512,7 +512,7 @@ fn a_traced_material_reads_kept_resources() {
         (
             false,
             "hit.distance + round(hit.emission * 15.0)",
-            [11.0, 13.0],
+            [16.0, 18.0],
         ),
     ] {
         let material = material.replace("RAY_VALUE", value);
