@@ -670,6 +670,52 @@ mod tests {
         assert_eq!(layers, vec![11, 12, 13]);
     }
 
+    /// A fluid side's look has the shade its colour has, the top's times the side's (0.72 and
+    /// 0.54 in the Nether), and so does a far tile's look of that side: a pack's `shade`
+    /// doesn't change where the far tiles begin.
+    #[test]
+    fn a_fluid_sides_look_has_the_far_tiles_shade() {
+        use horizon_assets::model::Direction as D;
+        let mut tables = super::super::part_tables_tests::tables(false);
+        let mut pad = Padded {
+            blocks: vec![0; super::super::P.pow(3)],
+            light: vec![0xF0; super::super::P.pow(3)],
+        };
+        pad.blocks[pi(0, 0, 0)] = 1;
+        for nether in [false, true] {
+            for kind in [FluidKind::Water, FluidKind::Lava] {
+                tables.info[1].fluid = FluidState::new(kind, 8, false);
+                let mut mesh = SectionMesh::default();
+                let keys = (nether, false, false, false, true);
+                tesselate(
+                    &tables,
+                    &PartTables::NONE,
+                    keys,
+                    &pad,
+                    0x3F76E4,
+                    &mut mesh,
+                    [0; 3],
+                );
+                let looks = [mesh.solid_looks, mesh.translucent_looks].concat();
+                for side in [D::North, D::South, D::West, D::East] {
+                    let far =
+                        crate::lod::far_look(1 + u8::from(nether), 0xFFFFFF, side, true, || 0);
+                    let shades: Vec<u32> = looks
+                        .iter()
+                        .filter(|l| l.0[0] >> 27 & 7 == side as u32)
+                        .map(|l| l.0[0] >> 24 & 7)
+                        .collect();
+                    assert!(!shades.is_empty(), "{kind:?} {side:?}");
+                    assert!(
+                        shades.iter().all(|&s| s == far[0] >> 24 & 7),
+                        "{kind:?} {side:?} nether {nether}: near {shades:?}, far {}",
+                        far[0] >> 24 & 7
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn atan2_follows_the_table_approximation() {
         for (y, x) in [
