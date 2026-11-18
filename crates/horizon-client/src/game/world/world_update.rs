@@ -138,8 +138,7 @@ impl Game<'_> {
         if let Some(source) = source {
             let lod = horizon_client::lod::Lod::new(source, self.worker_context());
             // Far tiles are never in the ray scene: the arenas' looks alone.
-            let looks = self.renderer.as_ref().is_some_and(|r| r.terrain_looks());
-            lod.set_looks(looks, self.streaming.nether_shading);
+            lod.set_looks(self.streaming.looks, self.streaming.nether_shading);
             self.lod = Some(lod);
             self.lod_observe.extend(self.world.chunks.keys().copied());
         }
@@ -161,7 +160,7 @@ impl Game<'_> {
             .is_some_and(Renderer::take_dropped_sections)
         {
             let r = self.renderer.as_ref();
-            self.streaming.looks = r.is_some_and(|r| r.mesh_looks());
+            self.streaming.looks = r.is_some_and(|r| r.terrain_looks());
             self.streaming.ray_looks = r.is_some_and(|r| r.ray_looks());
             self.clear_lod();
             self.all_sections_changed();
@@ -413,6 +412,10 @@ impl Game<'_> {
                 self.streaming.free(spent);
             }
             renderer.remove_columns(unloaded.iter().map(|c| (c.x, c.z)));
+            // Sections whose mesh the arena refused: meshed again, as an edit's section
+            // is, once their retry comes due. The mesh is dropped with the uploads above,
+            // so this is the only way back for them.
+            renderer.queue_upload_retries(&mut self.world.dirty_sections, now);
             // Meshes in the works are the view's terrain while it is new, then edits'.
             let meshing = self.streaming.busy() || !self.pending_uploads.is_empty();
             let sampling = self.lod.as_ref().is_some_and(|lod| lod.sampling());

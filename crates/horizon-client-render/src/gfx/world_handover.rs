@@ -53,6 +53,7 @@ impl Renderer {
             lod_pending,
             detail_columns,
             detail_revision,
+            upload_retries,
             block_entities,
             block_entity_section_revisions,
             block_entity_membership_revisions,
@@ -71,7 +72,7 @@ impl Renderer {
             looks_layout,
         );
         // Until the game gives this renderer its pack again (`world_held`).
-        self.world_held = from.native.is_some();
+        self.world_held = from.external.is_some();
         // The mesher makes the layout the sections are uploaded in.
         crate::mesher::packed::pack_quads(self.packed_quads);
         if let (Some(flat), Some(old)) = (&mut self.flat, &mut from.flat) {

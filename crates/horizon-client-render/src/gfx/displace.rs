@@ -5,11 +5,12 @@
 //!
 //! Each frame the solid quads of the sections around the camera are written out of the arena
 //! into one buffer as vertices (copied, or from the compact layout's records by ray tracing's
-//! unpacking, `ray_scene::unpack_page`), a compute pass picks the ones the grid draws (opaque, with relief, within
+//! unpacking, `rt::scene::unpack_page`), a compute pass picks the ones the grid draws (opaque, with relief, within
 //! the distance, facing the eye and in view) into an indirect draw, and the material's
 //! displaced pipeline draws one instance a quad.
 
-use super::surface_setup::ray_query::ray_scene::{RtJob, unpack_page, unpack_pipeline};
+use super::external::Near;
+use super::rt::scene::{RtJob, unpack_page, unpack_pipeline};
 use crate::mesher::TerrainVertex;
 
 /// The solid quads the grid can draw a frame, and the sections they come from.
@@ -405,18 +406,6 @@ struct Section {
 
 /// The looks a grid copies a frame: a section of vertices has one a vertex.
 const MAX_LOOKS: u64 = 4 * MAX_QUADS;
-
-/// A section the grid may draw from this frame: its arena page, the base vertex of its solid
-/// draws (`SectionGpu::solid_base`: in the compact layout past `PACKED_BASE`), its solid quads
-/// and its camera-relative origin, and its page's quad looks while a pack reads them
-/// (`Arena::looks`).
-pub struct Near<'a> {
-    pub buffer: &'a wgpu::Buffer,
-    pub looks: Option<&'a wgpu::Buffer>,
-    pub base: u32,
-    pub quads: u32,
-    pub origin: [f32; 3],
-}
 
 /// One list of picked quads and its indirect draw.
 pub struct Picks {

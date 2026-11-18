@@ -1144,11 +1144,8 @@ fn the_entity_layer_is_the_pack_s_that_names_it() {
     assert!(traced(&named).unwrap().stages[0].traces_entities());
 }
 
-/// A traced pack whose files don't name `RAY_ENTITY` composes as it did before the entity layer,
-/// byte for byte, with the scene and without it: the hashes are those of its post and material
-/// stages composed before, but for what changed for every pack since (the frame's fog fields,
-/// `history`, `RayHit`'s fields), and the scene builds' terrain hits, which read their quads'
-/// looks: its stages read `hit.tint` and `hit.emission`.
+/// Pin the post and material WGSL of a pack that reads `hit.tint` and `hit.emission` and leaves
+/// the entity layer off. The miss-only builds keep their old hashes; the scene builds add looks.
 #[test]
 fn a_traced_pack_that_doesn_t_name_ray_entity_composes_as_before() {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
@@ -1179,15 +1176,15 @@ fn a_traced_pack_that_doesn_t_name_ray_entity_composes_as_before() {
         hashes,
         [
             "1af2ec758e6f343986c676a7df695a1bf820ac9f498840422bbb8ef72df65cc4",
-            "c048c6f4532fc2377c66406fecbcd8732332c794cd3603ea14f7d2594cde2e76",
+            "2b2706674c6dc94fbe34f226497bb471838674ec890c6c50a2d0b6e03f956a4e",
             "e646501b8bcd9097579a8bcb14e11710439d85617dfc61b044bde4e0490c8681",
-            "2dbea0f33e2c51c82dd1a4e4d5160f91d406f2471d1a32f5c2a2409b14449583",
+            "52c92655779561cdabbf3a8052bbd7f0f1f1a7656def6cb7a2518499bc0d7172",
         ]
     );
 }
 
 /// The same pack with stages that read none of a terrain hit's look (`RayHit.tint`, `shade`,
-/// `ao`, `emission`) composes as before the scene kept looks, with the scene and without it.
+/// `ao`) composes as before the scene kept looks, with the scene and without it.
 #[test]
 fn a_traced_pack_that_reads_no_hit_look_composes_as_before() {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
@@ -1422,8 +1419,8 @@ fn shadow_color_and_ray_hits_leave_the_looks_off() {
 }
 
 /// The ray scene's store of terrain looks is a stage's whose code reads a hit's `tint`, `shade`,
-/// `ao` or `emission`, however: directly, through a copy, or in a helper of another file. A hit's
-/// `shaded_tint` (the vertex holds it) and a stage's own input's looks don't need it.
+/// or `ao`: directly, through a copy, or in a helper of another file. Hits get
+/// `shaded_tint` and `emission` from the vertex.
 #[test]
 fn a_hit_s_look_fields_bring_the_scene_s_looks() {
     let post = |body: &str| {
@@ -1434,8 +1431,8 @@ fn a_hit_s_look_fields_bring_the_scene_s_looks() {
         )
     };
     // Every pack has `lib.wgsl` beside its post pass, with `lit`.
-    let looked = "fn lit(h: RayHit) -> f32 { return h.ao + h.emission; }\n";
-    let plain = "fn lit(h: RayHit) -> f32 { return h.distance; }\n";
+    let looked = "fn lit(h: RayHit) -> f32 { return h.ao; }\n";
+    let plain = "fn lit(h: RayHit) -> f32 { return h.emission; }\n";
     let ray_looks = |text: &str, lib: &str| {
         let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
                         [[post]]\nfile = \"post.wgsl\"\nfiles = [\"lib.wgsl\"]\n\
@@ -1470,7 +1467,7 @@ fn a_hit_s_look_fields_bring_the_scene_s_looks() {
              return vec4<f32>(hits[u32(input.uv.x)].shade);",
         ),
         "var<private> kept: RayHit;\n".to_owned()
-            + &post("kept = hit;\n    return vec4<f32>(kept.emission);"),
+            + &post("kept = hit;\n    return vec4<f32>(kept.ao);"),
         "fn traced(p: vec3<f32>) -> RayHit { return trace(p, frame.sun_direction, 8.0); }\n"
             .to_owned()
             + &post(

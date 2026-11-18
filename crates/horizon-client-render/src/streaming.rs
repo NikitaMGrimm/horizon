@@ -630,7 +630,7 @@ pub struct Streaming {
     /// (`Mesher::shader_pack`).
     pub shader_pack: bool,
     /// A shader API 0.2 pack reads the terrain's own inputs: quads carry their looks
-    /// (`Mesher::looks`, `Renderer::mesh_looks`).
+    /// (`Mesher::looks`, `Renderer::terrain_looks`).
     pub looks: bool,
     /// The ray scene keeps them (`Renderer::ray_looks`): with `looks`, what meshes the world
     /// again when it changes.

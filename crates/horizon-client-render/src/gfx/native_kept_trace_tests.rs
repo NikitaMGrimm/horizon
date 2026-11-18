@@ -12,7 +12,7 @@ const HEAD: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi =
 const IDENTITY: &str = "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n";
 
 /// A device with ray queries, as the game opens one for a `[ray_tracing]` pack.
-fn ray_device() -> Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)> {
+pub(super) fn ray_device() -> Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)> {
     let instance = crate::gfx::test_gpu::instance();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
     let features = adapter.features() & wgpu::Features::EXPERIMENTAL_RAY_QUERY;
@@ -35,17 +35,17 @@ fn ray_device() -> Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)> {
 /// A scene: one quad of solid terrain, 16 blocks square at `z` in front of the camera, its
 /// layer marked as over opaque texels (bit 15) so a ray stops on it without reading a sprite,
 /// with its own `generation`.
-struct Scene {
+pub(super) struct Scene {
     generation: u64,
     tlas: wgpu::Tlas,
     store: wgpu::Buffer,
     _blas: wgpu::Blas,
-    sprites: Vec<wgpu::TextureView>,
+    pub(super) sprites: Vec<wgpu::TextureView>,
 }
 
 impl Scene {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, z: f32, generation: u64) -> Self {
-        use crate::gfx::surface_setup::ray_query::{blas_input, quad_indices};
+    pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue, z: f32, generation: u64) -> Self {
+        use crate::gfx::rt::query::{blas_input, quad_indices};
         let corners = [
             [-8.0, -8.0, z],
             [8.0, -8.0, z],
@@ -53,6 +53,7 @@ impl Scene {
             [-8.0, 8.0, z],
         ];
         // `TerrainVertex`: the position, the uv, the layer and the light, the colour.
+        // The colour's alpha carries brightness class 7/15.
         let words: Vec<u32> = (corners.iter())
             .flat_map(|p| {
                 [
@@ -61,7 +62,7 @@ impl Scene {
                     p[2].to_bits(),
                     0,
                     0x8000,
-                    !0,
+                    0xfeff_ffff,
                 ]
             })
             .collect();
@@ -146,7 +147,7 @@ impl Scene {
     }
 
     /// The scene as a frame traces it, the camera at the scene's origin.
-    fn traced(&self) -> Traced<'_> {
+    pub(super) fn traced(&self) -> Traced<'_> {
         Traced {
             tlas: &self.tlas,
             solid_instances: 1,
@@ -164,7 +165,7 @@ impl Scene {
 
 /// A pack of `manifest` (with the identity tone curve) and `files`, built by `NativePack::new`
 /// against `scene`'s sprites and installed.
-fn pack(
+pub(super) fn pack(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     scene: &Scene,
@@ -191,14 +192,14 @@ fn pack(
 
 /// The renderer's world (colour and depth) and screen, 4×4, kept across frames as the
 /// renderer keeps them: the chain's groups hold the world's views.
-struct World {
-    color: wgpu::TextureView,
-    depth: wgpu::TextureView,
-    screen: wgpu::Texture,
+pub(super) struct World {
+    pub(super) color: wgpu::TextureView,
+    pub(super) depth: wgpu::TextureView,
+    pub(super) screen: wgpu::Texture,
 }
 
 impl World {
-    fn new(device: &wgpu::Device) -> Self {
+    pub(super) fn new(device: &wgpu::Device) -> Self {
         let target = |format, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
@@ -621,7 +622,7 @@ impl EntityLayer {
 
     /// `scene` as a frame with this layer traces it.
     fn traced<'a>(&'a self, scene: &'a Scene) -> Traced<'a> {
-        use crate::gfx::surface_setup::ray_query::ray_scene::TracedEntities;
+        use crate::gfx::rt::scene::TracedEntities;
         Traced {
             entities: Some(TracedEntities {
                 vertices: self.vertices.as_entire_buffer_binding(),
@@ -639,7 +640,7 @@ impl EntityLayer {
 /// A pack whose `[[before_world]]`, compute and post passes trace with `RAY_ENTITY` in the mask
 /// and read `RayHit::entity`: every pass's layout has the entity layer's bindings beside its kept
 /// ones, compute and fragment alike, and each finds the terrain quad (not an entity), with no
-/// validation error. The layer's own hits are #16254's (`ray_entity_tests`), the same WGSL.
+/// validation error. The layer's own hits are #16254's (`rt/entity_tests.rs`), the same WGSL.
 #[test]
 fn passes_that_name_the_entity_layer_trace_beside_kept_resources() {
     let Some((_, device, queue)) = ray_device() else {
@@ -677,7 +678,10 @@ fn passes_that_name_the_entity_layer_trace_beside_kept_resources() {
     let world = World::new(&device);
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut pack = pack(&device, &queue, &scene, &manifest, &files);
-    assert!(pack.traces_entities(), "the passes read the entity layer");
+    assert!(
+        pack.capabilities().ray_entities,
+        "the passes read the entity layer"
+    );
     let traced = layer.traced(&scene);
     for n in 1..=2 {
         let got = frame((&device, &queue, &world), &mut pack, n, Some(&traced));
@@ -690,9 +694,8 @@ fn passes_that_name_the_entity_layer_trace_beside_kept_resources() {
 
 /// A post pass that reads a hit's looks, built by `NativePack::new`: its group binds the
 /// scene's look store, and a stand-in without one (a frame before the store is there), each
-/// frame as the scene has it. The white quad reads as without a look (`tint` 1, `shade` 1,
-/// `emission` 0), then as its look says (0x40 red, shade 0.5, light level 12), then without
-/// again, with no validation error. A pack that reads none has no look binding.
+/// frame as the scene has it. The white quad's tint and shade follow the look store. Its
+/// emission stays at brightness class 7/15, and an emission-only pack has no look binding.
 #[test]
 fn a_pack_that_reads_hit_looks_binds_the_scene_s_or_none() {
     let Some((_, device, queue)) = ray_device() else {
@@ -721,9 +724,9 @@ fn a_pack_that_reads_hit_looks_binds_the_scene_s_or_none() {
         looks,
         ..scene.traced()
     };
-    let none = [1.0, 1.0, 0.0];
+    let none = [1.0, 1.0, 7.0 / 15.0];
     let decode = |c: f32| c.powf(2.2);
-    let looked = [decode(64.0 / 255.0), decode(0.5), 0.8];
+    let looked = [decode(64.0 / 255.0), decode(0.5), 7.0 / 15.0];
     for (n, (traced, want)) in [
         (at(1, None), none),
         (at(2, Some(&looks)), looked),
@@ -742,12 +745,11 @@ fn a_pack_that_reads_hit_looks_binds_the_scene_s_or_none() {
     }
     let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
-    let plain = shows_hit.replace(
-        "h.tint.r, h.shade, h.emission",
-        "h.albedo.r, h.distance, 0.0",
-    );
-    let plain = pack(&device, &queue, &scene, manifest, &[("p.wgsl", &plain)]);
+    let plain = shows_hit.replace("h.tint.r, h.shade, h.emission", "vec3<f32>(h.emission)");
+    let mut plain = pack(&device, &queue, &scene, manifest, &[("p.wgsl", &plain)]);
     assert!(!plain.traces_looks());
+    let got = frame((&device, &queue, &world), &mut plain, 1, Some(&at(1, None)));
+    assert!(shows(got, [7.0 / 15.0; 3]), "{got:?}");
 }
 
 /// A pack whose `[[before_world]]`, compute `[[post]]` and fragment post passes each read a
@@ -807,7 +809,10 @@ fn every_kind_of_pass_reads_a_hit_s_looks() {
         ..scene.traced()
     };
     let decode = |c: f32| c.powf(2.2);
-    let (none, looked) = ([1.0, 1.0, 0.0], [decode(64.0 / 255.0), decode(0.5), 0.8]);
+    let (none, looked) = (
+        [1.0, 1.0, 7.0 / 15.0],
+        [decode(64.0 / 255.0), decode(0.5), 7.0 / 15.0],
+    );
     for (n, (traced, want)) in [
         (at(1, None), none),
         (at(2, Some(&looks)), looked),

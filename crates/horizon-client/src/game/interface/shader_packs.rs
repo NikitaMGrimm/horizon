@@ -336,11 +336,13 @@ impl Game<'_> {
         // meshes again once when the renderer's sections start or stop carrying them, and never
         // otherwise. So too when the ray scene starts or stops keeping them, its sections' copies
         // being made as they upload.
-        let looks =
-            (self.renderer.as_ref()).map_or((false, false), |r| (r.mesh_looks(), r.ray_looks()));
+        let looks = self
+            .renderer
+            .as_ref()
+            .map_or((false, false), |r| (r.terrain_looks(), r.ray_looks()));
         if (self.streaming.looks, self.streaming.ray_looks) != looks {
             log::info!(
-                "terrain meshes again: quad looks {}, ray scene looks {}",
+                "terrain meshes again: arena quad looks {}, ray scene looks {}",
                 looks.0,
                 looks.1
             );
