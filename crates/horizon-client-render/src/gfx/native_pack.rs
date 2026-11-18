@@ -1149,8 +1149,8 @@ file = \"material.wgsl\"
     /// The material stage's own `MaterialInput` of a quad with a look, drawn and read back,
     /// against the ray scene's oracle of it (`rt::scene::looks_tests::material`, which its GPU test
     /// holds a hit to): a pack that shows three of the fields draws what a pack showing the
-    /// oracle's values as constants draws, through the same wrapper and frame. Its corners share
-    /// one colour and one ambient occlusion, so every point has the same values.
+    /// oracle's values as constants draws, through the same wrapper and frame. The corners
+    /// have different ambient occlusion values, so the expected values vary by sample point.
     #[test]
     fn the_material_s_looks_are_the_ray_oracle_s() {
         use wgpu::util::DeviceExt;

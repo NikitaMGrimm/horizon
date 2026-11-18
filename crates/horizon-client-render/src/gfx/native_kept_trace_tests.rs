@@ -891,5 +891,8 @@ fn a_pass_that_skips_hit_looks_keeps_its_storage_buffer_budget() {
         ..scene.traced()
     };
     let got = frame((&device, &queue, &world), &mut pack, 1, Some(&traced));
-    assert!(shows(got, [0.5, 1.0, decode(64.0 / 255.0)]), "{got:?}");
+    assert!(
+        shows(got, [0.5, 1.0, (64.0_f32 / 255.0).powf(2.2)]),
+        "{got:?}"
+    );
 }

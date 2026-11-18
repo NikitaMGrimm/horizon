@@ -717,7 +717,8 @@ impl RayScene {
         // parts wanted or the camera's column change. A cut instance list would put parts on the
         // wrong side of `solid_instances`. The first frame needs no more than the first TLAS
         // holds (`BUILDS_PER_FRAME`), so it never keeps one that was never built.
-        let near = |part: &Part| within(&part.0, column, self.reach);
+        let reach = self.reach;
+        let near = |part: &Part| within(&part.0, column, reach);
         let entity_layer = self
             .entities
             .as_ref()
