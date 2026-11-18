@@ -914,12 +914,12 @@ impl RayScene {
         encoder: &mut wgpu::CommandEncoder,
         sections: &Resident<SectionGpu>,
         builds: &[Build<'_>],
-        stage: impl FnOnce(&[QuadLook]) -> Option<wgpu::Buffer>,
+        mut stage: impl FnMut(&[QuadLook]) -> Option<wgpu::Buffer>,
     ) {
         let Some(looks) = self.unpacker.looks.as_ref() else {
             return;
         };
-        let mut writes: Vec<_> = builds.iter().map(LookWrite::from).collect();
+        let mut retries = Vec::new();
         if !self.look_retries.is_empty() {
             // A dirty section's records may belong to a replacement mesh. Its normal build
             // will write the looks once the new geometry can take its slot.
@@ -931,7 +931,7 @@ impl RayScene {
                 .collect();
             self.look_retries.retain(|part| !pending.contains(part));
             let count = self.look_retries.len().min(self.look_retry_limit);
-            writes.extend(
+            retries.extend(
                 self.look_retries
                     .drain(..count)
                     .filter_map(|part @ (key, layer)| {
@@ -947,7 +947,13 @@ impl RayScene {
                     }),
             );
         }
-        if !write_looks(encoder, looks, &writes, stage) {
+        // Stage retries independently of fresh builds so a steady stream of new sections
+        // cannot keep a small retry from fitting.
+        let fresh: Vec<_> = builds.iter().map(LookWrite::from).collect();
+        for writes in [&retries[..], &fresh[..]] {
+            if write_looks(encoder, looks, writes, &mut stage) {
+                continue;
+            }
             let failed = writes
                 .iter()
                 .filter(|w| w.records().is_some())
@@ -958,7 +964,8 @@ impl RayScene {
             self.look_retries.extend(failed);
             let count = self.look_retries.len() - before;
             self.look_retry_limit = self.look_retry_limit.min((count / 2).max(1));
-        } else if self.look_retries.is_empty() {
+        }
+        if self.look_retries.is_empty() {
             self.look_retry_limit = BUILDS_PER_FRAME;
         }
     }

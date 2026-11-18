@@ -580,11 +580,25 @@ fn a_refused_staging_batch_retries_smaller_parts_in_turn() {
         );
         part
     });
+    let key = (3, 0, 0);
+    let part = (key, Layer::Solid);
+    let mut section = crate::gfx::tests::section(1, 0, None);
+    section.ray_looks[0] = vec![QuadLook([3, 4])].into();
+    sections.insert(key, section);
+    let (size, blas) = new_blas(&device, 1).unwrap();
+    let builds = [Build {
+        part,
+        s: sections.find(key).unwrap(),
+        quads: 1,
+        size,
+        blas,
+        first: scene.slots.alloc(part, 4, |_| false).unwrap(),
+    }];
     scene.look_retries.extend(parts);
     let mut sizes = Vec::new();
     for _ in 0..4 {
         let mut encoder = device.create_command_encoder(&Default::default());
-        scene.upload_looks(&mut encoder, &sections, &[], |records| {
+        scene.upload_looks(&mut encoder, &sections, &builds, |records| {
             sizes.push(records.len());
             (records.len() == 1)
                 .then(|| stage_looks(&device, records))
@@ -592,11 +606,11 @@ fn a_refused_staging_batch_retries_smaller_parts_in_turn() {
         });
         queue.submit([encoder.finish()]);
     }
-    assert_eq!(sizes, [4, 2, 1, 1]);
+    assert_eq!(sizes, [4, 1, 2, 1, 1, 1, 1, 1]);
     assert_eq!(scene.look_retries, [parts[0]]);
 
     let mut encoder = device.create_command_encoder(&Default::default());
-    scene.upload_looks(&mut encoder, &sections, &[], |records| {
+    scene.upload_looks(&mut encoder, &sections, &builds, |records| {
         stage_looks(&device, records)
     });
     queue.submit([encoder.finish()]);
