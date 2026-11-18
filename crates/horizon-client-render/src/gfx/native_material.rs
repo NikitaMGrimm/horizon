@@ -1363,6 +1363,7 @@ mod tests {
         );
         let source = stage.source.clone() + crate::gfx::looks::NO_LOOK_WGSL;
         let source = shader_source(&source, &[], &[], (false, false, false), false) + &entries;
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let mut tested = Vec::new();
         for adapter in pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all())) {

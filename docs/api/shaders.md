@@ -258,8 +258,9 @@ with `tint`, `shade` and `ao` apart; `[material] fog = false` becomes `[frame] f
 `fog_end` become `fog_environment` and `fog_render`; the post stage's `history` becomes a
 `[[resource]]` with `keep = "view"` that a pass writes as its `output` and reads as `<name>_previous` next frame; and
 `EntityInput.emission` is `full_light`. A terrain hit's `emission` is the block's light level over 15 from
-2026-11-18, as `input.emission`, no longer its brightness class. `shaded_tint` and `MaterialInput.emission` cost
-nothing; reading `tint`, `shade`, `ao` or `face` makes the world load again when the pack starts and terrain take a third again its memory.
+2026-11-18, as `input.emission`, no longer its brightness class. `shaded_tint` and `MaterialInput.emission` take no
+look storage, and reading them triggers no remesh (a pack's LabPBR maps still can, the first time one starts); reading `tint`, `shade`, `ao` or `face` makes the world
+load again when the pack starts and terrain take a third again its memory.
 
 ## Testing a pack frame by frame
 
