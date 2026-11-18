@@ -268,7 +268,7 @@ fn terrain_source_cpu_multipart_and_waterlogged_faces_keep_their_owner() {
     assert!(native.solid_sources.is_empty() && native.translucent_sources.is_empty());
     for q in native.solid.as_chunks::<4>().0.iter() {
         let q = q.map(|v| TerrainVertex {
-            color: crate::mesher::for_shaders_format(v.color),
+            color: crate::mesher::for_shaders_format(v.color, None),
             ..v
         });
         assert!(

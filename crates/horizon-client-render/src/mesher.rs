@@ -276,6 +276,25 @@ mod vertex_tests {
         assert_eq!(lava, 0x0156_3412);
         assert_eq!(giving_off(emitting(lava, LOW), 3), 0xCE56_3412);
     }
+    /// A `shaders/` pack gets main's bytes from before 6c: `emitting`'s alone off a fluid, and
+    /// main's `fluid_face` on one (8 plus the face in the high nibble), whatever level and fluid
+    /// flag 6c put in.
+    #[test]
+    fn a_shaders_format_pack_gets_mains_bytes() {
+        use super::{INCANDESCENT, as_fluid, emitting, for_shaders_format, giving_off};
+        let rgb = super::pack_rgb([0x12, 0x34, 0x56]);
+        for level in [0, 3, 14, 15] {
+            let lit = giving_off(emitting(rgb, INCANDESCENT), level);
+            for color in [lit, as_fluid(lit)] {
+                assert_eq!(for_shaders_format(color, None), 0xFD56_3412);
+                // Main's `fluid_faces_keep_the_colour_and_the_emission`.
+                assert_eq!(for_shaders_format(color, Some(0)), 0x8D56_3412);
+                assert_eq!(for_shaders_format(color, Some(5)), 0xDD56_3412);
+                assert_eq!(for_shaders_format(color, Some(1)), 0x9D56_3412);
+            }
+        }
+        assert_eq!(for_shaders_format(rgb, None), rgb);
+    }
     #[test]
     fn light_sources_shine_by_kind_not_light_level() {
         use super::{BRIGHT, INCANDESCENT, LOW, WHOLE, hdr_tier};
@@ -1720,12 +1739,20 @@ pub fn giving_off(color: u32, level: u8) -> u32 {
 pub fn as_fluid(color: u32) -> u32 {
     color & !FLUID_BIT
 }
-/// `color` as a `shaders/` pack takes it (`Mesher::shader_pack`): that path reads the alpha byte
-/// as it was before the light level and the fluid flag were in it, the HDR tier from its low four
-/// bits and, with `separateAo`, a far tile's whole byte as occlusion. So the byte is `emitting`'s
-/// alone: no level (bits 4..7 set) and no fluid flag (bit 3 set).
-pub fn for_shaders_format(color: u32) -> u32 {
-    color | LEVEL_BITS | FLUID_BIT
+/// `color` as a `shaders/` pack takes it (`Mesher::shader_pack`): the alpha byte as it was before
+/// the light level and the fluid flag were in it, since that path reads the HDR tier from its low
+/// four bits and, with `separateAo`, a far tile's whole byte as occlusion. The low nibble is
+/// `emitting`'s; the high one 0xF, or on a fluid quad of face `fluid_face` (`Direction` as
+/// usize) 8 plus that face.
+pub fn for_shaders_format(color: u32, fluid_face: Option<usize>) -> u32 {
+    let color = color | FLUID_BIT;
+    match fluid_face {
+        None => color | LEVEL_BITS,
+        Some(face) => {
+            debug_assert!(face < 6);
+            color & !LEVEL_BITS | (8 | face as u32) << 28
+        }
+    }
 }
 /// The HDR tier of block `name` (no namespace), which emits light `level`.
 pub fn hdr_tier(name: &str, level: u8) -> u8 {
@@ -2157,7 +2184,7 @@ pub struct Mesher<'a> {
     pub separate_ao: bool,
     /// A `shaders/` pack draws the terrain (with or without its `oldLighting`): fluid tops are
     /// split into triangles as Iris splits them (`fluid::splits_north_east`), and the vertex
-    /// alpha holds no light level or fluid flag (`for_shaders_format`).
+    /// alpha is the byte from before the light level and the fluid flag (`for_shaders_format`).
     pub shader_pack: bool,
     /// A shader API 0.2 pack reads the terrain's own inputs (`tint`, `shade`, `ao`, `face`,
     /// `emission`): each quad gets its `QuadLook`.
@@ -2578,7 +2605,7 @@ impl Mesher<'_> {
                 let ao_byte = (ao_factor[i] * 255.0).round().clamp(0.0, 255.0) as u32;
                 ao_byte << 24 | (pack_rgb(rgb) & 0x00FF_FFFF)
             } else if self.shader_pack {
-                for_shaders_format(emitting(pack_rgb(rgb), tier))
+                for_shaders_format(emitting(pack_rgb(rgb), tier), None)
             } else {
                 giving_off(emitting(pack_rgb(rgb), tier), state.emission)
             };

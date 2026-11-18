@@ -4449,10 +4449,12 @@ mod tests {
                 bytes(&meshes[1].translucent),
                 "{name}"
             );
-            // A `shaders/` pack's far faces have the alpha from before the level and the fluid
-            // flag: the same faces, the tier alone in the byte (`mesher::for_shaders_format`).
+            // A `shaders/` pack's far faces have main's alpha from before the level and the fluid
+            // flag: the same faces, the tier in the low nibble and 0xF in the high one, or on a
+            // fluid 8 plus the face (main's `fluid_face`; with looks, for each quad's face).
             let mut mesher = mesh::Mesher::default();
             mesher.shader_pack = true;
+            mesher.looks = 1;
             let old = mesher.mesh(
                 TileKey {
                     x: 0,
@@ -4466,15 +4468,30 @@ mod tests {
                 &std::array::from_fn(|_| Vec::new()),
                 &[],
             );
-            let now = meshes[0].solid.iter().chain(&meshes[0].translucent);
-            let then: Vec<&TerrainVertex> = old.solid.iter().chain(&old.translucent).collect();
-            assert_eq!(now.clone().count(), then.len(), "{name}");
-            for (now, then) in now.zip(then) {
-                let want = TerrainVertex {
-                    color: now.color | 0xF800_0000,
-                    ..*now
-                };
-                assert_eq!(bytes(&[want]), bytes(&[*then]), "{name} {properties:?}");
+            let fluid = name.ends_with("lava") || name.ends_with("water");
+            let quads = |m: &crate::mesher::SectionMesh| -> Vec<([TerrainVertex; 4], u32)> {
+                let solid = m.solid.as_chunks::<4>().0.iter().zip(&m.solid_looks);
+                let translucent = m.translucent.as_chunks::<4>().0.iter();
+                solid
+                    .chain(translucent.zip(&m.translucent_looks))
+                    .map(|(q, l)| (*q, l.0[0] >> 27 & 7))
+                    .collect()
+            };
+            let (now, then) = (quads(&meshes[1]), quads(&old));
+            assert_eq!(now.len(), then.len(), "{name}");
+            for ((now, _), (then, face)) in now.into_iter().zip(then) {
+                let want = now.map(|v| TerrainVertex {
+                    color: match fluid {
+                        false => v.color | 0xF800_0000,
+                        true => v.color & 0x07FF_FFFF | (0x8 | face) << 28 | 0x0800_0000,
+                    },
+                    ..v
+                });
+                assert_eq!(
+                    bytes(&want),
+                    bytes(&then),
+                    "{name} {properties:?}, face {face}"
+                );
             }
         }
         Ok(())

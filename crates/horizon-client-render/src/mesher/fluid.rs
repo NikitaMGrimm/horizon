@@ -392,7 +392,7 @@ pub(super) fn tesselate(
         let color = if separate_ao {
             color
         } else if shader_pack {
-            crate::mesher::for_shaders_format(color)
+            crate::mesher::for_shaders_format(color, Some(face))
         } else {
             as_fluid(color)
         };
@@ -718,8 +718,9 @@ mod tests {
         }
     }
 
-    /// With a `shaders/` pack, a fluid's alpha is the byte from before the light level and the
-    /// fluid flag (the tier's `15 - code` in the low four bits, the high four set); else 6c's.
+    /// With a `shaders/` pack, a fluid's alpha is main's byte from before the light level and the
+    /// fluid flag: the tier's `15 - code` in the low four bits, 8 plus the quad's face in the high
+    /// four (`fluid_face`); else 6c's.
     #[test]
     fn a_fluids_alpha_is_the_old_byte_for_a_shaders_format_pack() {
         let mut tables = super::super::part_tables_tests::tables(false);
@@ -736,7 +737,8 @@ mod tests {
             let old = crate::mesher::emitting(0, tier) >> 24 | 0xF0;
             for shader_pack in [false, true] {
                 let mut mesh = SectionMesh::default();
-                let keys = (false, false, false, shader_pack, false);
+                // With looks, for each quad's face; the vertices are the same without.
+                let keys = (false, false, false, shader_pack, true);
                 tesselate(
                     &tables,
                     &PartTables::NONE,
@@ -746,21 +748,32 @@ mod tests {
                     &mut mesh,
                     [0; 3],
                 );
-                let want = if shader_pack {
-                    old
-                } else {
-                    (15 - level) << 4 | old & 0x7
-                };
-                let alphas: Vec<u32> = [mesh.solid, mesh.translucent]
-                    .concat()
-                    .iter()
-                    .map(|v| v.color >> 24)
-                    .collect();
-                assert!(!alphas.is_empty(), "{kind:?}");
-                assert!(
-                    alphas.iter().all(|&a| a == want),
-                    "{kind:?} shader pack {shader_pack}: {alphas:x?}, want {want:x}"
+                let quads = (mesh.solid.as_chunks::<4>().0.iter().zip(&mesh.solid_looks)).chain(
+                    mesh.translucent
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(&mesh.translucent_looks),
                 );
+                let mut faces = Vec::new();
+                for (quad, look) in quads {
+                    let face = look.0[0] >> 27 & 7;
+                    faces.push(face);
+                    // Main's `fluid_face(emitting(rgb, tier), face)`.
+                    let want = if shader_pack {
+                        0x80 | face << 4 | old & 0xF
+                    } else {
+                        (15 - level) << 4 | old & 0x7
+                    };
+                    let alphas = quad.map(|v| v.color >> 24);
+                    assert!(
+                        alphas.iter().all(|&a| a == want),
+                        "{kind:?} shader pack {shader_pack}, face {face}: {alphas:x?}, want {want:x}"
+                    );
+                }
+                faces.sort_unstable();
+                faces.dedup();
+                assert_eq!(faces, [0, 1, 2, 3, 4, 5], "{kind:?}");
             }
         }
     }

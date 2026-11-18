@@ -262,7 +262,10 @@ impl Mesher {
                         level(),
                     );
                     let color = if self.shader_pack {
-                        crate::mesher::for_shaders_format(color)
+                        crate::mesher::for_shaders_format(
+                            color,
+                            fluid.then_some(direction as usize),
+                        )
                     } else if fluid {
                         as_fluid(color)
                     } else {

@@ -251,9 +251,9 @@ fn emission_is_the_blocks_light_level() {
     );
 }
 
-/// With a `shaders/` pack the vertex alpha is the byte from before the light level and the fluid
-/// flag, as that path reads it: the HDR tier's `15 - code` in the low four bits and the high four
-/// set, a glowstone's and lava's as a stone's and water's; without one, 6c's byte.
+/// With a `shaders/` pack the vertex alpha is main's byte from before the light level and the fluid
+/// flag, as that path reads it: the HDR tier's `15 - code` in the low four bits, and in the high
+/// four 0xF, or on a fluid 8 plus the quad's face (`fluid_face`); without one, 6c's byte.
 #[test]
 #[ignore = "daily"]
 fn a_shaders_format_pack_gets_the_alpha_from_before_the_light_level() {
@@ -272,12 +272,13 @@ fn a_shaders_format_pack_gets_the_alpha_from_before_the_light_level() {
     }
     let y = (BASE - MIN_Y) as f32;
     for shader_pack in [false, true] {
-        let mesh = mesh_for(&f, &chunk, (false, false, shader_pack));
+        // With looks, for each quad's face; the vertices are the same without.
+        let mesh = mesh_for(&f, &chunk, (true, false, shader_pack));
         for (i, &(name, tier, level, fluid)) in blocks.iter().enumerate() {
             let (x, z) = place(i);
             let (x, z) = (x as f32, z as f32);
-            let alphas: Vec<u32> = all_quads(&mesh)
-                .filter(|q| {
+            let alphas: Vec<(u32, u32)> = quads(&mesh)
+                .filter(|(q, _)| {
                     let c = q.iter().fold([0.0; 3], |c, v| {
                         [
                             c[0] + v.pos[0] / 4.0,
@@ -289,19 +290,19 @@ fn a_shaders_format_pack_gets_the_alpha_from_before_the_light_level() {
                         && (y - 0.01..y + 1.01).contains(&c[1])
                         && (z - 0.01..z + 1.01).contains(&c[2])
                 })
-                .flatten()
-                .map(|v| v.color >> 24)
+                .flat_map(|(q, l)| q.map(|v| (l.0[0] >> 27 & 7, v.color >> 24)))
                 .collect();
             let old = emitting(0, tier) >> 24 | 0xF0;
-            let want = if shader_pack {
-                old
-            } else {
-                (15 - level) << 4 | u32::from(!fluid) << 3 | old & 7
+            let want = |face: u32| match (shader_pack, fluid) {
+                (true, false) => old,
+                // Main's `fluid_face`.
+                (true, true) => 0x80 | face << 4 | old & 0xF,
+                (false, _) => (15 - level) << 4 | u32::from(!fluid) << 3 | old & 7,
             };
             assert!(!alphas.is_empty(), "{name} has no quads");
             assert!(
-                alphas.iter().all(|&a| a == want),
-                "{name}, shader pack {shader_pack}: {alphas:x?}, not {want:x}"
+                alphas.iter().all(|&(face, a)| a == want(face)),
+                "{name}, shader pack {shader_pack}: {alphas:x?}"
             );
         }
     }
