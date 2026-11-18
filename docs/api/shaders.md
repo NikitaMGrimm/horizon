@@ -297,10 +297,11 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 - 2026-11-18: API 0.2 (preview), a fix toward the reference: a terrain hit's `RayHit.emission` is its block's light
   level over 15, as `MaterialInput.emission` (one candle 3/15, a lantern 1), no longer its brightness class (7/15,
-  14/15 or 1); an entity hit's stays 0. `MaterialInput.emission` comes with the vertex, as `shaded_tint` does: only
-  `tint`, `shade`, `ao` and `face` make the world load again when a pack starts and need a vertex stage that reads
-  storage buffers, so a pack that reads `emission` and none of them pays none of it, and terrain takes a third again
-  its memory for them, not half. No WGSL name changes.
+  14/15 or 1); an entity hit's stays 0. `MaterialInput.emission` comes with the vertex, as `shaded_tint` does: of
+  the terrain's inputs only `tint`, `shade`, `ao` and `face` turn on terrain look storage, which can make the world
+  load again when a pack starts and needs a vertex stage that reads storage buffers. A pack that reads `emission` and
+  none of them pays none of that, and terrain takes a third again its memory for them, not half. No WGSL name
+  changes.
 - 2026-11-18: API 0.2 is final (preview): #17834 was the last change that breaks a 0.2 pack. A breaking change now
   starts 0.3, after a deprecation. No WGSL or manifest change.
 - 2026-11-17: API 0.2 (experimental, #18023): an R-relative kept texture takes its two versions at their size of the

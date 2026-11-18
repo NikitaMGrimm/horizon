@@ -198,6 +198,14 @@ impl super::Renderer {
             arena.limit_looks(slots);
         }
     }
+    /// A device whose largest storage binding takes a whole page's looks: no arena's pages
+    /// change their limit when looks turn on (`Arena::set_looks` holds).
+    pub fn lift_look_limits(&mut self) {
+        self.arena.limit_looks(u64::MAX);
+        if let Some(arena) = &mut self.translucent_arena {
+            arena.limit_looks(u64::MAX);
+        }
+    }
     /// Section `key`'s looks, solid then translucent, read back from its arenas, beside its
     /// mesh's as handed over (`keep_capture_copies` on before it was uploaded), and whether
     /// translucent quads have an arena of their own.

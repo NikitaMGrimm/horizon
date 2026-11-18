@@ -85,6 +85,9 @@ pub(super) struct Mesher {
     /// Whether quads get their looks (`crate::mesher::QuadLook`), as the section mesher's
     /// `looks`: 0 not, 1 with the Overworld's face shades, 2 with the Nether's.
     pub(super) looks: u8,
+    /// A `shaders/` pack draws the terrain: the vertex alpha as the section mesher's
+    /// `shader_pack` gives it (`crate::mesher::for_shaders_format`).
+    pub(super) shader_pack: bool,
 }
 impl Mesher {
     pub(super) fn mesh(
@@ -248,19 +251,28 @@ impl Mesher {
                     // The colour keeps the Overworld's shades in every dimension; a shader pack's
                     // `shade` is the dimension's.
                     let level = || context.tables.facts(span.state).map_or(0, |f| f.emission);
+                    // The HDR tier and light level, as the section mesher writes them, so a light
+                    // source keeps shining across the LOD boundary; and the same fluid flag, so the
+                    // material stage's water reaches the distant tiles too.
+                    let color = crate::mesher::giving_off(
+                        crate::mesher::emitting(
+                            channel(16) | channel(8) << 8 | channel(0) << 16 | 0xff000000,
+                            context.tables.hdr_tier(span.state),
+                        ),
+                        level(),
+                    );
+                    let color = if self.shader_pack {
+                        crate::mesher::for_shaders_format(color)
+                    } else if fluid {
+                        as_fluid(color)
+                    } else {
+                        color
+                    };
                     Paint {
                         look: L::make(|| far_look(looks, rgb, direction, fluid)),
                         layer: face.layer,
                         light: span.light,
-                        // The HDR tier and light level, as the section mesher writes them, so
-                        // a light source keeps shining across the LOD boundary.
-                        color: crate::mesher::giving_off(
-                            crate::mesher::emitting(
-                                channel(16) | channel(8) << 8 | channel(0) << 16 | 0xff000000,
-                                context.tables.hdr_tier(span.state),
-                            ),
-                            level(),
-                        ),
+                        color,
                         translucent: face.translucent,
                     }
                 })
@@ -335,20 +347,13 @@ fn add_face<L: Look>(
 ) {
     for (overlay, paint) in material.faces.into_iter().enumerate() {
         let Some(paint) = paint else { continue };
-        // The same fluid flag the section mesher sets, so the material stage's water
-        // reaches the distant tiles too and the LOD boundary keeps one look.
-        let color = if material.fluid != 0 {
-            as_fluid(paint.color)
-        } else {
-            paint.color
-        };
         let key = FaceKey {
             direction,
             plane: plane.to_bits(),
             overlay: overlay as u8,
             layer: paint.layer,
             light: paint.light,
-            color,
+            color: paint.color,
             translucent: paint.translucent,
         };
         faces.entry((key, paint.look)).or_default().push(rect);
@@ -1525,18 +1530,21 @@ mod tests {
                 })
                 .collect::<FxHashMap<(i32, i32), u32>>()
         };
-        // Unlit, the top merges; lit, every cell is its own face, with its own level, and
-        // no two neighbours share one.
-        assert!(tops(&mesh([0, 0])).len() < CELLS * CELLS);
+        // Both states at one level, unlit or lit, the top merges and keeps that level; at two,
+        // every cell is its own face with its own state's: state 3's (x + z even) 12, state 1's 0.
+        for level in [0, 5] {
+            let alike = tops(&mesh([level, level]));
+            assert!(alike.len() < CELLS * CELLS, "{level}: {alike:?}");
+            assert!(
+                alike.values().all(|&l| l == u32::from(level)),
+                "{level}: {alike:?}"
+            );
+        }
         let lit = tops(&mesh([0, 12]));
         assert_eq!(lit.len(), CELLS * CELLS, "{lit:?}");
         for (&(x, z), &level) in &lit {
-            assert!(level == 0 || level == 12, "{level}");
-            for next in [(x + 1, z), (x, z + 1)] {
-                if let Some(&other) = lit.get(&next) {
-                    assert_ne!(level, other, "{:?} and {next:?}", (x, z));
-                }
-            }
+            let want = if (x + z) % 2 == 0 { 12 } else { 0 };
+            assert_eq!(level, want, "cell {:?}", (x, z));
         }
     }
     /// A far tile's looks: each face's look gives back its vertex colour (the Overworld's

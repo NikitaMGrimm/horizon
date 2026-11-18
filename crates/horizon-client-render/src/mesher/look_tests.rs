@@ -12,12 +12,21 @@ fn mesh(f: &Fixture, chunk: &Chunk, looks: bool) -> SectionMesh {
 }
 
 fn mesh_in(f: &Fixture, chunk: &Chunk, looks: bool, nether: bool) -> SectionMesh {
+    mesh_for(f, chunk, (looks, nether, false))
+}
+
+/// `mesh_in`, and whether a `shaders/` pack draws the terrain (`Mesher::shader_pack`).
+fn mesh_for(
+    f: &Fixture,
+    chunk: &Chunk,
+    (looks, nether, shader_pack): (bool, bool, bool),
+) -> SectionMesh {
     let region = [[Some(chunk); 3]; 3];
     let mut mesher = Mesher {
         nether_shading: nether,
         shader_pack_lighting: false,
         separate_ao: false,
-        shader_pack: false,
+        shader_pack,
         looks,
         assets: &f.assets,
         render: &f.render,
@@ -242,6 +251,62 @@ fn emission_is_the_blocks_light_level() {
     );
 }
 
+/// With a `shaders/` pack the vertex alpha is the byte from before the light level and the fluid
+/// flag, as that path reads it: the HDR tier's `15 - code` in the low four bits and the high four
+/// set, a glowstone's and lava's as a stone's and water's; without one, 6c's byte.
+#[test]
+#[ignore = "daily"]
+fn a_shaders_format_pack_gets_the_alpha_from_before_the_light_level() {
+    let f = fixture();
+    // (block, its HDR tier, its light level, a fluid)
+    let blocks = [
+        ("glowstone", hdr_tier("glowstone", 15), 15, false),
+        ("lava", hdr_tier("lava", 15), 15, true),
+        ("water", 0, 0, true),
+        ("stone", 0, 0, false),
+    ];
+    let mut chunk = Chunk::empty(0, 0);
+    for (i, (name, ..)) in blocks.iter().enumerate() {
+        let (x, z) = place(i);
+        chunk.set(x, BASE, z, state(&f, &format!("minecraft:{name}"), &[]));
+    }
+    let y = (BASE - MIN_Y) as f32;
+    for shader_pack in [false, true] {
+        let mesh = mesh_for(&f, &chunk, (false, false, shader_pack));
+        for (i, &(name, tier, level, fluid)) in blocks.iter().enumerate() {
+            let (x, z) = place(i);
+            let (x, z) = (x as f32, z as f32);
+            let alphas: Vec<u32> = all_quads(&mesh)
+                .filter(|q| {
+                    let c = q.iter().fold([0.0; 3], |c, v| {
+                        [
+                            c[0] + v.pos[0] / 4.0,
+                            c[1] + v.pos[1] / 4.0,
+                            c[2] + v.pos[2] / 4.0,
+                        ]
+                    });
+                    (x - 0.01..x + 1.01).contains(&c[0])
+                        && (y - 0.01..y + 1.01).contains(&c[1])
+                        && (z - 0.01..z + 1.01).contains(&c[2])
+                })
+                .flatten()
+                .map(|v| v.color >> 24)
+                .collect();
+            let old = emitting(0, tier) >> 24 | 0xF0;
+            let want = if shader_pack {
+                old
+            } else {
+                (15 - level) << 4 | u32::from(!fluid) << 3 | old & 7
+            };
+            assert!(!alphas.is_empty(), "{name} has no quads");
+            assert!(
+                alphas.iter().all(|&a| a == want),
+                "{name}, shader pack {shader_pack}: {alphas:x?}, not {want:x}"
+            );
+        }
+    }
+}
+
 /// `shade` is the shade the mesher gave the quad, not one of its normal: a torch's element
 /// takes the top's shade on every face (`shade_direction_override`), a lantern's body is
 /// shaded by face and its handle as the top, and a comparator holds both kinds and a torch
@@ -289,9 +354,9 @@ fn shade_is_the_shade_the_quad_was_given() {
 }
 
 /// `blocks` (each its name and place in the section) alone in the world's lowest section,
-/// meshed and sorted as a shader pack's terrain is, and its solid quads' compact records (as
-/// the arena holds them while every pass reads that layout): what the ray scene unpacks and
-/// traces (`gfx/rt/terrain_tests.rs`).
+/// meshed and sorted as a native pack's terrain is (rays run only under one), and its solid
+/// quads' compact records (as the arena holds them while every pass reads that layout): what
+/// the ray scene unpacks and traces (`gfx/rt/terrain_tests.rs`).
 pub(crate) fn meshed_alone(blocks: &[(&str, [i32; 3])]) -> (SectionMesh, Vec<[u32; 6]>) {
     let states: Vec<_> = blocks
         .iter()
@@ -314,7 +379,7 @@ pub(crate) fn meshed_alone_states(
         nether_shading: false,
         shader_pack_lighting: false,
         separate_ao: false,
-        shader_pack: true,
+        shader_pack: false,
         looks: false,
         assets: &f.assets,
         render: &f.render,

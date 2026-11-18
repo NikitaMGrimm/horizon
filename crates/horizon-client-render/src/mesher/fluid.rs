@@ -213,7 +213,8 @@ pub(super) fn splits_north_east(nw: f32, ne: f32, sw: f32, se: f32) -> bool {
 /// `(nether, shader_pack_lighting, separate_ao, shader_pack)`: the Nether's face shading, only the
 /// up-face value when a shader pack lights the faces (`Mesher::shader_pack_lighting`), whether to
 /// keep pure alpha for separate AO, and whether a `shaders/` pack draws the terrain
-/// (`Mesher::shader_pack`: tops split as Iris splits them, [`splits_north_east`]).
+/// (`Mesher::shader_pack`: tops split as Iris splits them, [`splits_north_east`], and the alpha
+/// as that path reads it, `mesher::for_shaders_format`).
 pub(super) fn tesselate(
     tables: &MeshTables,
     parts: &PartTables,
@@ -388,7 +389,13 @@ pub(super) fn tesselate(
             target_looks.extend(std::iter::repeat_n(look, 1 + usize::from(back)));
         }
         let color = color(shade);
-        let color = if separate_ao { color } else { as_fluid(color) };
+        let color = if separate_ao {
+            color
+        } else if shader_pack {
+            crate::mesher::for_shaders_format(color)
+        } else {
+            as_fluid(color)
+        };
         let vertex = |(pos, uv)| TerrainVertex::new(pos, uv, layer, color, light);
         target.extend([vertex(v[0]), vertex(v[1]), vertex(v[2]), vertex(v[3])]);
         if back {
@@ -707,6 +714,53 @@ mod tests {
                         far[0] >> 24 & 7
                     );
                 }
+            }
+        }
+    }
+
+    /// With a `shaders/` pack, a fluid's alpha is the byte from before the light level and the
+    /// fluid flag (the tier's `15 - code` in the low four bits, the high four set); else 6c's.
+    #[test]
+    fn a_fluids_alpha_is_the_old_byte_for_a_shaders_format_pack() {
+        let mut tables = super::super::part_tables_tests::tables(false);
+        let mut pad = Padded {
+            blocks: vec![0; super::super::P.pow(3)],
+            light: vec![0xF0; super::super::P.pow(3)],
+        };
+        pad.blocks[pi(0, 0, 0)] = 1;
+        for (kind, tier, level) in [
+            (FluidKind::Water, 0, 0u32),
+            (FluidKind::Lava, crate::mesher::hdr_tier("lava", 15), 15),
+        ] {
+            tables.info[1].fluid = FluidState::new(kind, 8, false);
+            let old = crate::mesher::emitting(0, tier) >> 24 | 0xF0;
+            for shader_pack in [false, true] {
+                let mut mesh = SectionMesh::default();
+                let keys = (false, false, false, shader_pack, false);
+                tesselate(
+                    &tables,
+                    &PartTables::NONE,
+                    keys,
+                    &pad,
+                    0x3F76E4,
+                    &mut mesh,
+                    [0; 3],
+                );
+                let want = if shader_pack {
+                    old
+                } else {
+                    (15 - level) << 4 | old & 0x7
+                };
+                let alphas: Vec<u32> = [mesh.solid, mesh.translucent]
+                    .concat()
+                    .iter()
+                    .map(|v| v.color >> 24)
+                    .collect();
+                assert!(!alphas.is_empty(), "{kind:?}");
+                assert!(
+                    alphas.iter().all(|&a| a == want),
+                    "{kind:?} shader pack {shader_pack}: {alphas:x?}, want {want:x}"
+                );
             }
         }
     }

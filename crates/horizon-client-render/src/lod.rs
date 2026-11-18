@@ -1207,6 +1207,8 @@ struct Shared {
     approximate: AtomicBool,
     /// Tiles' quads get their looks: `mesh::Mesher::looks`.
     looks: std::sync::atomic::AtomicU8,
+    /// A `shaders/` pack draws the terrain: `mesh::Mesher::shader_pack`.
+    shader_pack: AtomicBool,
     /// The reduction levels `Lod::apply_detail` reads, one bit each (level
     /// `i` is a cell `2 << i` blocks wide), so the far terrain thread builds
     /// them before it sends a chunk's columns on.
@@ -1353,6 +1355,10 @@ impl Lod {
         let mode = if looks { 1 + u8::from(nether) } else { 0 };
         self.shared.looks.store(mode, Ordering::Relaxed);
     }
+    /// Tiles meshed from now on are for a `shaders/` pack (`Mesher::shader_pack`).
+    pub fn set_shader_pack(&self, on: bool) {
+        self.shared.shader_pack.store(on, Ordering::Relaxed);
+    }
     pub fn new(source: Arc<dyn LodSource>, context: Arc<WorkerContext>) -> Self {
         Self::assemble(Some(source), Some(context), true)
     }
@@ -1381,6 +1387,7 @@ impl Lod {
             stop: AtomicBool::new(false),
             approximate: AtomicBool::new(false),
             looks: Default::default(),
+            shader_pack: AtomicBool::new(false),
             detail_widths: std::sync::atomic::AtomicU8::new(0),
             mesh_held: AtomicBool::new(false),
             near_loading: AtomicBool::new(false),
@@ -1441,6 +1448,7 @@ impl Lod {
                                 let columns = input.columns();
                                 let edges = input.edges();
                                 mesher.looks = shared.looks.load(Ordering::Relaxed);
+                                mesher.shader_pack = shared.shader_pack.load(Ordering::Relaxed);
                                 let mut mesh = mesher.mesh(
                                     job.key,
                                     &columns,
@@ -4441,6 +4449,33 @@ mod tests {
                 bytes(&meshes[1].translucent),
                 "{name}"
             );
+            // A `shaders/` pack's far faces have the alpha from before the level and the fluid
+            // flag: the same faces, the tier alone in the byte (`mesher::for_shaders_format`).
+            let mut mesher = mesh::Mesher::default();
+            mesher.shader_pack = true;
+            let old = mesher.mesh(
+                TileKey {
+                    x: 0,
+                    z: 0,
+                    level: 0,
+                },
+                &columns.iter().collect::<Vec<_>>(),
+                &FxHashSet::default(),
+                None,
+                &context,
+                &std::array::from_fn(|_| Vec::new()),
+                &[],
+            );
+            let now = meshes[0].solid.iter().chain(&meshes[0].translucent);
+            let then: Vec<&TerrainVertex> = old.solid.iter().chain(&old.translucent).collect();
+            assert_eq!(now.clone().count(), then.len(), "{name}");
+            for (now, then) in now.zip(then) {
+                let want = TerrainVertex {
+                    color: now.color | 0xF800_0000,
+                    ..*now
+                };
+                assert_eq!(bytes(&[want]), bytes(&[*then]), "{name} {properties:?}");
+            }
         }
         Ok(())
     }
