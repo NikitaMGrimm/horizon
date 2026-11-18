@@ -9,6 +9,7 @@
 use horizon_shader_api::{Frame as FrameInputs, manifest::Shadow as Settings, stages::GROUP};
 use horizon_shaders::Shadow;
 
+use super::external::ShadowDraws;
 use super::native_material::TerrainShape;
 use super::wgsl_prefix::{TERRAIN, prefixed, section};
 
@@ -396,12 +397,12 @@ pub struct NativeShadow {
     pub displaced: Option<wgpu::RenderPipeline>,
 }
 
-/// The entity draw's shader. Like the terrain's (`shader_source`), it declares the whole
-/// `Frame`.
+/// The entity draw's shader. Like the terrain's (`shader_source`), it declares `Frame` without
+/// the field only some packs' preludes have (`moon_phase`).
 fn entity_source() -> String {
     format!(
         "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{ENTITY_ENTRIES}",
-        FrameInputs::declared_wgsl(true, true),
+        FrameInputs::declared_wgsl(true, true, false),
         horizon_shader_api::stages::SHADOW_HELPERS,
     )
 }
@@ -517,7 +518,7 @@ fn shader_source(
         (None, None) => (
             format!(
                 "{}@group({GROUP}) @binding(0) var<uniform> frame: Frame;\n{}{UNTAKEN}",
-                FrameInputs::declared_wgsl(true, true),
+                FrameInputs::declared_wgsl(true, true, false),
                 horizon_shader_api::stages::SHADOW_HELPERS,
             ),
             super::native_material::DISPLACE_VANILLA,
@@ -771,34 +772,6 @@ impl NativeShadow {
     }
 }
 
-/// What the renderer hands the shadow passes each frame.
-pub struct ShadowDraws<'a> {
-    pub encoder: &'a mut wgpu::CommandEncoder,
-    pub timing: Option<&'a mut super::pack_timing::PassTiming>,
-    /// What the light sees, when the frame asked for a shadow view.
-    pub lists: Option<ShadowLists<'a>>,
-}
-
-/// The renderer's lists of what the light sees, and what they draw from.
-pub struct ShadowLists<'a> {
-    /// The world's group 0.
-    pub group: &'a wgpu::BindGroup,
-    pub sections: super::SectionLists<'a>,
-    /// The frame draws its terrain flat (`sections.flat`'s shadow calls).
-    pub flat_frame: bool,
-    pub instances: &'a wgpu::Buffer,
-    pub indirect: &'a wgpu::Buffer,
-    /// The light's first draw, its solid draws and its translucent draws after them.
-    pub draws: [u32; 3],
-    /// The entities' group 0 and vertices: `entity_quads` from the start, then
-    /// `shadow_only_quads` before the GPU-posed outlines at `outline_base`.
-    pub entity_group: &'a wgpu::BindGroup,
-    pub entity_vertices: &'a wgpu::Buffer,
-    pub entity_quads: u32,
-    pub shadow_only_quads: u32,
-    pub outline_base: u32,
-}
-
 impl super::native_pack::NativePack {
     /// The shadow camera's view this frame, for a pack with `[shadow]`.
     pub fn shadow_request(&self, frame: &super::Frame) -> Option<super::external::ShadowView> {
@@ -925,7 +898,7 @@ mod tests {
     #[test]
     fn the_shadow_shaders_declare_the_frame_as_before() {
         use sha2::{Digest, Sha256};
-        let frame = FrameInputs::declared_wgsl(true, true);
+        let frame = FrameInputs::declared_wgsl(true, true, false);
         assert_eq!(
             format!("{:x}", Sha256::digest(&frame)),
             "88afec7c6709091383bffd26f431131ac68e2f6fd5d1079dd7febb591209211a"

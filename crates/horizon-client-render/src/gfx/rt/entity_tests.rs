@@ -663,7 +663,7 @@ fn an_entity_hit_has_vanilla_s_shade_and_says_when_the_ray_met_its_back() {
     };
     let mut entities = Entities::new(&device, &stream);
     assert!(!entities.fit(&device, &stream));
-    let indices = super::super::quad_indices(&device, 4);
+    let indices = crate::gfx::rt::query::quad_indices(&device, 4);
     let mut tlas = create_tlas(&device, 1);
     let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     tlas[0] = Some(wgpu::TlasInstance::new(

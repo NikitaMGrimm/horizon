@@ -53,7 +53,8 @@ shared = ["common.wgsl"]   # optional: WGSL put before every stage's file, in or
 [sky]                      # each stage is optional, but a pack has at least one
 file = "sky.wgsl"
 clouds = true              # optional: false when the pack draws its own clouds
-sun = true                 # optional: false when the pack draws its own sun (the moon stays)
+sun = true                 # optional: false when the pack draws its own sun
+moon = true                # optional: false when the pack draws its own moon
 stars = true               # optional: false when the pack draws its own stars
 
 [material]
@@ -307,6 +308,10 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   `frame.fog_start` and `fog_end`; the fog's fields are declared for every pack. [Moving a
   pack](#shader-api-02-experimental) says what to read instead. A pack that reads none of these is built and draws as
   before.
+- 2026-11-16: API 0.2 (additions, experimental): `[sky] moon = false` leaves out Minecraft's moon, as `sun = false`
+  its sun, for a sky that draws its own; and `frame.moon_phase`, the phase of the moon Horizon draws (0 full to 7
+  waxing gibbous), declared only for a pack whose files name `moon_phase`, at the end of `Frame`. A pack that sets
+  neither is built from the same WGSL and drawn as before.
 - 2026-11-16: API 0.2 (additions, experimental): `[entity] reads` and `[sky] reads` (#16011 item 4): the entity and
   sky stages read kept resources by `[material] reads`' rules: `x` for this frame's version of a texture a
   `[[before_world]]` pass writes, `x_previous` for last frame's, and buffers, in their fragments only. The check
