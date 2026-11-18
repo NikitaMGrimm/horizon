@@ -280,8 +280,8 @@ it: [the guide](../shaders.md#testing-a-pack-frame-by-frame).
 
 API 0.2 is final, at the preview level of [stability.md](stability.md): #17834 was its last breaking change. What
 the reference says stays: additions and fixes toward it go on in 0.2, and a change that breaks a 0.2 pack only comes
-with a new line, 0.3, after a deprecation while the game still serves 0.2. API 0.1 has ended: it was refused from
-2026-11-13 (#15886), when 0.2 was on by default ([hdr-linear-light.md](../design/hdr-linear-light.md), step 5).
+with a new line, 0.3, after a deprecation while the game still serves 0.2. API 0.1 has ended: it is refused since #15886,
+when 0.2 went on by default ([hdr-linear-light.md](../design/hdr-linear-light.md), step 5).
 
 ## Not there yet
 
