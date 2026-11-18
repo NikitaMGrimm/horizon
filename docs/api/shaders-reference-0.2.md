@@ -435,8 +435,9 @@ The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `
 
 Bindings 48 to 59 of group 3 hold the scene while the game traces (60 to
 63 the entity layer, for a pack that names it), and in a post, compute or `[[before_world]]` pass bindings
-12 and 13 the LabPBR maps (the material stage has them there already). They are Horizon's, as their
-`horizon_` names say, and change with the renderer.
+12 and 13 the LabPBR maps (the material stage has them there already).
+Binding 81 holds terrain hit looks for a stage that reads `RayHit.tint`, `shade` or `ao` from its entry point.
+These bindings are Horizon's, as their `horizon_` names say, and change with the renderer.
 
 ## Kept resources and compute passes
 

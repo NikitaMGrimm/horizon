@@ -528,7 +528,7 @@ pub const RAY_ENTITY_SAMPLER_BINDING: u32 = 62;
 /// layer's, in the stream's layout and atlas: the last of the layer's bindings.
 pub const RAY_ENTITY_RETAINED_BINDING: u32 = 63;
 /// The look of each quad of the terrain store (`RAY_STORE_BINDING`), only in a stage that reads a
-/// terrain hit's `tint`, `shade` or `ao`: three words a quad, `mesher::QuadLook`.
+/// terrain hit's `tint`, `shade` or `ao`: two words a quad, `mesher::QuadLook`.
 pub const RAY_LOOKS_BINDING: u32 = 81;
 /// The bit of an entity vertex's layer that puts its quad in the entity layer, above the
 /// renderer's kind bits: a quad without it lets every ray through.

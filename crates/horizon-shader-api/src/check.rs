@@ -126,7 +126,7 @@ impl CheckedStage {
     /// struct, a copy of it (an argument, a `let`, a `var`) or a pointer to it, in whichever file
     /// of the pack: every one is a member access on a value or pointer of the struct's type.
     pub fn reads_looks(&self) -> bool {
-        reads_fields(&self.module, &self.info, &LOOK_FIELDS)
+        reads_fields(&self.module, &self.info, &LOOK_FIELDS, false)
     }
 
     /// Whether the stage's function, or a function it calls, reads the prelude's `global`
@@ -158,13 +158,18 @@ const LOOK_FIELDS: [(&str, &[&str]); 2] = [
 
 /// A terrain hit's fields that only its quad's look holds: a stage against the scene that reads
 /// one of them binds the scene's looks, and the renderer keeps them (`Report::ray_looks`).
-/// The vertex already holds `shaded_tint` and the face's brightness class (`emission`).
+/// The vertex already holds `shaded_tint` and the block's light level (`emission`).
 pub(crate) const RAY_LOOK_FIELDS: [(&str, &[&str]); 1] = [("RayHit", &["tint", "shade", "ao"])];
 
-/// Whether a function of `m`, called or not, reads one of `fields`, by struct: through the
-/// struct, a copy of it (an argument, a `let`, a `var`) or a pointer to it, in whichever file of
-/// the pack, every one is a member access on a value or pointer of the struct's type.
-fn reads_fields(m: &naga::Module, info: &ModuleInfo, fields: &[(&str, &[&str])]) -> bool {
+/// Whether the selected functions read one of `fields`, by struct. A direct read, a copy or
+/// a pointer to a struct all resolve to the struct's type. Ray looks count only functions
+/// reachable from an entry point, so an unused helper cannot add a scene binding.
+fn reads_fields(
+    m: &naga::Module,
+    info: &ModuleInfo,
+    fields: &[(&str, &[&str])],
+    reachable_only: bool,
+) -> bool {
     let looked = |ty: naga::Handle<naga::Type>, index: u32| {
         // Through a pointer (`ptr<function, MaterialInput>`, a `var`): its pointee.
         let ty = match m.types[ty].inner {
@@ -196,9 +201,40 @@ fn reads_fields(m: &naga::Module, info: &ModuleInfo, fields: &[(&str, &[&str])])
             ty.is_some_and(|ty| looked(ty, index))
         })
     };
-    m.functions.iter().any(|(h, f)| reads(f, &info[h]))
-        || (m.entry_points.iter().enumerate())
-            .any(|(i, e)| reads(&e.function, info.get_entry_point(i)))
+    if m.entry_points
+        .iter()
+        .enumerate()
+        .any(|(i, e)| reads(&e.function, info.get_entry_point(i)))
+    {
+        return true;
+    }
+    if !reachable_only {
+        return m.functions.iter().any(|(h, f)| reads(f, &info[h]));
+    }
+
+    let add_calls = |body: &naga::Block, calls: &mut Vec<_>| {
+        let _ = find_statement(body, &mut |statement| {
+            if let naga::Statement::Call { function, .. } = *statement {
+                calls.push(function);
+            }
+            false
+        });
+    };
+    let mut calls = Vec::new();
+    for entry in &m.entry_points {
+        add_calls(&entry.function.body, &mut calls);
+    }
+    let mut seen = HashSet::new();
+    while let Some(handle) = calls.pop() {
+        if seen.insert(handle) {
+            let function = &m.functions[handle];
+            if reads(function, &info[handle]) {
+                return true;
+            }
+            add_calls(&function.body, &mut calls);
+        }
+    }
+    false
 }
 
 /// Whether the stage composed as `text` (its build where `trace` misses) reads one of
@@ -210,7 +246,7 @@ pub(crate) fn reads_hit_looks(text: &str) -> bool {
     let mut validator = Validator::new(ValidationFlags::all(), Capabilities::default());
     validator
         .validate(&module)
-        .is_ok_and(|info| reads_fields(&module, &info, &RAY_LOOK_FIELDS))
+        .is_ok_and(|info| reads_fields(&module, &info, &RAY_LOOK_FIELDS, true))
 }
 
 #[derive(Debug)]
@@ -953,38 +989,38 @@ fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
     problems
 }
 
+/// The span of the first statement in a block or its nested control flow that matches.
+fn find_statement(
+    block: &naga::Block,
+    matches: &mut impl FnMut(&naga::Statement) -> bool,
+) -> Option<naga::Span> {
+    for (statement, span) in block.span_iter() {
+        if matches(statement) {
+            return Some(*span);
+        }
+        let found = match statement {
+            naga::Statement::Block(b) => find_statement(b, matches),
+            naga::Statement::If { accept, reject, .. } => {
+                find_statement(accept, matches).or_else(|| find_statement(reject, matches))
+            }
+            naga::Statement::Switch { cases, .. } => {
+                cases.iter().find_map(|c| find_statement(&c.body, matches))
+            }
+            naga::Statement::Loop {
+                body, continuing, ..
+            } => find_statement(body, matches).or_else(|| find_statement(continuing, matches)),
+            _ => None,
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
 /// Where a `discard` is that the function `name` can reach: in its own body, its nested blocks,
 /// or a function it calls, however deep.
 fn reachable_discard(module: &naga::Module, name: &str) -> Option<naga::Span> {
-    fn walk(
-        block: &naga::Block,
-        calls: &mut Vec<naga::Handle<naga::Function>>,
-    ) -> Option<naga::Span> {
-        for (statement, span) in block.span_iter() {
-            let found = match statement {
-                naga::Statement::Kill => return Some(*span),
-                naga::Statement::Block(b) => walk(b, calls),
-                naga::Statement::If { accept, reject, .. } => {
-                    walk(accept, calls).or_else(|| walk(reject, calls))
-                }
-                naga::Statement::Switch { cases, .. } => {
-                    cases.iter().find_map(|c| walk(&c.body, calls))
-                }
-                naga::Statement::Loop {
-                    body, continuing, ..
-                } => walk(body, calls).or_else(|| walk(continuing, calls)),
-                naga::Statement::Call { function, .. } => {
-                    calls.push(*function);
-                    None
-                }
-                _ => None,
-            };
-            if found.is_some() {
-                return found;
-            }
-        }
-        None
-    }
     let (start, _) = module
         .functions
         .iter()
@@ -992,7 +1028,18 @@ fn reachable_discard(module: &naga::Module, name: &str) -> Option<naga::Span> {
     let (mut calls, mut seen) = (vec![start], HashSet::new());
     while let Some(f) = calls.pop() {
         if seen.insert(f)
-            && let Some(span) = walk(&module.functions[f].body, &mut calls)
+            && let Some(span) =
+                find_statement(
+                    &module.functions[f].body,
+                    &mut |statement| match *statement {
+                        naga::Statement::Call { function, .. } => {
+                            calls.push(function);
+                            false
+                        }
+                        naga::Statement::Kill => true,
+                        _ => false,
+                    },
+                )
         {
             return Some(span);
         }

@@ -858,11 +858,11 @@ fn a_pass_that_skips_hit_looks_keeps_its_storage_buffer_budget() {
                  reads = [\"b1\", \"b2\", \"b3\", \"b4\", \"b5\"]\nwrites = [\"hit\"]\n\
                  [[post]]\nfile = \"l.wgsl\"\nreads = [\"hit\"]\n";
     // The compute stage fills all eight slots with two scene buffers and six kept buffers.
-    // Only the fragment stage has room for and reads the look store.
+    // Its unused helper must not request another binding. The fragment stage reads the looks.
     let writes = TRACES.replace(
         ".distance;",
         ".distance + b1[0] + b2[0] + b3[0] + b4[0] + b5[0];",
-    );
+    ) + "fn unused_look(hit: RayHit) -> f32 { return hit.tint.r; }\n";
     let show = SHOW.replace(
         "0.0, 1.0);",
         "trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0).tint.r, 1.0);",

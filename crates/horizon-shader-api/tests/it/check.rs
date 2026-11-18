@@ -1454,7 +1454,7 @@ fn a_hit_s_look_fields_bring_the_scene_s_looks() {
     let reads = [
         post("return vec4<f32>(hit.tint.rgb, 1.0);"),
         post("let h = hit;\n    return vec4<f32>(h.shade);"),
-        post("return vec4<f32>(lit(hit));"),
+        post("if input.uv.x > 0.5 { return vec4<f32>(lit(hit)); }\n    return input.color;"),
     ];
     for text in &reads {
         assert!(ray_looks(text, looked), "{text}");
@@ -1488,4 +1488,5 @@ fn a_hit_s_look_fields_bring_the_scene_s_looks() {
     for text in &none {
         assert!(!ray_looks(text, plain), "{text}");
     }
+    assert!(!ray_looks(&none[0], looked), "uncalled look helper");
 }
