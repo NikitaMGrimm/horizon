@@ -1,0 +1,49 @@
+# Horizon HDR
+
+Horizon's own HDR look as a shader pack on the public API ([shaders.md](../../../../docs/shaders.md),
+[shaders-reference-0.2.md](../../../../docs/api/shaders-reference-0.2.md)): light sources shine past paper white, each
+by its kind of light, and a tone curve fits that light to the display. It is the look the game draws itself with HDR
+on and no pack (Look: Horizon), and the example to copy from: a pack that wants that look under its own starts here.
+Like Golden Hour it comes with the SDK, not with the game: the game never picks it by itself, and nothing changes
+until a player puts the folder in `shaderpacks/` and picks it. With HDR off it draws vanilla's picture.
+
+`hdr_look.wgsl` is the look: its numbers (the brightness a texel lifts at, each tier's gain, the scene's peak) and
+its maths, with no name of the renderer in it. There is one copy of it. The renderer's own shaders start with this
+very file (`horizon-client-render`'s `gfx/wgsl_prefix.rs`) and the pack lists it as its shared source, so a change to
+the look changes both. The stages only call it:
+
+- `material.wgsl`, blocks: vanilla's colour, `albedo` under `shaded_tint` and the light. On a light source
+  (`light_source_tier`) the texels as bright as `light_source_threshold`, or all of them where `light_source_whole`,
+  take their tier's mark and, as they lift, leave their face's shading behind, down to `frame.full_lightmap`. It
+  reads `shaded_tint`, never the terrain's separate looks, so the world doesn't load again when the pack starts.
+- `entity.wgsl`, entities and block entities: vanilla's colour, and what `light_source_tier` names lifted by its
+  tier.
+- `tonemap.wgsl`: the look's tone curve, from the scene's peak to the display's.
+- `lift.wgsl`: what the first two share. The look works on colours in vanilla's gamma, a stage on linear light.
+
+Check it with `horizon-shader check crates/horizon-shader-api/packs/horizon_hdr`. Horizon's render tests hold its
+material and entity stages to the game's own shaders (`horizon-client-render`, `gfx/look_pack_tests.rs`).
+
+## What it can't draw yet
+
+- **The sun's disc, the moon, stars, lightning, additive particles and beams** reach no stage. Under a pack Horizon
+  draws them at paper white.
+- **Items and particles** aren't drawn through `[entity]` yet, so what shines among them (a torch's flame, a glowing
+  item) isn't lifted.
+- **Light sources in fog, and in a section that is fading in.** Horizon lifts a pixel after both, by what they left
+  of it; a stage runs before them, so it lifts by the fog's share and the fog then mixes over the lifted light. Near
+  the camera there is no difference.
+- **The enchantment glint on something that shines** is added after a stage, and so after the lift; Horizon lifts
+  it with the pixel.
+- **The back faces of a model that shines and is drawn from both sides** (an End crystal's glass). Horizon lifts
+  them by their front's brightness; a stage is handed the face it draws.
+- **Resource packs' emissive overlays** (OptiFine's `_e` textures), which Horizon lays over a block and lifts: a
+  material stage isn't handed them.
+- **Coloured lights** (native mods', dynamic lights' colours) are added at each corner of a face by Horizon, and at
+  each pixel by a stage. So is the light level against the vertex colour: Horizon smooths their product over a
+  face, a stage multiplies the two after each is smoothed, which differs where both change across a face: up to 7
+  steps of 255 along the edges of an ambient-occluded corner beside a torch.
+- **A screenshot's light above white.** Horizon maps a frame into SDR by its own rule: by the brightest channel with
+  its look, so the hue stays, and channel by channel under a pack. `[tonemap]` runs for the display only.
+- **What any running pack turns off**: anti-aliasing (TAA, FXAA, TAA upscaling), Improved Transparency and frame
+  generation.
