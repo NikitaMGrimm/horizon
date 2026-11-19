@@ -41,8 +41,9 @@ material and entity stages to the game's own shaders (`horizon-client-render`, `
   material stage isn't handed them.
 - **Coloured lights** (native mods', dynamic lights' colours) are added at each corner of a face by Horizon, and at
   each pixel by a stage. So is the light level against the vertex colour: Horizon smooths their product over a
-  face, a stage multiplies the two after each is smoothed, which differs where both change across a face: up to 7
-  steps of 255 along the edges of an ambient-occluded corner beside a torch.
+  face, a stage multiplies the two after each is smoothed, which differs where both change across a face: in
+  Horizon's render test of an ambient-occluded corner beside a torch, 7 steps of 255 along its edges, and more where
+  light falls off faster across a face.
 - **A screenshot's light above white.** Horizon maps a frame into SDR by its own rule: by the brightest channel with
   its look, so the hue stays, and channel by channel under a pack. `[tonemap]` runs for the display only.
 - **What any running pack turns off**: anti-aliasing (TAA, FXAA, TAA upscaling), Improved Transparency and frame

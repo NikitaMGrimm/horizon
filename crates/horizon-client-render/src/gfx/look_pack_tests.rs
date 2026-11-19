@@ -36,8 +36,9 @@ const DISPLAY: (f32, f32) = (1000.0 / 203.0, 203.0);
 /// What the look tolerates between the two routes, as the frame stores light (vanilla's gamma):
 /// a share of the brighter of the two and a floor. The pack's route has more 2.2 powers per
 /// pixel (a decode of every input, an encode of the stage's light); measured, they leave the
-/// pixels within 4e-7 of each other, far under a step of 255 (0.004) or of an HDR10 shot.
-const TOLERANCE: (f32, f32) = (0.0, 1e-5);
+/// pixels within 4e-7 of each other on the GPUs tried; the tolerance leaves room for others
+/// and is still a fortieth of a step of 255 (0.004).
+const TOLERANCE: (f32, f32) = (0.0, 1e-4);
 
 /// The renderer's lightmap at sky light `s` and block light `b` (0..15): no light dark but not
 /// black, block light warm and sky light cool, white where both are full. Every level differs,
@@ -94,12 +95,13 @@ fn texture(
         })
 }
 
-/// The renderer's globals for a world with the look on the float frame, fog far away.
+/// The renderer's globals for a world with the look on the float frame. Its fog is black and
+/// starts 8 blocks out, past every test's surface but the one put in it.
 fn globals() -> super::Globals {
     super::Globals {
-        fog_color: [0.5, 0.6, 0.7, 1.0],
-        fog: [1000.0, 2000.0, 1000.0, 2000.0],
-        fog_ends: [2000.0, 2000.0, 0.0, 0.0],
+        fog_color: [0.0, 0.0, 0.0, 1.0],
+        fog: [8.0, 24.0, 8.0, 24.0],
+        fog_ends: [24.0, 24.0, 0.0, 0.0],
         filtering: [0.0, 1.0, 0.0, 0.0],
         hdr_light: [0.0, 0.0, 1.0, 1.0],
         // `Hdr::draw_params` with the look on: the headroom, an unused lane, the look, debug.
@@ -413,13 +415,14 @@ fn material_module(
 const TERRAIN_ROUTES: &str = "
 struct TestCorner {
     clip: vec4<f32>,
+    position: vec3<f32>,
     layer: u32,
     color: vec4<f32>,
     light: vec2<u32>,
 }
 @vertex fn test_engine_vs(@builtin(vertex_index) i: u32) -> horizon_terrain_TerrainWire {
     let c = test_corner(i);
-    var o = horizon_terrain_terrain_vertex(vec3(0.0), vec2(0.5), c.layer, c.color, c.light,
+    var o = horizon_terrain_terrain_vertex(c.position, vec2(0.5), c.layer, c.color, c.light,
         vec3(0.0), 1.0);
     o.clip = c.clip;
     return horizon_terrain_to_wire(o);
@@ -429,7 +432,7 @@ struct TestCorner {
 }
 @vertex fn test_pack_vs(@builtin(vertex_index) i: u32) -> HorizonMaterialOut {
     let c = test_corner(i);
-    var o = horizon_material_out(vec3(0.0), vec2(0.5), c.layer, c.color, vec2<f32>(c.light),
+    var o = horizon_material_out(c.position, vec2(0.5), c.layer, c.color, vec2<f32>(c.light),
         vec2(0u), 1.0);
     o.clip = c.clip;
     return o;
@@ -480,16 +483,21 @@ fn the_look_packs_material_stage_draws_horizons_blocks() {
         ("redstone_torch", 7, false),
         ("lava", 15, true),
     ];
-    // A top face in full light, and a side face in an occluded corner at block light 7.
-    let faces = [(1.0f32, [240u32, 240]), (0.45, [0, 112])];
+    // A top face in full light, a side face in an occluded corner at block light 7, and the top
+    // face halfway into the fog (black, so lifting before or after it gives the same light).
+    let faces = [
+        (1.0f32, [240u32, 240], 0.0f32),
+        (0.45, [0, 112], 0.0),
+        (1.0, [240, 240], 16.0),
+    ];
     let mut cases = Vec::new();
     for (layer, _) in sprites.iter().enumerate() {
         for &(name, level, fluid) in &blocks {
             let tier = hdr_tier(name, level);
             let color = giving_off(emitting(0xFF80_8080, tier), level);
             let alpha = (if fluid { as_fluid(color) } else { color }) >> 24;
-            for &(shade, light) in &faces {
-                cases.push((layer as u32, name, tier, alpha, shade, light));
+            for &(shade, light, distance) in &faces {
+                cases.push((layer as u32, name, tier, alpha, shade, light, distance));
             }
         }
     }
@@ -503,9 +511,11 @@ fn the_look_packs_material_stage_draws_horizons_blocks() {
     var alphas = {};
     var shades = {};
     var lights = {};
+    var distances = {};
     // A biome's tint under the face's shade and ambient occlusion.
     let color = vec4(vec3(0.8, 1.0, 0.7) * shades[i], f32(alphas[i]) / 255.0);
-    return TestCorner(test_point(i), layers[i], color, lights[i]);
+    let position = vec3(0.0, 0.0, -distances[i]);
+    return TestCorner(test_point(i), position, layers[i], color, lights[i]);
 }}
 ",
             wgsl_array("u32", &cases, |c| format!("{}u", c.0)),
@@ -515,6 +525,7 @@ fn the_look_packs_material_stage_draws_horizons_blocks() {
                 "vec2({}u, {}u)",
                 c.5[0], c.5[1]
             )),
+            wgsl_array("f32", &cases, |c| format!("{:?}", c.6)),
         );
     let mut tested = Vec::new();
     for (adapter, backend) in super::test_gpu::each_adapter() {
@@ -546,13 +557,13 @@ fn the_look_packs_material_stage_draws_horizons_blocks() {
         let staged = draw.texels("test_pack_vs", "test_pack_fs", &[]);
         let mut worst = Worst::default();
         let (mut lifted, mut unshaded, mut gated) = (0, 0, 0);
-        for (i, &(layer, name, tier, alpha, shade, light)) in cases.iter().enumerate() {
+        for (i, &(layer, name, tier, alpha, shade, light, distance)) in cases.iter().enumerate() {
             let (a, b) = (own[i], staged[i]);
             let (texel, threshold) = sprites[layer as usize];
             let case = || {
                 format!(
                     "{backend}: {name} (alpha {alpha:#04x}), texel {texel:?}, threshold \
-                     {threshold}, shade {shade}, light {light:?}"
+                     {threshold}, shade {shade}, light {light:?}, {distance} blocks out"
                 )
             };
             worst.see(a, b, case);
@@ -577,10 +588,10 @@ fn the_look_packs_material_stage_draws_horizons_blocks() {
 
 /// Where the vertex colour and the light level both change across a face, Horizon's terrain
 /// smooths their product and a material stage multiplies `shaded_tint` by `lightmap`, each
-/// smoothed apart, which the stage's inputs can't avoid: an occluded corner (vanilla's darkest
-/// ambient occlusion, 0.2) beside a torch (block light 14), its far corners open at block light
-/// 11. Measured over a whole face of plain stone as the frame stores it: 6.6 steps of 255 at
-/// worst, midway along the edges from the dark corner. Held there, so a change that widens it
+/// smoothed apart, which the stage's inputs can't avoid: an occluded corner (vertex colour 0.2,
+/// about vanilla's darkest ambient occlusion) beside a torch (block light 14), its far corners open at block light
+/// 11, under this file's lightmap. Measured over a whole face of plain stone as the frame stores
+/// it: 6.6 steps of 255 at worst, midway along the edges from the dark corner. Held there, so a change that widens it
 /// shows.
 #[test]
 fn an_occluded_corner_beside_a_torch_is_horizons_within_seven_steps() {
@@ -597,7 +608,7 @@ fn an_occluded_corner_beside_a_torch_is_horizons_within_seven_steps() {
     var shades = array<f32, 6>(0.2, 1.0, 1.0, 1.0, 1.0, 1.0);
     var blocks = array<u32, 6>(224u, 176u, 176u, 176u, 176u, 176u);
     let color = vec4(vec3(shades[i]), f32({stone}u) / 255.0);
-    return TestCorner(vec4(at[i], 0.5, 1.0), 0u, color, vec2(0u, blocks[i]));
+    return TestCorner(vec4(at[i], 0.5, 1.0), vec3(0.0), 0u, color, vec2(0u, blocks[i]));
 }}
 "
         );
@@ -806,4 +817,41 @@ fn the_look_packs_entity_stage_draws_horizons_entities() {
         tested.push(backend);
     }
     eprintln!("the look pack's entity stage ran on {tested:?}");
+}
+
+/// The pack's tone curve builds where the renderer builds a pack's `[tonemap]` (`NativePost`):
+/// the look file's names, which the pack shares unprefixed, meet nothing the renderer adds.
+#[test]
+fn the_look_packs_tone_curve_builds_in_the_renderer() {
+    let _gpu = super::test_gpu::lock();
+    let report = check(&look_pack()).unwrap();
+    let tonemap = report.stages.iter().find(|s| s.kind == StageKind::Tonemap);
+    assert!(tonemap.is_some());
+    let mut tested = Vec::new();
+    for (adapter, backend) in super::test_gpu::each_adapter() {
+        let Some((device, _queue)) = device(&adapter) else {
+            continue;
+        };
+        let frame = super::native_post::NativeFrame::new(
+            &device,
+            None,
+            Vec::new(),
+            Default::default(),
+            None,
+            false,
+        );
+        let format = wgpu::TextureFormat::Rgba16Float;
+        let built = super::native_post::NativePost::new(
+            &device,
+            Vec::new(),
+            &report.manifest,
+            &[],
+            format,
+            &frame,
+            tonemap,
+        );
+        assert!(built.is_ok(), "{backend}: {:?}", built.err());
+        tested.push(backend);
+    }
+    eprintln!("the look pack's tone curve built on {tested:?}");
 }
