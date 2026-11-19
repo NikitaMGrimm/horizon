@@ -1232,7 +1232,8 @@ mod tests {
             if !codec(&syn::parse_file(&text).unwrap().items) {
                 continue;
             }
-            if text.contains("Wire for") || text.contains("wire(via = String)") {
+            // Read by the production filter: the file's codecs move the hash `codecs` gives.
+            if core_hash_of(&key, &text) != core_hash_of(&key, "") {
                 read += 1;
             } else {
                 unread.push(key);
@@ -1245,6 +1246,123 @@ mod tests {
         assert!(
             read > 0,
             "no hand-written codec found outside the codec module"
+        );
+    }
+
+    /// `codecs`' hash of a tree holding only `text` at `key` (and the real network NBT codec).
+    fn core_hash_of(key: &str, text: &str) -> u64 {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static RUN: AtomicUsize = AtomicUsize::new(0);
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = std::env::temp_dir().join(format!(
+            "horizon-core-hash-{}-{}",
+            std::process::id(),
+            RUN.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = root.join(key);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(root.join("crates/horizon-mod-vocab/src")).unwrap();
+        std::fs::create_dir_all(root.join("crates/horizon-mod-api/src")).unwrap();
+        std::fs::create_dir_all(root.join(super::NBT).parent().unwrap()).unwrap();
+        std::fs::copy(repo.join(super::NBT), root.join(super::NBT)).unwrap();
+        std::fs::write(&file, text).unwrap();
+        let hash = super::codecs(&root).unwrap().0;
+        std::fs::remove_dir_all(&root).ok();
+        hash
+    }
+
+    /// A codec written with a qualified path (`impl crate::wire::Wire for …`) is in the core
+    /// hash: an edit to its body alone, the bytes it writes, moves it (#18400).
+    #[test]
+    fn a_qualified_wire_impls_body_is_in_the_core_hash() {
+        let key = "crates/horizon-mod-vocab/src/entity/attachment_query.rs";
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let text = std::fs::read_to_string(repo.join(key)).unwrap();
+        assert!(text.contains("impl crate::wire::Wire for AttachmentWriteToken {"));
+        let body = "out.put(&generation);";
+        assert_eq!(text.matches(body).count(), 1);
+        assert_ne!(
+            core_hash_of(key, &text),
+            core_hash_of(key, &text.replace(body, "out.put(&(generation + 1));"))
+        );
+    }
+
+    /// A wasm guest builds an `EntityTypeKey` from its slot without the native `from_slot`
+    /// (`entity/types.rs`), in code neither hash reads and no native test runs (#18400). It is
+    /// pinned here as written; it is the only wasm-only branch of the projections
+    /// `wire_layout_tests` covers outside the codec module (`AttachmentBatch::query`'s is no codec).
+    #[test]
+    fn a_guest_keeps_an_entity_type_keys_slot() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let wasm_only = "#[cfg(target_arch = \"wasm32\")]";
+        let read = |key: &str| std::fs::read_to_string(repo.join(key)).unwrap();
+        let branches: Vec<(&str, usize)> = [
+            "crates/horizon-core/src/identifier.rs",
+            "crates/horizon-mod-runtime/src/attachments/index.rs",
+            "crates/horizon-mod-vocab/src/client/keyframe_animation.rs",
+            "crates/horizon-mod-vocab/src/client/model_instance.rs",
+            "crates/horizon-mod-vocab/src/client/posed_parts.rs",
+            "crates/horizon-mod-vocab/src/client/render_pipeline.rs",
+            "crates/horizon-mod-vocab/src/content/registry_keys.rs",
+            "crates/horizon-mod-vocab/src/entity/attachment_query.rs",
+            "crates/horizon-mod-vocab/src/entity/types.rs",
+            "crates/horizon-mod-vocab/src/item/item_stack.rs",
+            "crates/horizon-mod-vocab/src/item/storage.rs",
+            "crates/horizon-mod-vocab/src/item/types.rs",
+            "crates/horizon-mod-vocab/src/world/ticket_controller.rs",
+        ]
+        .into_iter()
+        .map(|key| (key, read(key).matches(wasm_only).count()))
+        .filter(|(_, count)| *count > 0)
+        .collect();
+        assert_eq!(
+            branches,
+            [
+                ("crates/horizon-mod-vocab/src/entity/attachment_query.rs", 1),
+                ("crates/horizon-mod-vocab/src/entity/types.rs", 1),
+            ],
+            "a new wasm-only branch in a projection's helpers needs pinning here"
+        );
+        let file = syn::parse_file(&read("crates/horizon-mod-vocab/src/entity/types.rs")).unwrap();
+        let try_from = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Impl(block)
+                    if quote::ToTokens::to_token_stream(&block.self_ty).to_string()
+                        == "EntityTypeKey"
+                        && block.trait_.as_ref().is_some_and(|(_, path, _)| {
+                            quote::ToTokens::to_token_stream(path).to_string() == "TryFrom < u32 >"
+                        }) =>
+                {
+                    block.items.iter().find_map(|item| match item {
+                        syn::ImplItem::Fn(f) if f.sig.ident == "try_from" => Some(f),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .expect("EntityTypeKey's TryFrom<u32>");
+        let guest: Vec<String> = try_from
+            .block
+            .stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                syn::Stmt::Expr(syn::Expr::Block(block), _)
+                    if block.attrs.iter().any(|attr| {
+                        quote::ToTokens::to_token_stream(attr).to_string()
+                            == "# [cfg (target_arch = \"wasm32\")]"
+                    }) =>
+                {
+                    Some(quote::ToTokens::to_token_stream(&block.block).to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        let expected = syn::parse_str::<syn::Block>("{ Ok(Self(slot)) }").unwrap();
+        assert_eq!(
+            guest,
+            [quote::ToTokens::to_token_stream(&expected).to_string()]
         );
     }
 
