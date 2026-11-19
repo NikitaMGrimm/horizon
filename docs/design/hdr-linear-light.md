@@ -283,13 +283,15 @@ peak from the headroom, the tone curve), with no engine name in it. There is one
   default path's shaders (`gfx/look_pack_tests.rs`); the frame identity harness is to draw it and hold it to the
   default path's picture within a stated tolerance (decode and encode rounding, glint).
 
-**What the API gains**, none of it breaking a 0.2 pack:
+**What the API gained**, none of it breaking a 0.2 pack (each declared only for a pack whose files name it):
 
 | Name | Meaning |
 | --- | --- |
-| `MaterialInput.emission_threshold: f32` | The brightness a texel must reach to be the part that shines (a torch's flame, not its handle); 0 where the whole sprite shines. |
-| `EntityInput.light_source: f32` | The thing's own kind of light, on `MaterialInput.emission`'s scale: light-giving particles, glowing items and sign text, eyes. `emission` stays "drawn at full light". |
-| `Frame.full_light: vec3<f32>` | Vanilla's light colour at full light this frame: white unless Darkness or a wither's bar dims all light. What `hdr_unshade` scales to. |
+| `MaterialInput.light_source_tier: u32`, `light_source_whole: bool` | The look's tier of the block (0 none, 1 low to 4 very bright), from the vertex, and whether the whole sprite shines (a froglight) or only its bright texels. |
+| `MaterialInput.light_source_threshold: f32` | The brightness a texel must reach to be the part that shines (a torch's flame, not its handle), measured from the sprite. |
+| `EntityInput.light_source_tier: u32` | The tier of what an entity or block entity draws (eyes, a magma cube, glowing sign text). |
+| `Frame.full_lightmap: vec3<f32>` | Vanilla's light colour at full light this frame: white unless Darkness or a wither's bar dims all light. What `hdr_unshade` scales to. |
+| `MaterialInput.shaded_tint: vec4<f32>` | The vertex colour with the face's shade and ambient occlusion in it, as vanilla multiplies it, without reading the terrain's looks. |
 
 An `[environment]` stage, for what adds light and is no lit surface (the sun, moon, stars, clouds, lightning,
 additive particles, beams), by `kind`, is step 9 of #16126 (it replaces the earlier `[glow]` idea, and settles that
@@ -430,8 +432,9 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
      where a stage takes linear light and returns it, through a decode and an encode. The curve for light of
      unknown range stays in the same function, and the scene's peak reaches it as a run-time value: DX12's compiler
      rounds a split curve, and a constant peak, a step apart in a few pixels.
-   - 7d: `emission_threshold`, `light_source` and `full_light` in the API and its reference, then wired into the
-     material and entity stages.
+   - 7d (done, #18410): `light_source_tier`, `light_source_whole`, `light_source_threshold`,
+     `EntityInput.light_source_tier` and `full_lightmap` in the API and its reference, wired into the material and
+     entity stages; the pack draws vanilla's colour from `shaded_tint`.
    - 7f: `packs/horizon_hdr`, and its session in the frame identity harness, held to the default path. The pack
      is in (the SDK's, as Golden Hour is: the game doesn't ship or pick it), the look file moved into its folder
      and the renderer reads it there; render tests hold its material and entity stages to the default path's
