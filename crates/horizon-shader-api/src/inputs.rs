@@ -566,7 +566,7 @@ pub const MATERIAL_LIGHT_SOURCE: [Field; 3] = [
     Field {
         name: "light_source_tier",
         ty: "u32",
-        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: how Horizon's own HDR look ranks the surface's block as a light source: 0 none, 1 low (magma, a redstone torch, candles, froglights), 2 incandescent (torches, lanterns, fire, lava), 3 bright (glowstone, a beacon, campfires), 4 very bright (the sun and lightning; no block has it). It comes from the block, which `emission` doesn't tell (glow lichen gives light and is 0, a froglight gives 15 and is 1), the same on every face; a fluid's surface has the fluid's (lava 2), and distant terrain keeps its block's (with `light_source_whole`), so far glowstone is 3.",
+        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: how Horizon's own HDR look ranks the surface's block as a light source: 0 none, 1 low (magma, a redstone torch, candles, froglights), 2 incandescent (torches, lanterns, fire, lava), 3 bright (glowstone, a beacon, campfires), 4 very bright (the sun and lightning; no block has it). It comes from the block, which `emission` doesn't tell (glow lichen gives light and is 0, a froglight gives 15 and is 1), the same on every face except a model face that gives its own light, which ranks at least by that light (an open eyeblossom's petals are 2); a fluid's surface has the fluid's (lava 2), and distant terrain keeps its block's (with `light_source_whole`), so far glowstone is 3.",
     },
     Field {
         name: "light_source_whole",

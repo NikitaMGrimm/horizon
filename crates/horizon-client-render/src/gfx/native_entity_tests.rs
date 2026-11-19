@@ -327,10 +327,14 @@ fn a_pack_reads_the_light_source_tier_the_engine_s_look_reads() {
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         bytemuck::pod_collect_to_vec(&read.slice(..).get_mapped_range().unwrap())
     };
-    // The stage's colour comes out encoded for a frame of vanilla's gamma.
+    // The stage's colour comes out encoded for a frame of vanilla's gamma. A drawn pixel's alpha
+    // is 1; the clear's is 0, so a pixel the stage skipped can't pass as tier 0.
     let pack: Vec<f32> = drawn("horizon_entity_fs")[..n]
         .iter()
-        .map(|t| (t[0].max(0.0).powf(2.2) / 0.125).round())
+        .map(|t| {
+            assert_eq!(t[3], 1.0, "the pack drew every pixel");
+            (t[0].max(0.0).powf(2.2) / 0.125).round()
+        })
         .collect();
     let engine: Vec<f32> = (drawn("test_engine")[..n].iter())
         .map(|t| (t[0] / 0.125).round())
