@@ -26,25 +26,30 @@ material and entity stages to the game's own shaders (`horizon-client-render`, `
 
 ## What it can't draw yet
 
+With HDR off nothing is lifted, but the points below that aren't about the lift (overlays, coloured lights, the
+light level's smoothing, distant terrain) still differ in SDR.
+
 - **The sun's disc, the moon, stars, lightning, additive particles and beams** reach no stage. Under a pack Horizon
   draws them at paper white.
 - **Items and particles** aren't drawn through `[entity]` yet, so what shines among them (a torch's flame, a glowing
   item) isn't lifted.
-- **Light sources in fog, and in a section that is fading in.** Horizon lifts a pixel after both, by what they left
-  of it; a stage runs before them, so it lifts by the fog's share and the fog then mixes over the lifted light. Near
-  the camera there is no difference.
+- **Light sources in fog, and in a section that is fading in.** Horizon fades a section toward the fog colour, then
+  lifts the faded colour by a mark that only fog lowers. A stage lifts first; Horizon then fades and fogs its lifted
+  light. Near the camera there is no difference.
+- **Distant terrain where it meets near terrain.** Horizon dithers tiles and sections in and out and offsets their depth
+  so the right one shows where they overlap; a material stage's terrain does neither, so overlaps can show.
 - **The enchantment glint on something that shines** is added after a stage, and so after the lift; Horizon lifts
   it with the pixel.
 - **The back faces of a model that shines and is drawn from both sides** (an End crystal's glass). Horizon lifts
   them by their front's brightness; a stage is handed the face it draws.
-- **Resource packs' emissive overlays** (OptiFine's `_e` textures), which Horizon lays over a block and lifts: a
-  material stage isn't handed them.
+- **Resource packs' emissive overlays** (OptiFine's `_e` textures), which Horizon lays over a block, in SDR too, and
+  lifts: a material stage isn't handed them.
 - **Coloured lights** (native mods', dynamic lights' colours) are added at each corner of a face by Horizon, and at
   each pixel by a stage. So is the light level against the vertex colour: Horizon smooths their product over a
   face, a stage multiplies the two after each is smoothed, which differs where both change across a face: in
   Horizon's render test of an ambient-occluded corner beside a torch, 7 steps of 255 along its edges, and more where
   light falls off faster across a face.
-- **A screenshot's light above white.** Horizon maps a frame into SDR by its own rule: by the brightest channel with
-  its look, so the hue stays, and channel by channel under a pack. `[tonemap]` runs for the display only.
+- **Screenshots and world icons in HDR.** They are taken from the frame after `[tonemap]`, so they carry its curve,
+  and light above white clips channel by channel under a pack, where Horizon's look keeps its hue.
 - **What any running pack turns off**: anti-aliasing (TAA, FXAA, TAA upscaling), Improved Transparency and frame
   generation.
