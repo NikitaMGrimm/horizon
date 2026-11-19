@@ -162,9 +162,9 @@ fn hidden_parts_keep_their_bits_and_names() {
     }
     let mut hidden = HiddenParts::default();
     hidden.hide_named("tail").unwrap();
-    hidden.hide_named("wing").unwrap();
+    hidden.hide_named("wings").unwrap();
     hidden.hide(HumanoidPart::LeftPants);
-    let expected = golden(&["tail", "wing"], 1 << 11);
+    let expected = golden(&["tail", "wings"], 1 << 11);
     assert_eq!(bytes(&hidden), expected);
     assert_eq!(Reader::decode::<HiddenParts>(&expected).unwrap(), hidden);
 }
