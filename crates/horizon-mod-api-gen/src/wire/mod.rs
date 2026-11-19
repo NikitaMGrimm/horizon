@@ -1165,6 +1165,83 @@ mod tests {
 
     const NBT: &str = "impl Tag {\n    pub fn id(&self) -> u8 { match self { Self::End => 0, Self::Int(_) => 3 } }\n    pub fn get(&self) {}\n}\nimpl Default for Limits {\n    fn default() -> Self { Self { max_depth: 512 } }\n}\n";
 
+    /// `codecs` reads a file outside the codec module only when its text says `Wire for`, so an
+    /// `impl Wire` whose header splits that over two lines would cross unhashed (#18400). Every
+    /// hand-written codec of the tree it reads must be in a file it reads.
+    #[test]
+    fn every_hand_written_codec_is_in_a_file_the_core_hash_reads() {
+        use syn::Item;
+        fn test_only(attrs: &[syn::Attribute]) -> bool {
+            attrs.iter().any(|attr| {
+                attr.path().is_ident("cfg")
+                    && quote::ToTokens::to_token_stream(attr)
+                        .to_string()
+                        .contains("test")
+            })
+        }
+        /// Whether `items` hold what `codecs`' `items` hashes: a `Wire` impl or a macro writing one.
+        fn codec(items: &[Item]) -> bool {
+            items.iter().any(|item| match item {
+                Item::Impl(block) => {
+                    !test_only(&block.attrs)
+                        && block.trait_.as_ref().is_some_and(|(_, path, _)| {
+                            path.segments.last().is_some_and(|s| s.ident == "Wire")
+                        })
+                }
+                Item::Macro(mac) => {
+                    mac.mac.path.is_ident("macro_rules")
+                        && mac.mac.tokens.to_string().contains("Wire for")
+                }
+                Item::Mod(module) if !test_only(&module.attrs) => module
+                    .content
+                    .as_ref()
+                    .is_some_and(|(_, content)| codec(content)),
+                _ => false,
+            })
+        }
+        fn walk(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, files);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut files = Vec::new();
+        // `codecs`' directories; below, the files it skips and the codec module it reads whole.
+        for dir in ["crates/horizon-mod-vocab/src", "crates/horizon-mod-api/src"] {
+            walk(&root.join(dir), &mut files);
+        }
+        let (mut read, mut unread) = (0, Vec::new());
+        for path in files {
+            let key = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if key.contains("tests")
+                || key.contains("golden")
+                || key.starts_with("crates/horizon-mod-vocab/src/wire/")
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            if !codec(&syn::parse_file(&text).unwrap().items) {
+                continue;
+            }
+            if text.contains("Wire for") || text.contains("wire(via = String)") {
+                read += 1;
+            } else {
+                unread.push(key);
+            }
+        }
+        assert!(unread.is_empty(), "codecs the core hash doesn't read: {unread:?}");
+        assert!(read > 0, "no hand-written codec found outside the codec module");
+    }
+
     /// The core hash covers the file roots' selectors: swapping two refuses mods built before.
     #[test]
     fn swapped_file_roots_change_the_core_hash() {
