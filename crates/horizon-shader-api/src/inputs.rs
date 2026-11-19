@@ -566,7 +566,7 @@ pub const MATERIAL_LIGHT_SOURCE: [Field; 3] = [
     Field {
         name: "light_source_tier",
         ty: "u32",
-        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: how Horizon's own HDR look ranks the surface's block as a light source: 0 none, 1 low (magma, a redstone torch, candles, froglights), 2 incandescent (torches, lanterns, fire, lava), 3 bright (glowstone, a beacon, campfires), 4 very bright (the sun and lightning; no block has it). It comes from the block, which `emission` doesn't tell (glow lichen gives light and is 0, a froglight gives 15 and is 1), the same on every face; a fluid's surface has the fluid's (lava 2), distant terrain 0.",
+        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: how Horizon's own HDR look ranks the surface's block as a light source: 0 none, 1 low (magma, a redstone torch, candles, froglights), 2 incandescent (torches, lanterns, fire, lava), 3 bright (glowstone, a beacon, campfires), 4 very bright (the sun and lightning; no block has it). It comes from the block, which `emission` doesn't tell (glow lichen gives light and is 0, a froglight gives 15 and is 1), the same on every face; a fluid's surface has the fluid's (lava 2), and distant terrain keeps its block's (with `light_source_whole`), so far glowstone is 3.",
     },
     Field {
         name: "light_source_whole",
@@ -576,7 +576,7 @@ pub const MATERIAL_LIGHT_SOURCE: [Field; 3] = [
     Field {
         name: "light_source_threshold",
         ty: "f32",
-        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: the brightness a texel of the surface's sprite reaches where Horizon's look lets it shine (unless `light_source_whole`), 0..1. A texel's brightness is the mean of the luminance and the brightest channel of its colour in linear light: of `c = albedo.rgb`, `0.5 * (dot(c, vec3(0.2126, 0.7152, 0.0722)) + max(c.r, max(c.g, c.b)))`. It is measured from the sprite itself, a set share of the way from its darkest to its brightest opaque texel, when HDR output turns on: 0 for every sprite until HDR output has been on once (every texel passes), the last measure after it turns off, and 1 for a sprite without an opaque texel.",
+        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: the brightness a texel of the surface's sprite reaches where Horizon's look lets it shine (unless `light_source_whole`), 0..1. A texel's brightness is the mean of the luminance and the brightest channel of its colour in linear light: of `c = albedo.rgb`, `0.5 * (dot(c, vec3(0.2126, 0.7152, 0.0722)) + max(c.r, max(c.g, c.b)))`. It is measured from the sprite itself, a set share of the way from its darkest to its brightest opaque texel, when HDR output turns on: 0 for every sprite until the renderer drawing it has measured it (every texel passes), so 0 while HDR output is off, since turning it off builds a new renderer; and 1 for a sprite without an opaque texel.",
     },
 ];
 

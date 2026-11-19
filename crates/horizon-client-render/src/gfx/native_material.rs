@@ -1578,7 +1578,8 @@ mod tests {
     /// A pack whose files name the light-source fields and `full_lightmap` reads what the
     /// engine's terrain reads for its HDR look (terrain.wgsl's `solid_finish_at`): the tier and
     /// whether the sprite shines whole, from the vertex colour's alpha byte as mesher.rs writes it
-    /// for blocks of each kind (a froglight, lava's surface, distant terrain among them); the
+    /// for blocks of each kind (a froglight, lava's surface among them) and as lod/mesh.rs writes
+    /// it for a far tile of glowstone and of a froglight; the
     /// sprite's threshold, at either array; and the lightmap at full light, which the frame takes
     /// from the renderer's lightmap (`native_post::full_lightmap`).
     #[test]
@@ -1619,8 +1620,13 @@ mod tests {
                 (color >> 24, layer, tier)
             })
             .collect();
-        // Distant terrain's tiles carry an opaque alpha (lod/mesh.rs).
-        cases.push((0xFF, 4, 0));
+        // Distant terrain keeps its block's tier and whole flag: far tiles of glowstone and of a
+        // froglight, as the LOD mesher emits them.
+        for (name, layer) in [("glowstone", 4u32), ("pearlescent_froglight", 4)] {
+            let tier = hdr_tier(name, 15);
+            let vertex = crate::lod::far_top_vertex((tier, 15), layer as u16);
+            cases.push((vertex.color >> 24, layer, tier));
+        }
         let n = cases.len();
         let list = |f: fn(&(u32, u32, u8)) -> u32| {
             let items: Vec<String> = cases.iter().map(|c| format!("{}u", f(c))).collect();
