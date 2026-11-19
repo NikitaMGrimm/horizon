@@ -966,6 +966,19 @@ fn a_traced_material_stage_is_checked_without_the_scene_and_with_it() {
     assert!(report.stages[0].scene.is_some());
 }
 
+#[test]
+fn a_material_can_read_hdr_light_sources_and_ray_hit_looks_together() {
+    let material = "fn material(input: MaterialInput) -> Surface {
+    let hit = trace(input.position, frame.sun_direction, 64.0);
+    let tier = f32(input.light_source_tier);
+    return Surface(vec4(frame.full_lightmap * tier * hit.ao, 1.0));
+}";
+    let report = traced_material(material, "", &[]).unwrap();
+    let stage = &report.stages[0];
+    assert!(stage.light_source() && stage.traces_looks());
+    assert!(!report.looks());
+}
+
 /// Ordinary `[[post]]` entries sharing a file are built from the first entry's, `files` and all,
 /// as before compute passes: only compute entries are built per entry.
 #[test]
@@ -1296,6 +1309,13 @@ fn looks_are_read_by_the_terrain_fields_alone() {
     assert!(!material(
         "    var i = input;\n    i.light.x = 1.0;\n    \
          return Surface(i.shaded_tint * (1.0 + i.emission));"
+    ));
+    // Nor do Horizon's look's light sources, which the vertex and the sprite hold, and the
+    // frame's full light.
+    assert!(!material(
+        "    let full = vec4(frame.full_lightmap * input.light_source_threshold, 1.0);\n    \
+         let tier = f32(input.light_source_tier) * f32(input.light_source_whole);\n    \
+         return Surface(input.albedo * full * tier);"
     ));
 }
 
