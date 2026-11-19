@@ -160,6 +160,7 @@ fn graced(
             luminance: applied.reported,
             primaries: applied.primaries,
             hdr: Some(true),
+            ..raw
         },
         None => raw,
     }
@@ -801,6 +802,7 @@ mod tests {
                 }),
                 primaries: None,
                 hdr,
+                compositor: false,
             };
             self.caps.hdr = offer;
         }
