@@ -576,7 +576,7 @@ pub const MATERIAL_LIGHT_SOURCE: [Field; 3] = [
     Field {
         name: "light_source_threshold",
         ty: "f32",
-        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: the brightness a texel of the surface's sprite reaches where Horizon's look lets it shine (unless `light_source_whole`), 0..1. A texel's brightness is the mean of the luminance and the brightest channel of its colour in linear light: of `c = albedo.rgb`, `0.5 * (dot(c, vec3(0.2126, 0.7152, 0.0722)) + max(c.r, max(c.g, c.b)))`. It is measured from the sprite itself, a set share of the way from its darkest to its brightest opaque texel, when HDR output turns on: 0 for every sprite until the renderer drawing it has measured it (every texel passes), so 0 while HDR output is off, since turning it off builds a new renderer; and 1 for a sprite without an opaque texel.",
+        doc: "Only in a pack whose files name `light_source_tier`, `light_source_whole` or `light_source_threshold`: the brightness a texel of the surface's sprite reaches where Horizon's look lets it shine (unless `light_source_whole`), 0..1. A texel's brightness is the mean of the luminance and the brightest channel of its colour in linear light: of `c = albedo.rgb`, `0.5 * (dot(c, vec3(0.2126, 0.7152, 0.0722)) + max(c.r, max(c.g, c.b)))`. It is measured from the sprite itself, a set share of the way from its darkest to its brightest opaque texel, when HDR output turns on: 0 for every sprite until the renderer drawing it has measured it (every texel passes), so a renderer made while HDR output is off, as turning it off makes one, reads 0; and 1 for a sprite without an opaque texel.",
     },
 ];
 
