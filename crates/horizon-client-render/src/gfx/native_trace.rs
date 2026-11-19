@@ -1,25 +1,26 @@
-//! The scene in the post passes and the material and entity stages of a shader pack with
-//! `[ray_tracing]` (docs/shaders.md, spec #15624): where the device traces rays, each pass, and
-//! the terrain's or the entities' pipelines of a material or entity stage that calls `trace` or
-//! `trace_any`, are built a second time
-//! from what the check made against the scene (`CheckedStage::scene`, `scene_source`), and their
-//! group 3 also holds the TLAS, the store of the sections' vertices (gfx/ray_scene.rs), the
-//! block sprites and the pack's material id and tags of each sprite layer, which the prelude's
-//! `trace` reads. Those draw in frames that have a scene; in the others, and on a device that
-//! can't hold the bindings, the ones whose `trace` misses draw, as on a device without ray
-//! queries. A pack whose files name `RAY_ENTITY` also has the entity layer's vertices, atlas
-//! and sampler there, and the retained block entities' vertices.
+//! The scene in the post passes, the compute passes and the material and entity stages of a shader pack with
+//! `[ray_tracing]` (docs/shaders.md, spec #15624): where the device traces rays, each post pass,
+//! each compute or `[[before_world]]` pass that calls a trace function, and the terrain and entity pipelines
+//! of stages that do, are built a second time from what the check made
+//! against the scene (`CheckedStage::scene`, `scene_source`), and their group 3 also holds the
+//! TLAS, the store of the sections' vertices (gfx/rt/scene.rs), the block sprites and the
+//! pack's material id and tags of each sprite layer, which the prelude's `trace` reads. Those
+//! run in frames that have a scene; in the others, and on a device that can't hold the
+//! bindings, the ones whose `trace` misses run, as on a device without ray queries. A pack whose
+//! files name `RAY_ENTITY` also has the entity layer's vertices, atlas and sampler there, and
+//! the retained block entities' vertices.
 
 use horizon_shader_api::stages::{
     GROUP, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING, RAY_ENTITY_ATLAS_BINDING,
     RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_SAMPLER_BINDING, RAY_ENTITY_STORE_BINDING,
-    RAY_LAYERS_BINDING, RAY_SCENE_BINDING, RAY_SPACE_BINDING, RAY_SPRITE_ARRAYS,
+    RAY_LAYERS_BINDING, RAY_LOOKS_BINDING, RAY_SCENE_BINDING, RAY_SPACE_BINDING, RAY_SPRITE_ARRAYS,
     RAY_SPRITES_BINDING, RAY_STORE_BINDING,
 };
 
 use super::super::native_material::{MaterialPipelines, TerrainShape};
+use super::kept::Reads;
 use super::{NativeFrame, NativePost, post_pipeline};
-pub(in crate::gfx) use crate::gfx::surface_setup::ray_query::ray_scene::{RayScene, Traced};
+pub(in crate::gfx) use crate::gfx::rt::scene::Traced;
 
 /// What the scene's passes are built against besides the scene: the terrain's sprites and the
 /// pack's tables of them.
@@ -59,14 +60,24 @@ pub(in crate::gfx) struct Rays {
     split: u32,
     /// Whether the group has the entity layer's bindings.
     entities: bool,
+    /// While the group has the terrain's looks, what it binds there before the scene has
+    /// them: a quad without a look.
+    no_looks: Option<wgpu::Buffer>,
 }
 
-/// The post passes built against the scene, and what they read besides it.
+/// The post and compute passes built against the scene, and what they read besides it.
 pub(super) struct NativeTrace {
-    /// The post group's layout with the scene's bindings.
-    pub(super) layout: wgpu::BindGroupLayout,
-    /// One pipeline a pass, in the passes' order.
+    /// Each pass's group layout with the scene's bindings, the post passes' then, in a chain
+    /// with kept resources, the compute passes' (`KeptStore::passes`), none for one that
+    /// doesn't trace. Post passes without kept resources share one when they need the same
+    /// scene bindings.
+    layouts: Vec<Option<wgpu::BindGroupLayout>>,
+    /// Which pass layouts include binding 81, in the same order as `layouts`.
+    looks: Vec<bool>,
+    /// One pipeline a post pass, in the passes' order.
     pub(super) pipelines: Vec<wgpu::RenderPipeline>,
+    /// One a compute pass that traces, in `KeptStore::computes`' order.
+    pub(super) computes: Vec<Option<wgpu::ComputePipeline>>,
     rays: Rays,
     /// The resource packs' LabPBR maps (`NativeFrame::pbr`), for `hit_normal_map` and its kin.
     pbr: [wgpu::TextureView; 2],
@@ -78,9 +89,10 @@ pub(in crate::gfx) struct StageTrace<P> {
     layout: wgpu::BindGroupLayout,
     pipelines: P,
     rays: Rays,
-    /// The group, made for the frame's group `.0` and the scene of generation `.1` (the TLAS and
-    /// the store are replaced as they grow, and the frame's group as its targets change).
-    group: Option<(wgpu::BindGroup, u64, wgpu::BindGroup)>,
+    /// The group, made for the frame's group `.0`, the scene of generation `.1` (the TLAS and
+    /// the store are replaced as they grow, and the frame's group as its targets change) and
+    /// the kept resources the stage reads `.2` (`Reads::made`): one, or one a parity of them.
+    group: Option<(wgpu::BindGroup, u64, Option<u32>, Vec<wgpu::BindGroup>)>,
     /// Whether this frame traces the scene.
     on: bool,
 }
@@ -105,11 +117,16 @@ fn layer_words(tags: &[(u32, u32)], materials: &[(u32, u32)]) -> Vec<u32> {
     words
 }
 
-/// The scene's bindings in group 3, for the fragment stage, with the entity layer's.
-fn scene_entries(entities: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
+/// The scene's bindings in group 3, for the shader stage `visibility`, with the entity layer's
+/// where `entities` and the terrain's looks where `looks`.
+fn scene_entries(
+    visibility: wgpu::ShaderStages,
+    entities: bool,
+    looks: bool,
+) -> Vec<wgpu::BindGroupLayoutEntry> {
     let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility,
         ty,
         count: None,
     };
@@ -159,15 +176,19 @@ fn scene_entries(entities: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
             entry(RAY_ENTITY_RETAINED_BINDING, buffer(read)),
         ]);
     }
+    if looks {
+        entries.push(entry(RAY_LOOKS_BINDING, buffer(read)));
+    }
     entries
 }
 
-/// The LabPBR maps of a post pass built against the scene, at the bindings the material stage
-/// has them (`NativeFrame`'s 12 and 13): the post group has none of its own there.
-fn post_pbr_entries() -> [wgpu::BindGroupLayoutEntry; 2] {
+/// The LabPBR maps of a post or compute pass built against the scene, for the shader stage
+/// `visibility`, at the bindings the material stage has them (`NativeFrame`'s 12 and 13): the
+/// post group has none of its own there.
+fn post_pbr_entries(visibility: wgpu::ShaderStages) -> [wgpu::BindGroupLayoutEntry; 2] {
     [PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING].map(|binding| wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility,
         ty: wgpu::BindingType::Texture {
             // Sampled with the post stage's `nearest_sampler`.
             sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -180,7 +201,7 @@ fn post_pbr_entries() -> [wgpu::BindGroupLayoutEntry; 2] {
 
 /// What `limits` lacks for the shader stage `stage` that reads the group `group` and the other
 /// groups' entries `others`, if anything.
-pub(super) fn over_limits(
+pub(in crate::gfx) fn over_limits(
     group: &[wgpu::BindGroupLayoutEntry],
     others: &[wgpu::BindGroupLayoutEntry],
     limits: &wgpu::Limits,
@@ -244,31 +265,37 @@ pub(super) fn over_limits(
         .map(|(what, need, limit)| format!("{need} {what}, the device takes {limit}"))
 }
 
-/// Builds with `build` what draws against the scene, in a group 3 of `entries` and the
-/// scene's, where the device traces rays and its fragment stage holds them beside its other
-/// groups' entries `others`. Else None, and the log says why: what doesn't trace keeps missing
-/// every ray.
+/// Builds with `build` what runs against the scene, in a group 3 of each of `groups`' entries
+/// and the scene's. Each group names its shader stage and whether it reads looks. The device
+/// must hold these bindings beside the other groups' entries `others`. Else None: what
+/// doesn't trace keeps missing every ray, all of it, so that `frame.has_ray_tracing` holds for
+/// every pass.
 fn with_scene<T>(
     device: &wgpu::Device,
-    (entries, others): (&[wgpu::BindGroupLayoutEntry], &[wgpu::BindGroupLayoutEntry]),
+    (groups, others): (
+        Vec<(Vec<wgpu::BindGroupLayoutEntry>, wgpu::ShaderStages, bool)>,
+        &[wgpu::BindGroupLayoutEntry],
+    ),
     shape: &TraceShape<'_>,
-    build: impl FnOnce(&wgpu::BindGroupLayout) -> Result<T, String>,
-) -> Option<(wgpu::BindGroupLayout, T, Rays)> {
+    build: impl FnOnce(&[wgpu::BindGroupLayout]) -> Result<T, String>,
+) -> Option<(Vec<wgpu::BindGroupLayout>, T, Rays)> {
     // Without ray queries there is no scene (`ray_query` said so if they were asked for).
-    if !crate::gfx::surface_setup::ray_query::on(device) {
+    if !crate::gfx::rt::query::on(device) {
         return None;
     }
-    let mut entries = entries.to_vec();
-    entries.extend(scene_entries(shape.entities));
+    let any_looks = groups.iter().any(|(_, _, looks)| *looks);
+    let groups: Vec<_> = groups
+        .into_iter()
+        .map(|(mut entries, stage, looks)| {
+            entries.extend(scene_entries(stage, shape.entities, looks));
+            (entries, stage)
+        })
+        .collect();
     let refused = if shape.sprites.len() < RAY_SPRITE_ARRAYS as usize {
         Some("the terrain's sprite arrays aren't there".to_owned())
     } else {
-        over_limits(
-            &entries,
-            others,
-            &device.limits(),
-            wgpu::ShaderStages::FRAGMENT,
-        )
+        let limits = device.limits();
+        (groups.iter()).find_map(|(entries, stage)| over_limits(entries, others, &limits, *stage))
     };
     if let Some(why) = refused {
         log::warn!("Horizon renderer: the shader pack's rays miss everything: {why}");
@@ -276,11 +303,15 @@ fn with_scene<T>(
     }
     // A scope of its own: a backend that refuses these leaves the pack the ones that miss.
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("Native shader pack group with the scene"),
-        entries: &entries,
-    });
-    let built = build(&layout);
+    let layouts: Vec<_> = (groups.iter())
+        .map(|(entries, _)| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Native shader pack group with the scene"),
+                entries,
+            })
+        })
+        .collect();
+    let built = build(&layouts);
     let refused = pollster::block_on(scope.pop()).map(|e| e.to_string());
     let built = match (built, refused) {
         (Ok(built), None) => built,
@@ -308,8 +339,16 @@ fn with_scene<T>(
         sprites: shape.sprites[..RAY_SPRITE_ARRAYS as usize].to_vec(),
         split: shape.split.max(1),
         entities: shape.entities,
+        no_looks: any_looks.then(|| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Native shader pack: no looks"),
+                size: std::mem::size_of::<crate::mesher::QuadLook>() as u64,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        }),
     };
-    Some((layout, built, rays))
+    Some((layouts, built, rays))
 }
 
 impl Rays {
@@ -326,7 +365,7 @@ impl Rays {
     }
 
     /// The scene's entries of a group 3.
-    fn entries<'a>(&'a self, scene: &Traced<'a>) -> Vec<wgpu::BindGroupEntry<'a>> {
+    fn entries<'a>(&'a self, scene: &Traced<'a>, looks: bool) -> Vec<wgpu::BindGroupEntry<'a>> {
         let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: RAY_SCENE_BINDING,
@@ -371,13 +410,19 @@ impl Rays {
             let entry = |(binding, resource)| wgpu::BindGroupEntry { binding, resource };
             entries.extend(bindings.into_iter().zip(resources).map(entry));
         }
+        if let Some(none) = self.no_looks.as_ref().filter(|_| looks) {
+            entries.push(wgpu::BindGroupEntry {
+                binding: RAY_LOOKS_BINDING,
+                resource: scene.looks.unwrap_or(none).as_entire_binding(),
+            });
+        }
         entries
     }
 }
 
 /// `horizon_RaySpace`'s twelve words for `scene`, its sprite arrays holding `split` layers each:
-/// the retained block entities' first instance at word 6, and the entity layer's bases from word
-/// 8, where WGSL aligns a `vec3<u32>`.
+/// the retained block entities' first instance at word 6, the Nether at word 7, and the entity
+/// layer's bases from word 8, where WGSL aligns a `vec3<u32>`.
 pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 12] {
     let [x, y, z] = scene.camera.map(f32::to_bits);
     let [a, b, c] = scene.entities.as_ref().map_or([0; 3], |e| e.bases);
@@ -391,7 +436,7 @@ pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 12] {
         instances[0],
         instances[1],
         retained,
-        0,
+        u32::from(scene.nether),
         a,
         b,
         c,
@@ -400,10 +445,11 @@ pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 12] {
 }
 
 impl NativePost {
-    /// Builds the passes against the scene from `scenes` (each pass's label and its module
-    /// with the scene, in the passes' order), where the device traces rays and takes the
-    /// bindings; else the passes keep missing every ray, and the log says why once. Returns
-    /// whether they trace. `pbr` is the frame's LabPBR maps (`NativeFrame::pbr`).
+    /// Builds the passes against the scene from `scenes` (each post pass's label and its
+    /// module with the scene, in the passes' order) and, in a chain with kept resources, the
+    /// compute passes whose files trace (`ComputePass::scene`), where the device traces rays and
+    /// takes the bindings; else every pass keeps missing every ray, and the log says why once.
+    /// Returns whether they trace. `pbr` is the frame's LabPBR maps (`NativeFrame::pbr`).
     pub(in crate::gfx) fn trace_scene(
         &mut self,
         device: &wgpu::Device,
@@ -412,35 +458,105 @@ impl NativePost {
         shape: &TraceShape<'_>,
         pbr: &[wgpu::TextureView; 2],
     ) -> bool {
-        // A pass with kept resources doesn't trace yet: its layout has no scene.
-        if scenes.len() != self.passes.len() || self.kept.is_some() {
+        let computes: Vec<_> = (self.kept.iter_mut())
+            .flat_map(|k| k.computes.iter_mut())
+            .map(|p| Some((p.label.clone(), p.scene.take()?)))
+            .collect();
+        let ordinary = self.passes.len();
+        if scenes.len() != ordinary || scenes.is_empty() && computes.iter().all(Option::is_none) {
             return false;
         }
-        let build = |layout: &wgpu::BindGroupLayout| {
-            let mut groups: [Option<&wgpu::BindGroupLayout>; GROUP as usize + 1] =
-                Default::default();
-            groups[GROUP as usize] = Some(layout);
-            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Native shader pack post with the scene"),
-                bind_group_layouts: &groups,
-                ..Default::default()
-            });
-            // Without kept resources every pass draws a half-float target.
-            let target = super::INTERMEDIATE;
-            Ok(scenes
-                .into_iter()
-                .map(|(label, module)| {
-                    post_pipeline(device, &label, &pipeline_layout, module, constants, target)
+        let looks: Vec<_> = scenes
+            .iter()
+            .map(|(_, module)| has_look_binding(module))
+            .chain(computes.iter().map(|pass| {
+                pass.as_ref()
+                    .is_some_and(|(_, module)| has_look_binding(module))
+            }))
+            .collect();
+        let shared = self.kept.is_none() && looks.windows(2).all(|pair| pair[0] == pair[1]);
+        let (fragment, compute) = (wgpu::ShaderStages::FRAGMENT, wgpu::ShaderStages::COMPUTE);
+        // Only the passes that use looks consume another storage-buffer slot.
+        let groups: Vec<_> = match &self.kept {
+            Some(k) => (k.passes.iter().enumerate())
+                .filter(|(i, _)| *i < ordinary || computes[i - ordinary].is_some())
+                .map(|(i, p)| {
+                    let stage = if i < ordinary { fragment } else { compute };
+                    (
+                        [p.entries.as_slice(), &post_pbr_entries(stage)].concat(),
+                        stage,
+                        looks[i],
+                    )
                 })
-                .collect())
+                .collect(),
+            None => looks
+                .iter()
+                .take(if shared { 1 } else { ordinary })
+                .map(|&looks| {
+                    (
+                        [self.entries.as_slice(), &post_pbr_entries(fragment)].concat(),
+                        fragment,
+                        looks,
+                    )
+                })
+                .collect(),
         };
-        let entries = [self.entries.as_slice(), &post_pbr_entries()].concat();
-        let traced = with_scene(device, (&entries, &[]), shape, build);
-        self.trace = traced.map(|(layout, pipelines, rays)| NativeTrace {
-            layout,
-            pipelines,
-            rays,
-            pbr: pbr.clone(),
+        let (plan, kept) = (&self.plan, &self.kept);
+        let build = |layouts: &[wgpu::BindGroupLayout]| {
+            let pipeline_layout = |layout: &wgpu::BindGroupLayout| {
+                let mut groups: [Option<&wgpu::BindGroupLayout>; GROUP as usize + 1] =
+                    Default::default();
+                groups[GROUP as usize] = Some(layout);
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Native shader pack post with the scene"),
+                    bind_group_layouts: &groups,
+                    ..Default::default()
+                })
+            };
+            let pipeline_layouts: Vec<_> = layouts.iter().map(pipeline_layout).collect();
+            let pipelines: Vec<wgpu::RenderPipeline> = (scenes.into_iter().enumerate())
+                .map(|(i, (label, module))| {
+                    let layout = &pipeline_layouts[i.min(pipeline_layouts.len() - 1)];
+                    let target = super::kept::target(kept, plan[i].writes);
+                    post_pipeline(device, &label, layout, module, constants, target)
+                })
+                .collect();
+            // The tracing compute passes' layouts come after the post passes'.
+            let mut own = pipeline_layouts.iter().skip(ordinary);
+            let computes: Vec<Option<wgpu::ComputePipeline>> = (computes.into_iter())
+                .map(|scene: Option<(String, naga::Module)>| {
+                    let (label, module) = scene?;
+                    let layout = own.next()?;
+                    Some(super::kept::compute_pipeline(
+                        device, &label, layout, module, constants,
+                    ))
+                })
+                .collect();
+            Ok((pipelines, computes))
+        };
+        let traced = with_scene(device, (groups, &[]), shape, build);
+        self.trace = traced.map(|(made, (pipelines, computes), rays)| {
+            let mut made = made.into_iter();
+            let layouts = match &self.kept {
+                // Kept passes in order, a compute pass that doesn't trace without one.
+                Some(k) => (0..k.passes.len())
+                    .map(|i| {
+                        (i < ordinary || computes_trace(&computes, i - ordinary))
+                            .then(|| made.next())
+                            .flatten()
+                    })
+                    .collect(),
+                None if shared => vec![made.next(); ordinary],
+                None => made.map(Some).collect(),
+            };
+            NativeTrace {
+                layouts,
+                looks,
+                pipelines,
+                computes,
+                rays,
+                pbr: pbr.clone(),
+            }
         });
         self.trace.is_some()
     }
@@ -460,12 +576,42 @@ impl NativePost {
     pub(in crate::gfx) fn traces_entities(&self) -> bool {
         self.trace.as_ref().is_some_and(|t| t.rays.entities)
     }
+
+    /// Whether the passes' rays read the terrain's looks.
+    pub(in crate::gfx) fn traces_looks(&self) -> bool {
+        self.trace
+            .as_ref()
+            .is_some_and(|t| t.rays.no_looks.is_some())
+    }
+}
+
+fn has_look_binding(module: &naga::Module) -> bool {
+    module.global_variables.iter().any(|(_, g)| {
+        g.binding
+            .as_ref()
+            .is_some_and(|b| b.group == GROUP && b.binding == RAY_LOOKS_BINDING)
+    })
+}
+
+/// Whether compute pass `c` has a pipeline against the scene.
+fn computes_trace(computes: &[Option<wgpu::ComputePipeline>], c: usize) -> bool {
+    computes.get(c).is_some_and(Option::is_some)
 }
 
 impl NativeTrace {
+    /// Pass `pass`'s layout with the scene (its index in `KeptStore::passes`, or a post
+    /// pass's), if it traces.
+    pub(super) fn layout(&self, pass: usize) -> Option<&wgpu::BindGroupLayout> {
+        self.layouts.get(pass)?.as_ref()
+    }
+
     /// The scene's entries of a pass's group, and the LabPBR maps'.
-    pub(super) fn entries<'a>(&'a self, scene: &Traced<'a>) -> Vec<wgpu::BindGroupEntry<'a>> {
-        let mut entries = self.rays.entries(scene);
+    pub(super) fn entries<'a>(
+        &'a self,
+        pass: usize,
+        scene: &Traced<'a>,
+    ) -> Vec<wgpu::BindGroupEntry<'a>> {
+        let mut entries = self.rays.entries(scene, self.looks[pass]);
         let maps = [PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING].into_iter();
         entries.extend(
             maps.zip(&self.pbr)
@@ -489,13 +635,16 @@ impl<P> StageTrace<P> {
     pub(in crate::gfx) fn new(
         device: &wgpu::Device,
         frame: &NativeFrame,
-        (others, shape): (&[wgpu::BindGroupLayoutEntry], &TraceShape<'_>),
+        (others, shape, looks): (&[wgpu::BindGroupLayoutEntry], &TraceShape<'_>, bool),
+        kept: &[wgpu::BindGroupLayoutEntry],
         build: impl FnOnce(&wgpu::BindGroupLayout) -> Result<P, String>,
     ) -> Option<Self> {
-        let groups = (frame.entries.as_slice(), others);
-        let (layout, pipelines, rays) = with_scene(device, groups, shape, build)?;
+        let fragment = wgpu::ShaderStages::FRAGMENT;
+        let own = vec![([&frame.entries[..], kept].concat(), fragment, looks)];
+        let build = |layouts: &[wgpu::BindGroupLayout]| build(&layouts[0]);
+        let (layouts, pipelines, rays) = with_scene(device, (own, others), shape, build)?;
         Some(Self {
-            layout,
+            layout: layouts.into_iter().next()?,
             pipelines,
             rays,
             group: None,
@@ -513,25 +662,42 @@ impl<P> StageTrace<P> {
         Some(self.rays.write(queue, scene?))
     }
 
-    /// Joins the frame's group, as it is now, with `scene`, this frame's: the stage draws
-    /// with these pipelines while there is one.
+    /// Joins the frame's group, as it is now, with `scene`, this frame's, and the kept
+    /// resources the stage reads (`reads`): the stage draws with these pipelines while
+    /// there is a scene.
     pub(in crate::gfx) fn bind(
         &mut self,
         device: &wgpu::Device,
         frame: &NativeFrame,
         scene: Option<&Traced<'_>>,
+        reads: Option<Reads<'_>>,
     ) {
         self.on = scene.is_some();
         let Some(scene) = scene else {
             return;
         };
-        let made = |(group, generation, _): &(wgpu::BindGroup, u64, wgpu::BindGroup)| {
-            *group == frame.group && *generation == scene.generation
+        let stamp = reads.map(|r| r.made());
+        let made = |(group, generation, kept, _): &(_, u64, Option<u32>, _)| {
+            *group == frame.group && *generation == scene.generation && *kept == stamp
         };
         if !self.group.as_ref().is_some_and(made) {
-            let joined = frame.joined(device, &self.layout, &self.rays.entries(scene));
-            self.group = Some((frame.group.clone(), scene.generation, joined));
+            let join = |parity| {
+                let mut entries = self.rays.entries(scene, self.traces_looks());
+                entries.extend(reads.map(|r| r.entries(parity)).unwrap_or_default());
+                frame.joined(device, &self.layout, &entries)
+            };
+            let groups = match reads {
+                Some(_) => vec![join(0), join(1)],
+                None => vec![join(0)],
+            };
+            self.group = Some((frame.group.clone(), scene.generation, stamp, groups));
         }
+    }
+
+    /// Group 3's layout with the scene, for a test's own entry points.
+    #[cfg(test)]
+    pub(in crate::gfx) fn layout(&self) -> &wgpu::BindGroupLayout {
+        &self.layout
     }
 
     /// Whether the stage traces the entity layer.
@@ -539,16 +705,22 @@ impl<P> StageTrace<P> {
         self.rays.entities
     }
 
-    /// The pipelines and group 3 the stage draws with this frame, if it traces.
-    pub(in crate::gfx) fn drawn(&self) -> Option<(&P, &wgpu::BindGroup)> {
-        let (_, _, group) = self.group.as_ref().filter(|_| self.on)?;
-        Some((&self.pipelines, group))
+    /// Whether the stage's rays read the terrain's looks.
+    pub(in crate::gfx) fn traces_looks(&self) -> bool {
+        self.rays.no_looks.is_some()
+    }
+
+    /// The pipelines and group 3 the stage draws with this frame, if it traces, the kept
+    /// resources' version `parity` this frame's.
+    pub(in crate::gfx) fn drawn(&self, parity: usize) -> Option<(&P, &wgpu::BindGroup)> {
+        let (_, _, _, groups) = self.group.as_ref().filter(|_| self.on)?;
+        Some((&self.pipelines, &groups[parity.min(groups.len() - 1)]))
     }
 }
 
 impl NativeFrame {
     /// The frame's group as `group` makes it, with `scene`'s entries, of the layout `layout`.
-    fn joined(
+    pub(in crate::gfx) fn joined(
         &self,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -595,7 +767,7 @@ mod tests {
             },
             count: None,
         }];
-        entries.extend(scene_entries(false));
+        entries.extend(scene_entries(FRAGMENT, false, false));
         let fits = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 9,
             max_storage_buffers_per_shader_stage: 2,
@@ -645,7 +817,7 @@ mod tests {
         let entries = [
             at(64, compute, storage),
             at(66, compute, storage),
-            at(1, both, post_pbr_entries()[0].ty),
+            at(1, both, post_pbr_entries(FRAGMENT)[0].ty),
         ];
         let limits = wgpu::Limits {
             max_storage_textures_per_shader_stage: 1,
@@ -665,7 +837,7 @@ mod tests {
     /// buffers and a sampled texture, and the group's bindings up to the retained store's.
     #[test]
     fn the_entity_layer_counts_toward_the_limits() {
-        let entries = scene_entries(true);
+        let entries = scene_entries(FRAGMENT, true, false);
         let fits = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 9,
             max_storage_buffers_per_shader_stage: 4,
@@ -698,7 +870,7 @@ mod tests {
         assert!(over_limits(&entries, &[], &eight, FRAGMENT).is_some());
         // Without the layer the scene fits as before.
         assert_eq!(
-            over_limits(&scene_entries(false), &[], &two, FRAGMENT),
+            over_limits(&scene_entries(FRAGMENT, false, false), &[], &two, FRAGMENT),
             None
         );
     }
@@ -707,8 +879,8 @@ mod tests {
     /// at bindings below the scene's that don't raise the group's count.
     #[test]
     fn a_traced_post_pass_s_maps_count_toward_its_limits() {
-        let mut entries = scene_entries(false);
-        entries.extend(post_pbr_entries());
+        let mut entries = scene_entries(FRAGMENT, false, false);
+        entries.extend(post_pbr_entries(FRAGMENT));
         let fits = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 10,
             max_storage_buffers_per_shader_stage: 2,
@@ -731,7 +903,7 @@ mod tests {
     /// own doesn't count toward the group's.
     #[test]
     fn the_terrain_s_own_group_counts_toward_its_fragment_stage_s_limits() {
-        let mut entries = scene_entries(false);
+        let mut entries = scene_entries(FRAGMENT, false, false);
         let terrain = terrain_entries();
         // 8 sprite arrays, the lightmap and the emission thresholds; the globals' uniform.
         let textures =

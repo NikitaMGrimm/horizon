@@ -8,12 +8,12 @@
 use std::path::{Path, PathBuf};
 
 /// `Limits::downlevel_defaults().max_inter_stage_shader_variables`, the least a GPU offers.
-const LIMIT: u32 = 15;
+pub(in crate::gfx) const LIMIT: u32 = 15;
 
 /// One entry point's variables: the user-defined `@location`s and the built-ins wgpu counts.
 #[derive(Debug, PartialEq, Eq)]
-struct Interface {
-    entry: String,
+pub(in crate::gfx) struct Interface {
+    pub(in crate::gfx) entry: String,
     /// Vertex outputs or fragment inputs, user-defined.
     user: u32,
     /// The fragment stage's `front_facing`, `sample_index`, `sample_mask` and `primitive_index`
@@ -22,7 +22,7 @@ struct Interface {
 }
 
 impl Interface {
-    fn total(&self) -> u32 {
+    pub(in crate::gfx) fn total(&self) -> u32 {
         self.user + self.built_ins
     }
 }
@@ -49,7 +49,7 @@ fn is_location(binding: &naga::Binding) -> bool {
 }
 
 /// The stage interface of every vertex and fragment entry point of `source`.
-fn interfaces(source: &str) -> Vec<Interface> {
+pub(in crate::gfx) fn interfaces(source: &str) -> Vec<Interface> {
     let module = naga::front::wgsl::parse_str(source).unwrap();
     let mut out = Vec::new();
     for entry in &module.entry_points {
@@ -133,6 +133,11 @@ fn composed() -> Vec<(&'static str, Vec<&'static str>, String)> {
             entity.clone() + include_str!("../static_entity.wgsl"),
         ),
         (
+            "prepared model",
+            vec!["entity.wgsl", "prepared_model.wgsl"],
+            entity.clone() + include_str!("../prepared_model.wgsl"),
+        ),
+        (
             "improved transparency clouds",
             vec!["entity.wgsl", "oit.wgsl", "oit_clouds.wgsl"],
             entity.clone() + include_str!("../oit.wgsl") + include_str!("../oit_clouds.wgsl"),
@@ -154,26 +159,11 @@ fn composed() -> Vec<(&'static str, Vec<&'static str>, String)> {
             vec!["terrain.wgsl", "visbuffer.wgsl"],
             super::terrain_shader() + include_str!("../visbuffer.wgsl"),
         ),
-        // Ray tracing's unpacking of sections into its store (gfx/ray_scene.rs's `Unpacker`).
+        // Ray tracing's unpacking of sections into its store (gfx/rt/scene.rs's `Unpacker`).
         (
             "ray tracing unpack",
             vec!["terrain.wgsl", "rt_unpack.wgsl"],
-            super::surface_setup::ray_query::ray_scene::unpack_shader(),
-        ),
-        // A native mod's world warp (gfx/world_warp.rs): its copies with the plainest warp.
-        (
-            "world warp terrain",
-            vec![
-                "terrain.wgsl",
-                "world_warp.wgsl",
-                "world_warp_fragment.wgsl",
-            ],
-            super::world_warp::terrain_shader(super::world_warp::IDENTITY).unwrap(),
-        ),
-        (
-            "world warp entities",
-            vec!["entity.wgsl", "static_entity.wgsl", "world_warp.wgsl"],
-            super::world_warp::entity_shader(super::world_warp::IDENTITY).unwrap(),
+            super::rt::scene::unpack_shader(),
         ),
         (
             "world primitives",
@@ -239,6 +229,7 @@ fn audited() -> Vec<(String, Vec<Interface>)> {
 }
 
 #[test]
+#[ignore = "daily"]
 fn no_pipeline_exceeds_the_weakest_gpus_inter_stage_limit() {
     let mut over = Vec::new();
     for (shader, entries) in audited() {

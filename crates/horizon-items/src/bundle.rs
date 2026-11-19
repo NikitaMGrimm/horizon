@@ -3,7 +3,7 @@
 //! overrides on it.
 use crate::item_data::BundleSelected;
 use crate::items::{ItemStack, Items};
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// A bundle weight: vanilla's `Fraction`, exact and kept reduced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,8 +57,17 @@ pub const INSERT_FAIL: &str = "minecraft:item.bundle.insert_fail";
 pub const REMOVE_ONE: &str = "minecraft:item.bundle.remove_one";
 pub const DROP_CONTENTS: &str = "minecraft:item.bundle.drop_contents";
 
-fn max_stack(items: &Items, stack: &ItemStack) -> u32 {
-    items.get(&stack.item).map_or(64, |i| i.max_stack).max(1)
+pub(crate) fn max_stack(items: &Items, stack: &ItemStack) -> u32 {
+    let info = items.get(&stack.item);
+    if !stack.carries_component(info, "minecraft:max_stack_size") {
+        return 1;
+    }
+    stack
+        .data()
+        .and_then(|data| data.other("minecraft:max_stack_size"))
+        .and_then(crate::properties::component_int)
+        .unwrap_or_else(|| info.map_or(1, |item| item.max_stack as i32))
+        .max(1) as u32
 }
 
 /// `BundleItem.playInsertSound` and `playRemoveOneSound`: volume 0.8, pitch
@@ -81,10 +90,10 @@ fn is_bundle_item(items: &Items, stack: &ItemStack) -> bool {
 /// `stack.get(BUNDLE_CONTENTS)`: the prototype's empty contents unless a
 /// `!minecraft:bundle_contents` patch removed them, or the stack's own.
 fn contents_of<'a>(items: &Items, stack: &'a ItemStack) -> Option<&'a [ItemStack]> {
-    let data = stack.data();
-    let inside = data.map_or(&[][..], |d| &d.bundle_contents[..]);
-    let removed = data.is_some_and(|d| d.other("!minecraft:bundle_contents").is_some());
-    (!inside.is_empty() || (is_bundle_item(items, stack) && !removed)).then_some(inside)
+    let inside = stack.data().map_or(&[][..], |d| &d.bundle_contents[..]);
+    stack
+        .carries_component(items.get(&stack.item), "minecraft:bundle_contents")
+        .then_some(inside)
 }
 
 /// `BundleContents.getWeight`: a nested bundle weighs its contents plus
@@ -108,11 +117,6 @@ fn contents_weight(items: &Items, inside: &[ItemStack]) -> Weight {
     inside.iter().fold(Weight::ZERO, |w, s| {
         w.add(item_weight(items, s).times(s.count))
     })
-}
-
-/// `BundleContents.canItemBeInBundle`: shulker boxes don't fit.
-pub fn can_be_in_bundle(stack: &ItemStack) -> bool {
-    stack.count > 0 && !stack.item.ends_with("shulker_box")
 }
 
 /// `BundleItem.onDestroyed` (`ItemStack.onDestroyed` for a bundle): the stack
@@ -170,6 +174,16 @@ impl Contents {
         })
     }
 
+    /// Remaining capacity for `offered` in a stack's bundle component, without cloning contents.
+    pub fn room_in_stack(items: &Items, bundle: &ItemStack, offered: &ItemStack) -> Option<u32> {
+        let inside = contents_of(items, bundle)?;
+        Some(
+            Weight::ONE
+                .sub(contents_weight(items, inside))
+                .how_many(item_weight(items, offered)),
+        )
+    }
+
     /// `getMaxAmountToAdd` for `stack`'s kind of item.
     pub fn room_for(&self, items: &Items, stack: &ItemStack) -> u32 {
         Weight::ONE
@@ -177,9 +191,11 @@ impl Contents {
             .how_many(item_weight(items, stack))
     }
 
-    /// `tryInsert`: what fits moves to the front, merged with its kind.
-    pub fn try_insert(&mut self, items: &Items, stack: &mut ItemStack) -> u32 {
-        if !can_be_in_bundle(stack) {
+    /// `tryInsert`: what fits moves to the front, merged with its kind. `fits` is the stack's
+    /// `canFitInsideContainerItems` answer, which `canItemBeInBundle` asks and the caller
+    /// gives, since the parts of the stack's item may change it; an empty stack never goes in.
+    pub fn try_insert(&mut self, items: &Items, stack: &mut ItemStack, fits: bool) -> u32 {
+        if stack.count == 0 || !fits {
             return 0;
         }
         let weight = item_weight(items, stack);
@@ -507,5 +523,35 @@ mod tooltip_tests {
         assert_eq!(layout.height, 3.0 * 9.0 + 13.0 + 8.0);
         assert_eq!(layout.bar, [4.0, 8.0 + 3.0 * 9.0 + 4.0]);
         assert_eq!(layout.empty_description, Some([4.0, 8.0]));
+    }
+
+    #[test]
+    fn bundle_removes_selected_item_or_defaults_to_last_inserted() {
+        let Some(items) = items() else { return };
+        let bundle = bundle_with(&[
+            ("minecraft:dirt", 5),
+            ("minecraft:stone", 10),
+            ("minecraft:apple", 2),
+        ]);
+        // Initially, selected is -1. remove_one takes index 0 (dirt, first stack).
+        let mut contents = Contents::of(&items, &bundle).unwrap();
+        assert_eq!(contents.selected(), -1);
+        let removed = contents.remove_one(&items).unwrap();
+        assert_eq!(&*removed.item, "minecraft:dirt");
+        assert_eq!(removed.count, 5);
+
+        // When an item is explicitly selected (e.g. index 2: apple):
+        let mut bundle = bundle_with(&[
+            ("minecraft:dirt", 5),
+            ("minecraft:stone", 10),
+            ("minecraft:apple", 2),
+        ]);
+        toggle_selected(&mut bundle, 2);
+        let mut contents = Contents::of(&items, &bundle).unwrap();
+        assert_eq!(contents.selected(), 2);
+        let removed = contents.remove_one(&items).unwrap();
+        assert_eq!(&*removed.item, "minecraft:apple");
+        assert_eq!(removed.count, 2);
+        assert_eq!(contents.selected(), -1);
     }
 }
