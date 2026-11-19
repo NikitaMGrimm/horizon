@@ -1238,8 +1238,14 @@ mod tests {
                 unread.push(key);
             }
         }
-        assert!(unread.is_empty(), "codecs the core hash doesn't read: {unread:?}");
-        assert!(read > 0, "no hand-written codec found outside the codec module");
+        assert!(
+            unread.is_empty(),
+            "codecs the core hash doesn't read: {unread:?}"
+        );
+        assert!(
+            read > 0,
+            "no hand-written codec found outside the codec module"
+        );
     }
 
     /// The core hash covers the file roots' selectors: swapping two refuses mods built before.

@@ -311,7 +311,8 @@ fn block(text: &str) -> String {
 fn guest_exports_pack_the_pointer_high_and_the_length_low() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source =
-        std::fs::read_to_string(root.join("crates/horizon-mod-api/src/wire/wire_guest.rs")).unwrap();
+        std::fs::read_to_string(root.join("crates/horizon-mod-api/src/wire/wire_guest.rs"))
+            .unwrap();
     let mut hook = Vec::new();
     blocks(
         &syn::parse_file(&source).unwrap().items,
@@ -322,7 +323,9 @@ fn guest_exports_pack_the_pointer_high_and_the_length_low() {
         hook,
         [(
             "horizon_hook".to_owned(),
-            block("{ let (pointer, len) = run(id); (pointer as usize as u64) << 32 | u64::from(len) }")
+            block(
+                "{ let (pointer, len) = run(id); (pointer as usize as u64) << 32 | u64::from(len) }"
+            )
         )]
     );
 
@@ -356,13 +359,18 @@ fn guest_exports_pack_the_pointer_high_and_the_length_low() {
     assert_eq!(
         exports,
         [
-            ("entry_prepare_can_equip".to_owned(), packed(super::prepared::PREPARE)),
+            (
+                "entry_prepare_can_equip".to_owned(),
+                packed(super::prepared::PREPARE)
+            ),
             (
                 "entry_ask_can_equip".to_owned(),
                 packed(super::names::export_id("Hooks", "can_equip"))
             ),
-            ("entry_release_can_equip".to_owned(), packed(super::prepared::RELEASE)),
+            (
+                "entry_release_can_equip".to_owned(),
+                packed(super::prepared::RELEASE)
+            ),
         ]
     );
 }
-
