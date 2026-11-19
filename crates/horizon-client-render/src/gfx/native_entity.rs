@@ -310,28 +310,8 @@ pub(super) fn shader_source(source: &str, fog: Fog, light: bool) -> String {
 
 /// The entities' group 0 (gfx.rs's entity draws, the native shadow pass's): their globals, the
 /// atlas, the lightmap and the glint, each with its sampler after it, and the armour glint.
-pub(super) fn entity_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
-    let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-        ty,
-        count: None,
-    };
-    let texture = wgpu::BindingType::Texture {
-        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-        view_dimension: wgpu::TextureViewDimension::D2,
-        multisampled: false,
-    };
-    let sampler = wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering);
-    let globals = wgpu::BindingType::Buffer {
-        ty: wgpu::BufferBindingType::Uniform,
-        has_dynamic_offset: false,
-        min_binding_size: None,
-    };
-    let mut entries = vec![entry(0, globals)];
-    entries.extend((1..=6).map(|b| entry(b, if b % 2 == 1 { texture } else { sampler })));
-    entries.push(entry(7, texture));
-    entries
+pub(super) fn entity_entries() -> [wgpu::BindGroupLayoutEntry; 8] {
+    super::entity_binding_entries()
 }
 
 /// The pack's entity pipelines: the entity stream's ordinary quads, and the retained block
