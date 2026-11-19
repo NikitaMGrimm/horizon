@@ -1210,7 +1210,7 @@ impl Item {
             Item::Horizon(H::HdrUiBrightness) if out.hdr_on() && !out.frame.hud_layer => {
                 Some("The shader pack's picture is shown at Paper White.")
             }
-            Item::Horizon(H::HdrColorBoost) if out.compositor_gamut => {
+            Item::Horizon(H::HdrColorBoost) if out.compositor_stretches() => {
                 Some("In scRGB, your desktop's own color setting applies.")
             }
             Item::Horizon(H::HdrLook) if out.pack_lights => {

@@ -928,7 +928,7 @@ pub struct Graphics {
     /// HDR Color Boost, 0..=100 percent: how far HDR output stretches the picture's BT.709
     /// colours toward the display's own primaries (`gfx::hdr::gamut`), as wide-gamut displays
     /// often show SDR. 0, the default, shows the colours exactly. scRGB output on Wayland is left
-    /// unboosted (`EffectiveOutput::compositor_gamut`).
+    /// unboosted (`EffectiveOutput::compositor_stretches`).
     pub hdr_color_boost: u32,
     /// HDR's look with no shader pack running.
     pub hdr_look: HdrLook,
