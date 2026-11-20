@@ -2397,11 +2397,7 @@ impl Renderer {
             }
             None => {
                 let _step = crate::spans::startup::step("renderer.open_device");
-                let api = if offscreen {
-                    api
-                } else {
-                    settings.start_api(api)
-                };
+                let api = settings.start_api(api, offscreen);
                 open_device(&window, offscreen, api, request.needs(layers)).await?
             }
         };

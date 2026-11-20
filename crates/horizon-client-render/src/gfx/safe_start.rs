@@ -10,12 +10,8 @@ use crate::graphics::{FILE, Graphics, GraphicsApi};
 use std::time::{Duration, Instant};
 
 /// Written beside [`FILE`] when the window's graphics device is lost (a [`Loss`]), and before a
-/// start on the other graphics API ([`TRYING`]) until it presents a frame.
+/// start on the other graphics API ([`trying_text`]) until it presents a frame.
 pub const MARKER: &str = "horizon-device-lost";
-/// The marker of a start on the other graphics API that hasn't presented a frame yet: a native
-/// crash in that API's driver leaves no loss and no crash report, and would otherwise repeat at
-/// every start.
-pub const TRYING: &str = "trying-other-api\n";
 /// How long a recovered device keeps presenting frames before its loss is forgiven: the same
 /// minute in which `Game::recover_device` gives up on a second loss.
 pub const HEALTHY_AFTER_RECOVERY: Duration = Duration::from_secs(60);
@@ -37,8 +33,10 @@ pub struct Loss {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Marker {
     Loss(Loss),
-    /// A start on the other graphics API that ended before it presented a frame.
-    Trying,
+    /// A start on the other graphics API, by the process `pid`, that hasn't presented a frame:
+    /// a native crash in that API's driver leaves no loss and no crash report, and would
+    /// otherwise repeat at every start.
+    Trying(u32),
 }
 
 /// How far a start steps back.
@@ -106,15 +104,20 @@ pub fn loss_text(
     ))
 }
 
+/// The marker's text for a start on the other graphics API by the process `pid`.
+pub fn trying_text(pid: u32) -> String {
+    format!("trying:{pid}\n")
+}
+
 /// What a marker's text says; `None` for one it can't read.
 pub fn parse_marker(text: &str) -> Option<Marker> {
-    if text == TRYING {
-        return Some(Marker::Trying);
-    }
     let field = |key: &str| {
         text.lines()
             .find_map(|line| line.strip_prefix(key)?.strip_prefix(':'))
     };
+    if let Some(pid) = field("trying") {
+        return pid.trim().parse().ok().map(Marker::Trying);
+    }
     Some(Marker::Loss(Loss {
         driver: field("driver")?.trim().to_owned(),
         setting: GraphicsApi::from_name(field("setting")?)?,
@@ -158,7 +161,7 @@ pub fn after(
     os: &str,
 ) -> (Option<SafeStart>, Option<String>) {
     let loss = match marker {
-        Marker::Trying => {
+        Marker::Trying(_) => {
             return match held {
                 Some(s) if s.step == Step::OtherApi => {
                     let tried = other_api(s.lost, os).map_or("another graphics API", |a| a.label());
@@ -221,12 +224,15 @@ pub fn after(
 
 impl Graphics {
     /// Takes the [`MARKER`] in `dir` into the hold, saved with the settings there, and leaves
-    /// [`TRYING`] for a start on the other graphics API.
+    /// [`trying_text`] for a start on the other graphics API. A start that loads its settings
+    /// twice (a scripted one) finds its own and keeps it.
     pub(crate) fn take_device_loss(&mut self, dir: &std::path::Path) {
         let marker = dir.join(MARKER);
-        if let Ok(text) = std::fs::read_to_string(&marker)
+        let found = std::fs::read_to_string(&marker).map(|text| parse_marker(&text));
+        if let Ok(found) = found
+            && found != Some(Marker::Trying(std::process::id()))
             && std::fs::remove_file(&marker).is_ok()
-            && let Some(found) = parse_marker(&text)
+            && let Some(found) = found
         {
             let (held, line) = after(self.safe_start.as_ref(), &found, std::env::consts::OS);
             if let Some(line) = line {
@@ -242,7 +248,7 @@ impl Graphics {
             .as_ref()
             .is_some_and(|s| s.step == Step::OtherApi)
         {
-            let _ = std::fs::write(&marker, TRYING);
+            let _ = std::fs::write(&marker, trying_text(std::process::id()));
         }
     }
 
@@ -274,10 +280,13 @@ impl Graphics {
         true
     }
 
-    /// The graphics API a window's start opens its device on for the setting `api`: the other
-    /// one while the device-loss hold says so, said once.
-    pub(crate) fn start_api(&self, api: GraphicsApi) -> GraphicsApi {
-        let Some(s) = self.safe_start().filter(|s| s.step == Step::OtherApi) else {
+    /// The graphics API a start opens its device on for the setting `api`: on a window, the
+    /// other one while the device-loss hold says so, said once.
+    pub fn start_api(&self, api: GraphicsApi, offscreen: bool) -> GraphicsApi {
+        let Some(s) = self
+            .safe_start()
+            .filter(|s| s.step == Step::OtherApi && !offscreen)
+        else {
             return api;
         };
         let Some(other) = other_api(s.lost, std::env::consts::OS) else {
@@ -303,7 +312,7 @@ pub fn clear(options: &std::path::Path) {
 }
 
 /// When the run's [`MARKER`] may go as frames are presented: at the first one for a start's own
-/// ([`TRYING`]), [`HEALTHY_AFTER_RECOVERY`] after a recovery for a loss.
+/// ([`trying_text`]), [`HEALTHY_AFTER_RECOVERY`] after a recovery for a loss.
 #[derive(Clone, Copy, Debug)]
 pub struct Proof(Option<Instant>);
 impl Proof {
@@ -349,7 +358,7 @@ mod tests {
                 hdr: true
             })
         );
-        assert_eq!(parse_marker(TRYING), Some(Marker::Trying));
+        assert_eq!(parse_marker(&trying_text(7)), Some(Marker::Trying(7)));
         assert_eq!(parse_marker("driver:x\n"), None);
         let held = SafeStart {
             step: Step::OtherApi,
@@ -380,21 +389,22 @@ mod tests {
             safe_start: Some(second.clone()),
             ..Graphics::default()
         };
-        assert_eq!(g.start_api(Dx12), Vulkan);
+        assert_eq!(g.start_api(Dx12, false), Vulkan);
+        assert_eq!(g.start_api(Dx12, true), Dx12);
 
         let (third, _) = after(Some(&second), &loss(false, Vulkan), os);
         assert_eq!(third.as_ref(), Some(&second));
 
-        let (failed, line) = after(Some(&second), &Marker::Trying, os);
+        let (failed, line) = after(Some(&second), &Marker::Trying(7), os);
         let failed = failed.unwrap();
         assert_eq!((failed.step, failed.lost), (Step::OtherApiFailed, Dx12));
         assert!(line.is_some());
         g.safe_start = Some(failed.clone());
-        assert_eq!(g.start_api(Dx12), Dx12);
+        assert_eq!(g.start_api(Dx12, false), Dx12);
         assert!(g.safe_start_holds_hdr(NV));
         assert_eq!(after(Some(&failed), &loss(false, Dx12), os).0, Some(failed));
         // A start that finds its own trying marker with no hold to step back from changes nothing.
-        assert_eq!(after(None, &Marker::Trying, os), (None, None));
+        assert_eq!(after(None, &Marker::Trying(7), os), (None, None));
     }
 
     /// HDR already off: straight to the other API, where there is one.
@@ -445,6 +455,32 @@ mod tests {
         assert!(other.safe_start_holds_hdr(NV_VK));
         assert!(other.settle_safe_start(NV_VK));
         assert_eq!(other.safe_start.as_ref().unwrap().driver, NV_VK);
+    }
+
+    /// The start that goes to the other API leaves its own marker, which a second load of its
+    /// settings keeps; another process's means that start never showed a frame.
+    #[test]
+    fn a_start_keeps_its_own_trying_marker_and_reads_another_ones_as_failed() {
+        let dir = std::env::temp_dir().join(format!("horizon-safe-start-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join(MARKER);
+        let mut g = Graphics {
+            api: Dx12,
+            ..Graphics::default()
+        };
+        std::fs::write(&marker, loss_text(Some(NV), Dx12, Dx12, false).unwrap()).unwrap();
+        for _ in 0..2 {
+            g.take_device_loss(&dir);
+            assert_eq!(g.safe_start.as_ref().unwrap().step, Step::OtherApi);
+            let left = std::fs::read_to_string(&marker).unwrap();
+            assert_eq!(left, trying_text(std::process::id()));
+        }
+        std::fs::write(&marker, trying_text(std::process::id().wrapping_add(1))).unwrap();
+        g.take_device_loss(&dir);
+        assert_eq!(g.safe_start.as_ref().unwrap().step, Step::OtherApiFailed);
+        assert!(!marker.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A loss is forgiven only after a minute of frames following the recovery; a start's own

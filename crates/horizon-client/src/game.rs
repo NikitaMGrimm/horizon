@@ -7868,7 +7868,8 @@ impl Game<'_> {
             result => result?,
         };
         self.finish_render_frame(elapsed);
-        if rendered && self.safe_start_proof.presented(Instant::now()) {
+        if rendered && !self.options.split_guest && self.safe_start_proof.presented(Instant::now())
+        {
             horizon_client::gfx::safe_start::clear(&Self::options_path());
         }
         if rendered {
