@@ -260,6 +260,8 @@ impl Game<'_> {
             && let Some(renderer) = &mut self.renderer
         {
             renderer.drop_hdr_marker();
+        }
+        if self.error.is_none() && self.safe_start_proof.exit() {
             horizon_client::gfx::safe_start::clear(&Self::options_path());
         }
         self.end_screenshot_sequence(Err("cancelled: the game is closing".into()));

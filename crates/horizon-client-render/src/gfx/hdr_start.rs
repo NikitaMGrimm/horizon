@@ -5,7 +5,6 @@
 //! HDR page or the driver changes. Offscreen renderers have no driver: they never write the
 //! marker or hold HDR output back.
 use super::{Renderer, output};
-use crate::graphics::GraphicsApi;
 
 impl output::OutputCapabilities {
     /// Says once a start (`first`) that HDR stays off where the destination offers it and the
@@ -42,13 +41,12 @@ impl Renderer {
             && let Some(driver) = &self.hdr_driver
         {
             static LOGGED: std::sync::Once = std::sync::Once::new();
-            LOGGED.call_once(|| match settings.safe_start() {
-                Some(lost) if settings.safe_start_holds_hdr(driver) => log::warn!(
-                    "Horizon renderer: HDR output is held back on this graphics driver ({driver}): an earlier start lost the graphics device on {}. Choose an HDR mode on the HDR page to try again (or remove safeStart from {})",
-                    lost.lost.label(),
+            LOGGED.call_once(|| match settings.safe_start_holds_hdr(driver) {
+                true => log::warn!(
+                    "Horizon renderer: HDR output is held back: the last start with this graphics driver ({driver}) lost the graphics device with HDR output on. Choose an HDR mode on the HDR page to try again (or remove safeStart from {})",
                     crate::graphics::FILE
                 ),
-                _ => log::warn!(
+                false => log::warn!(
                     "Horizon renderer: HDR output is held back: the last start with this graphics driver ({driver}) ended before HDR output showed a frame. Choose an HDR mode on the HDR page to try again (or remove hdrFailedStart from {})",
                     crate::graphics::FILE
                 ),
@@ -70,21 +68,10 @@ impl Renderer {
     }
 
     /// Writes the marker of this window's graphics device loss at `marker`
-    /// (`gfx::safe_start::MARKER`), under the graphics API `setting`; offscreen, nothing.
-    pub fn mark_device_lost(&self, marker: &std::path::Path, setting: GraphicsApi) {
-        let backend = match self.adapter.get_info().backend {
-            wgpu::Backend::Vulkan => GraphicsApi::Vulkan,
-            wgpu::Backend::Dx12 => GraphicsApi::Dx12,
-            wgpu::Backend::Gl => GraphicsApi::OpenGl,
-            // Metal, the one API there.
-            _ => GraphicsApi::Auto,
-        };
-        let hdr = self.hdr.is_some();
-        if let Some(text) =
-            super::safe_start::loss_text(self.hdr_driver.as_deref(), setting, backend, hdr)
-        {
-            let _ = std::fs::write(marker, text);
-        }
+    /// (`gfx::safe_start::MARKER`); offscreen, nothing. True when it was written.
+    pub fn mark_device_lost(&self, marker: &std::path::Path) -> bool {
+        super::safe_start::loss_text(self.hdr_driver.as_deref(), self.hdr.is_some())
+            .is_some_and(|text| std::fs::write(marker, text).is_ok())
     }
 
     /// The graphics driver this window's HDR output starts on (`output::window_driver`);

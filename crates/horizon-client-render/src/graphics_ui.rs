@@ -714,7 +714,7 @@ fn setup(s: &Settings, out: &EffectiveOutput) -> Setup {
 const HDR_HELD: &str = "HDR output stopped the game the last time it started with this graphics driver. Choose a mode to try again.";
 /// The same, held by a graphics device loss (`gfx::safe_start`).
 fn hdr_held(s: &Settings) -> &'static str {
-    match s.horizon.safe_start() {
+    match s.horizon.safe_start {
         Some(_) => {
             "An earlier start lost the graphics device, so HDR stays off. Choose a mode to try again."
         }

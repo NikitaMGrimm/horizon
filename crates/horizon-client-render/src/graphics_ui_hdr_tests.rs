@@ -429,15 +429,10 @@ fn a_held_hdr_start_is_said_on_the_page_and_a_mode_change_tries_again() {
 /// that hold too.
 #[test]
 fn a_device_loss_hold_is_said_on_the_page_and_a_mode_change_drops_it() {
-    use crate::gfx::{HdrOutput, output::tests, safe_start};
+    use crate::gfx::{HdrOutput, output::tests};
     let mut s = Settings::default();
     s.horizon.hdr = HdrMode::On;
-    s.horizon.safe_start = Some(safe_start::SafeStart {
-        step: safe_start::Step::Hdr,
-        setting: s.horizon.api,
-        lost: crate::graphics::GraphicsApi::Dx12,
-        driver: "Dx12 10de:25a9 GPU; ; 1.0; os".into(),
-    });
+    s.horizon.safe_start = Some("Dx12 10de:25a9 GPU; ; 1.0; os".into());
     let (mut caps, reading) = tests::window(Some(HdrOutput::Pq), Some(true));
     caps.held = true;
     let out = tests::snapshot(&s.horizon, Default::default(), caps, reading);

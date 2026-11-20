@@ -164,11 +164,7 @@ impl Loading {
             Some(&self.boot),
             None,
             None,
-            // The start's device: on the other API after device losses (`gfx::safe_start`); the
-            // renderers after it keep it.
-            self.settings
-                .horizon
-                .start_api(self.settings.horizon.api, offscreen),
+            self.settings.horizon.api,
             shader_packs::picked_pack_shape(&self.settings).ray_tracing,
         ) {
             Ok(r) => self.renderer = Some(r),
