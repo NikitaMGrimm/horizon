@@ -939,6 +939,9 @@ pub struct Graphics {
     /// mode is changed or the window starts on another driver ([`Graphics::hdr_held`]).
     /// Empty for a marker that named no driver: the first one seen holds it.
     pub hdr_failed_start: Option<String>,
+    /// What an earlier start's graphics device loss holds back (`gfx::safe_start`): HDR
+    /// output, then the graphics API. Key `safeStart`.
+    pub safe_start: Option<crate::gfx::safe_start::SafeStart>,
     /// Battery mode: at most 60 frames per second in a world and 30 in menus
     /// or behind other windows, and half the automatic size of the pools the
     /// client starts — chunk building, the tick's helpers, chunk decoding, saves,
@@ -1017,6 +1020,7 @@ impl Default for Graphics {
             hdr_color_boost: 0,
             hdr_look: HdrLook::Horizon,
             hdr_failed_start: None,
+            safe_start: None,
             battery: false,
             shadow_cache: false,
             api: GraphicsApi::Auto,
@@ -1052,24 +1056,29 @@ impl Graphics {
                 "the last start ended before HDR output showed a frame; HDR output stays off with that graphics driver until the HDR mode is changed (graphics option hdrFailedStart, in {FILE})"
             );
         }
+        g.take_device_loss(dir);
         g
     }
     /// Whether HDR output is held back on a window whose graphics driver is `driver`
     /// (`gfx::output::window_driver`): the last start on it ended before HDR output
-    /// showed a frame ([`Graphics::hdr_failed_start`]).
+    /// showed a frame ([`Graphics::hdr_failed_start`]), or lost the graphics device
+    /// ([`Graphics::safe_start`]).
     pub fn hdr_held(&self, driver: &str) -> bool {
         self.hdr_failed_start
             .as_deref()
             .is_some_and(|failed| failed.is_empty() || failed == driver)
+            || self.safe_start_holds_hdr(driver)
     }
     /// The window's renderer runs on `driver`: a failed start that named no driver is this
     /// one's now, and another driver's (a driver update, another GPU) is dropped, so HDR output
-    /// is tried again. True when it changed.
+    /// is tried again; the device-loss hold settles too (`settle_safe_start`). True when it
+    /// changed.
     pub fn settle_failed_start(&mut self, driver: &str) -> bool {
+        let lost = self.settle_safe_start(driver);
         match self.hdr_failed_start.as_deref() {
             Some("") => self.hdr_failed_start = Some(driver.to_owned()),
             Some(failed) if failed != driver => self.hdr_failed_start = None,
-            _ => return false,
+            _ => return lost,
         }
         true
     }
@@ -1082,6 +1091,7 @@ impl Graphics {
                 .hdr_failed_start
                 .clone()
                 .filter(|_| self.hdr == before.hdr),
+            safe_start: self.safe_start.clone().filter(|_| self.hdr == before.hdr),
             ..before.clone()
         }
     }
@@ -1197,6 +1207,7 @@ impl Graphics {
                 "hdrBlackLevel" => g.hdr_black_level = number(g.hdr_black_level).min(100),
                 "hdrColorBoost" => g.hdr_color_boost = number(g.hdr_color_boost).min(100),
                 "hdrFailedStart" => g.hdr_failed_start = Some(value.to_owned()),
+                "safeStart" => g.safe_start = crate::gfx::safe_start::parse_record(value),
                 "batteryMode" => g.battery = flag(g.battery),
                 "shadowCache" => g.shadow_cache = flag(g.shadow_cache),
                 "batchTranslucent" => g.translucent_batching = flag(g.translucent_batching),
@@ -1296,6 +1307,10 @@ impl Graphics {
         );
         if let Some(driver) = &self.hdr_failed_start {
             text += &format!("hdrFailedStart:{driver}\n");
+        }
+        if let Some(held) = &self.safe_start {
+            let held = crate::gfx::safe_start::record_text(held);
+            text += &format!("safeStart:{held}\n");
         }
         text += &format!("msaa4x:{}\n", bool_text(self.msaa4x));
         text += &self.blue_map.serialize();
@@ -1685,6 +1700,12 @@ mod tests {
             hdr_failed_start: Some(
                 "Vulkan 10de:2684 NVIDIA GeForce RTX 4090; NVIDIA; 581.57".into(),
             ),
+            safe_start: Some(crate::gfx::safe_start::SafeStart {
+                step: crate::gfx::safe_start::Step::OtherApi,
+                setting: GraphicsApi::Dx12,
+                lost: GraphicsApi::Dx12,
+                driver: String::new(),
+            }),
             battery: true,
             shadow_cache: true,
             api: GraphicsApi::Dx12,

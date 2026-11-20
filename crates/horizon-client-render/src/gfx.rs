@@ -503,6 +503,7 @@ mod in_flight;
 mod material_animate;
 #[cfg(test)]
 mod material_animation_tests;
+pub mod safe_start;
 pub use hdr::{Calibration as HdrCalibration, Output as HdrOutput};
 pub use output::{DisplayReading, EffectiveOutput, FrameConfiguration, FrameRequest};
 
@@ -2396,6 +2397,11 @@ impl Renderer {
             }
             None => {
                 let _step = crate::spans::startup::step("renderer.open_device");
+                let api = if offscreen {
+                    api
+                } else {
+                    settings.start_api(api)
+                };
                 open_device(&window, offscreen, api, request.needs(layers)).await?
             }
         };
