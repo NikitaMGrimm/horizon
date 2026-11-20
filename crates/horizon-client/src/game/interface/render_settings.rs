@@ -77,8 +77,10 @@ impl Game<'_> {
             return;
         }
         let picked = shader_packs::picked_pack(&self.settings);
-        let no_pick = (PathBuf::new(), Some(false));
-        let (path, outcome) = shader_packs::unless_no_pick(picked, no_pick, || {
+        if picked.is_empty() {
+            self.native_shaders.forget_selection();
+        }
+        let (path, outcome) = shader_packs::pick_key(picked, || {
             let path = self.native_shaders.resolve_path(
                 &Self::shader_packs_dir(),
                 picked,

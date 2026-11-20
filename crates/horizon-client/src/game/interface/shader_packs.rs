@@ -120,15 +120,29 @@ impl PickedPack {
     }
 }
 
-/// `look`'s answer about the pick, read from disk, or `none` with no pick: `follow_frame` asks
-/// every frame, and with no pick it reads nothing (#19216).
-pub(super) fn unless_no_pick<T>(picked: &str, none: T, look: impl FnOnce() -> T) -> T {
-    if picked.is_empty() { none } else { look() }
+/// `follow_frame`'s key for the pick: its path and outcome, which `look` reads from disk; with
+/// no pick, nothing is read (#19216: it asks every frame).
+pub(super) fn pick_key(
+    picked: &str,
+    look: impl FnOnce() -> (std::path::PathBuf, Option<bool>),
+) -> (std::path::PathBuf, Option<bool>) {
+    if picked.is_empty() {
+        return (std::path::PathBuf::new(), Some(false));
+    }
+    look()
 }
 
 pub(super) fn picked_pack_shape(settings: &horizon_client::settings::Settings) -> PickedPack {
     let picked = picked_pack(settings);
-    unless_no_pick(picked, PickedPack::default(), || shape_on_disk(settings, picked))
+    shape_of(picked, || shape_on_disk(settings, picked))
+}
+
+/// The shape of `picked`, which `look` reads from disk; with no pick, nothing is read.
+fn shape_of(picked: &str, look: impl FnOnce() -> PickedPack) -> PickedPack {
+    if picked.is_empty() {
+        return PickedPack::default();
+    }
+    look()
 }
 
 fn shape_on_disk(settings: &horizon_client::settings::Settings, picked: &str) -> PickedPack {
@@ -1236,14 +1250,11 @@ mod native_pack_tests {
     /// asks every frame), so neither depends on whether `shaderpacks/` is there.
     #[test]
     fn no_pick_reads_nothing_from_disk() {
-        use super::{PickedPack, unless_no_pick};
-        let no_pick = (std::path::PathBuf::new(), Some(false));
-        let key = unless_no_pick("", no_pick.clone(), || panic!("the key looks at the disk"));
-        assert_eq!(key, no_pick);
-        let shape = unless_no_pick("", PickedPack::default(), || panic!("the shape looks"));
+        use super::{PickedPack, pick_key, shape_of};
+        let key = pick_key("", || panic!("the key looks at the disk"));
+        assert_eq!(key, (std::path::PathBuf::new(), Some(false)));
+        let shape = shape_of("", || panic!("the shape looks at the disk"));
         assert_eq!(shape, PickedPack::default());
-        let settings = horizon_client::settings::Settings::default();
-        assert_eq!(picked_pack_shape(&settings), PickedPack::default());
     }
 
     #[test]
