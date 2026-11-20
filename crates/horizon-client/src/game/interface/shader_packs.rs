@@ -92,7 +92,7 @@ pub(super) fn picked_pack(settings: &horizon_client::settings::Settings) -> &str
 
 /// What a renderer readies for the pick, unless it was refused with no version of it left
 /// drawing (`native_shaders::remember_look`), is missing or its owner is off.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct PickedPack {
     /// It draws flat where the device can (`pack_draws_flat`): the sections are laid out so.
     pub draws_flat: bool,
@@ -120,8 +120,18 @@ impl PickedPack {
     }
 }
 
+/// `look`'s answer about the pick, read from disk, or `none` with no pick: `follow_frame` asks
+/// every frame, and with no pick it reads nothing (#19216).
+pub(super) fn unless_no_pick<T>(picked: &str, none: T, look: impl FnOnce() -> T) -> T {
+    if picked.is_empty() { none } else { look() }
+}
+
 pub(super) fn picked_pack_shape(settings: &horizon_client::settings::Settings) -> PickedPack {
     let picked = picked_pack(settings);
+    unless_no_pick(picked, PickedPack::default(), || shape_on_disk(settings, picked))
+}
+
+fn shape_on_disk(settings: &horizon_client::settings::Settings, picked: &str) -> PickedPack {
     let dir = Game::shader_packs_dir();
     let path = if dev_pack().is_some() {
         dir.join(picked)
@@ -1221,6 +1231,20 @@ mod rendered_item_tests {
 mod native_pack_tests {
     use super::{active_pack, pack_draws_flat, pack_reads_vertices, picked_pack_shape};
     use horizon_client::mod_list::{Installed, ModList, NativePage};
+
+    /// With no pick neither the frame's key nor the shape looks at the disk (`follow_frame`
+    /// asks every frame), so neither depends on whether `shaderpacks/` is there.
+    #[test]
+    fn no_pick_reads_nothing_from_disk() {
+        use super::{PickedPack, unless_no_pick};
+        let no_pick = (std::path::PathBuf::new(), Some(false));
+        let key = unless_no_pick("", no_pick.clone(), || panic!("the key looks at the disk"));
+        assert_eq!(key, no_pick);
+        let shape = unless_no_pick("", PickedPack::default(), || panic!("the shape looks"));
+        assert_eq!(shape, PickedPack::default());
+        let settings = horizon_client::settings::Settings::default();
+        assert_eq!(picked_pack_shape(&settings), PickedPack::default());
+    }
 
     #[test]
     fn unknown_pack_is_optimistic_but_refusal_owner_and_presence_override_it() {
