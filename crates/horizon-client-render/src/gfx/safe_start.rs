@@ -42,36 +42,46 @@ pub fn parse_marker(text: &str) -> Option<Loss> {
     })
 }
 
-/// Takes the [`MARKER`] in `dir` into the settings file there, for a window client's start. A
-/// loss with HDR output on holds HDR output back on its driver; the marker goes only once that
-/// hold is saved, so the next start tries again if saving failed.
-pub fn take(dir: &std::path::Path) {
+/// Takes the [`MARKER`] in `dir` into the settings file there, for a window client's start, and
+/// returns the driver HDR output is held back on: a loss with HDR output on holds it there for
+/// this start even when the file can't be saved, as `hdrFailedStart` does. The marker goes only
+/// once the hold is saved, and stays when the settings file can't be read, so a later start
+/// tries again.
+pub fn take(dir: &std::path::Path) -> Option<String> {
     let marker = dir.join(MARKER);
-    let Ok(text) = std::fs::read_to_string(&marker) else {
-        return;
+    let text = std::fs::read_to_string(&marker).ok()?;
+    let Some(loss) = parse_marker(&text) else {
+        let _ = std::fs::remove_file(&marker);
+        return None;
     };
-    let saved = match parse_marker(&text) {
-        Some(loss) if loss.hdr => {
+    if !loss.hdr {
+        log::warn!(
+            "Horizon renderer: the last start lost the graphics device with HDR output off, so HDR output was not the cause"
+        );
+        let _ = std::fs::remove_file(&marker);
+        return None;
+    }
+    let file = dir.join(FILE);
+    let settings = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
             log::warn!(
-                "Horizon renderer: the last start lost the graphics device with HDR output on: HDR output is held back on that graphics driver ({})",
-                loss.driver
+                "Horizon renderer: the last start lost the graphics device with HDR output on, but {FILE} can't be read ({e}); HDR output is not held back"
             );
-            let file = dir.join(FILE);
-            let mut g = Graphics::parse(&std::fs::read_to_string(&file).unwrap_or_default());
-            g.safe_start = Some(loss.driver);
-            std::fs::write(&file, g.serialize()).is_ok()
+            return None;
         }
-        Some(_) => {
-            log::warn!(
-                "Horizon renderer: the last start lost the graphics device with HDR output off, so HDR output was not the cause"
-            );
-            true
-        }
-        None => true,
     };
-    if saved {
+    log::warn!(
+        "Horizon renderer: the last start lost the graphics device with HDR output on: HDR output is held back on that graphics driver ({})",
+        loss.driver
+    );
+    let mut g = Graphics::parse(&settings);
+    g.safe_start = Some(loss.driver.clone());
+    if std::fs::write(&file, g.serialize()).is_ok() {
         let _ = std::fs::remove_file(&marker);
     }
+    Some(loss.driver)
 }
 
 impl Graphics {
@@ -159,30 +169,37 @@ mod tests {
         assert_eq!(parse_marker("driver:x\n"), None);
     }
 
-    /// A loss with HDR output on is saved as a hold on its driver and the marker goes; with
-    /// HDR output off nothing is held; a hold that can't be saved keeps the marker.
+    /// A loss with HDR output on is saved as a hold on its driver, keeping the file's other
+    /// lines, and the marker goes; with HDR output off nothing is held.
     #[test]
     fn a_loss_with_hdr_on_is_held_once_saved() {
         let dir = scratch("take");
         let marker = dir.join(MARKER);
         std::fs::write(&marker, loss_text(Some(NV), false).unwrap()).unwrap();
-        take(&dir);
+        assert_eq!(take(&dir), None);
         assert!(!marker.exists());
         assert!(!dir.join(FILE).exists());
 
+        std::fs::write(dir.join(FILE), "hdrFailedStart:other\n").unwrap();
         std::fs::write(&marker, loss_text(Some(NV), true).unwrap()).unwrap();
-        take(&dir);
+        assert_eq!(take(&dir).as_deref(), Some(NV));
         assert!(!marker.exists());
         let saved = Graphics::parse(&std::fs::read_to_string(dir.join(FILE)).unwrap());
         assert_eq!(saved.safe_start.as_deref(), Some(NV));
+        assert_eq!(saved.hdr_failed_start.as_deref(), Some("other"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
 
-        // The settings file can't be written (a folder stands in its place).
-        let dir = scratch("unsaved");
+    /// A settings file that can't be read (a folder in its place, on every system) is left
+    /// alone, nothing is held, and the marker stays for a later start.
+    #[test]
+    fn an_unreadable_settings_file_keeps_the_marker() {
+        let dir = scratch("unreadable");
         std::fs::create_dir(dir.join(FILE)).unwrap();
         std::fs::write(dir.join(MARKER), loss_text(Some(NV), true).unwrap()).unwrap();
-        take(&dir);
+        assert_eq!(take(&dir), None);
         assert!(dir.join(MARKER).exists());
+        assert!(dir.join(FILE).is_dir());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -43,8 +43,7 @@ impl Renderer {
             static LOGGED: std::sync::Once = std::sync::Once::new();
             LOGGED.call_once(|| match settings.safe_start_holds_hdr(driver) {
                 true => log::warn!(
-                    "Horizon renderer: HDR output is held back: the last start with this graphics driver ({driver}) lost the graphics device with HDR output on. Choose an HDR mode on the HDR page to try again (or remove safeStart from {})",
-                    crate::graphics::FILE
+                    "Horizon renderer: HDR output is held back: the last start with this graphics driver ({driver}) lost the graphics device with HDR output on. Choose an HDR mode on the HDR page to try again"
                 ),
                 false => log::warn!(
                     "Horizon renderer: HDR output is held back: the last start with this graphics driver ({driver}) ended before HDR output showed a frame. Choose an HDR mode on the HDR page to try again (or remove hdrFailedStart from {})",

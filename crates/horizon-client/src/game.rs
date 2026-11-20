@@ -8,7 +8,10 @@ use loading_screen::{
     App, Loading, leave_fullscreen_after, missing_resources, run_event_loop, unclean_start_recovery,
 };
 use motion_ids::{motion_at, motion_block_entity};
-use resource_load::{Progress, launch_world, load_resources, named_scope, synchronous_startup};
+use resource_load::{
+    Progress, launch_world, load_resources, named_scope, owns_device_loss_marker,
+    synchronous_startup,
+};
 /// The content tables the world plays with, as field-level borrows: the
 /// world's data packs' over the game's own. The `Game::items`/`recipes`/
 /// `stations` methods read the same tables, but taking `&self` blocks a
@@ -7209,7 +7212,8 @@ impl Game<'_> {
         }
         // Before anything that can fail or panic on the lost device: the next start finds it
         // unless this run proves healthy (`gfx::safe_start`).
-        if let Some(renderer) = &self.renderer
+        if owns_device_loss_marker(&self.options)
+            && let Some(renderer) = &self.renderer
             && renderer.mark_device_lost(
                 &Self::options_path().with_file_name(horizon_client::gfx::safe_start::MARKER),
             )
@@ -11155,15 +11159,16 @@ pub(crate) fn run_with(
         }
         return Err(error.into());
     }
-    // A window's start takes the last one's graphics device loss into its settings: a scripted,
-    // offscreen or server run sharing the folder leaves it alone (`gfx::safe_start`).
-    if !options.offscreen
-        && !synchronous_startup(&options)
-        && let Some(dir) = Game::options_path().parent()
-    {
-        horizon_client::gfx::safe_start::take(dir);
-    }
+    // A window's start takes the last one's graphics device loss into its settings
+    // (`gfx::safe_start`); held in memory too, for a hold its settings file didn't keep.
+    let device_loss_hold = Game::options_path()
+        .parent()
+        .filter(|_| owns_device_loss_marker(&options))
+        .and_then(horizon_client::gfx::safe_start::take);
     let mut early_settings = Settings::load(&Game::options_path());
+    if device_loss_hold.is_some() {
+        early_settings.horizon.safe_start = device_loss_hold;
+    }
     options
         .mods
         .capture_code_switches(&early_settings.mods.disabled);
