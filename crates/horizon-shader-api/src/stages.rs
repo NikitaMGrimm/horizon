@@ -132,7 +132,7 @@ const TONEMAP_RESOURCES: [Resource; 4] = [
         binding: 3,
         name: "previous",
         ty: "var previous: texture_2d<f32>",
-        doc: "The post chain's picture at the window's size (without a post chain, the world's at the world's size), linear light: what `input.color` samples, for a curve that reads around the pixel.",
+        doc: "The post chain's picture at the window's size (without a post chain, the world's at the world's size: a tonemap that reads it keeps TAA from upscaling the world), linear light: what `input.color` samples, for a curve that reads around the pixel.",
     },
     LINEAR_SAMPLER,
     NEAREST_SAMPLER,
@@ -1411,7 +1411,7 @@ impl StageKind {
                 | StageKind::BeforeWorld
         );
         self.prelude_rays(
-            tracing, rays, false, false, false, false, false, false, false, false, false,
+            tracing, rays, false, false, false, false, false, false, false, false, false, false,
         )
     }
 
@@ -1425,7 +1425,8 @@ impl StageKind {
     /// `moon_phase`: the frame's `moon_phase`, for a pack whose files name it.
     /// `light_source`: the input's `inputs::light_source` fields, for a pack whose files name
     /// one of them (`names_light_source`). `full_lightmap`: the frame's `full_lightmap`, for a
-    /// pack whose files name it.
+    /// pack whose files name it. `jitter`: the frame's `jitter` and `previous_jitter`, for a pack
+    /// whose files name one of them (`names_jitter`).
     /// `looks`: a terrain hit reads its quad's look (`RAY_LOOKS`), for a stage that
     /// reads one (`check::RAY_LOOK_FIELDS`).
     #[allow(clippy::too_many_arguments)]
@@ -1440,6 +1441,7 @@ impl StageKind {
         moon_phase: bool,
         light_source: bool,
         full_lightmap: bool,
+        jitter: bool,
         lit: bool,
         looks: bool,
     ) -> String {
@@ -1453,7 +1455,13 @@ impl StageKind {
             crate::API,
             crate::reference::PATH
         );
-        out += &Frame::declared_wgsl(tracing != Tracing::None, kept, moon_phase, full_lightmap);
+        out += &Frame::declared_wgsl(
+            tracing != Tracing::None,
+            kept,
+            moon_phase,
+            full_lightmap,
+            jitter,
+        );
         if kept {
             out += &crate::kept::reasons_wgsl();
         }
@@ -1950,6 +1958,12 @@ pub fn names_full_lightmap(pack: &Pack) -> bool {
     files_name(pack, &["full_lightmap"])
 }
 
+/// Whether the files of `pack` name `jitter` or `previous_jitter`: only then does its `Frame`
+/// have both fields (`Frame::JITTER_FIELDS`).
+pub fn names_jitter(pack: &Pack) -> bool {
+    files_name(pack, &["jitter", "previous_jitter"])
+}
+
 /// Where an entry point's constructor of `MaterialInput` or `EntityInput` takes its
 /// `inputs::light_source` fields in a pack that names them, before `SHADED_TINT_ARGUMENT`.
 pub const LIGHT_SOURCE_ARGUMENT: &str = "@light_source@";
@@ -2045,6 +2059,7 @@ pub(crate) fn compose_traced(
     let moon_phase = names_moon_phase(pack);
     let light = names_light_source(pack);
     let full_lightmap = names_full_lightmap(pack);
+    let jitter = names_jitter(pack);
     let lit = names_lit_tint(pack);
     // Read off the stage as the stub builds it, which has the same files and `RayHit`.
     let looks = rays
@@ -2060,6 +2075,7 @@ pub(crate) fn compose_traced(
         moon_phase,
         light,
         full_lightmap,
+        jitter,
         lit,
         looks,
     ) + &texture_declarations(&pack.manifest.textures);

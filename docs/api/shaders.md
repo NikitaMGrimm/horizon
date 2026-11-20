@@ -297,6 +297,25 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-19: API 0.2 (change, preview): under a pack without `[[post]]` whose frame holds gamma light and whose
+  `[tonemap]`, if it has one, never reads `previous`, TAA upscaling and its sharpening apply too (#16126 step 7): the
+  world draws smaller, `frame.resolution` stays its size, `input.color` samples the picture TAA rebuilt, and the
+  sharpening runs before the decode and the tone curve. A `[tonemap]` that reads `previous` keeps TAA at the world's
+  size. With TAA or upscaling off, upscaling and sharpening change nothing. Under every pack, TAA or not,
+  `frame.projection` is now the lens the world is drawn with, of the window's aspect, where it was made again from the world's rounded size: at a resolution scale that rounds unevenly,
+  a position rebuilt from depth no longer drifts sideways.
+- 2026-11-19: API 0.2 (change, preview): a pack without `[[post]]` whose frame holds gamma light also gets the
+  player's TAA, at the world's size (#16126 step 7); `frame.jitter` and `frame.previous_jitter` then carry its offset.
+  TAA upscaling and its sharpening stay off, and under any other pack TAA is off. With TAA off nothing changes. A pack
+  must never write an infinite value into the world's frame: TAA's history would carry it.
+- 2026-11-19: API 0.2 (additions, preview): `frame.jitter`, the world's sub-pixel offset this frame in clip space,
+  which `frame.projection` leaves out, and `frame.previous_jitter`, last frame's, declared only for a pack whose files
+  name either, at the end of `Frame`. Both are `(0, 0)` while the world isn't jittered, today in every pack's frame. A
+  pack that names neither sees the same prelude as before, and its picture is unchanged.
+- 2026-11-19: API 0.2 (addition, preview): a pack without `[[post]]` whose frame holds gamma light (not
+  `blend = "linear"` on the float frame) gets the player's FXAA, at the world's size, before its `[tonemap]` (#16126
+  step 6). TAA and upscaling stay off under every pack, and a pack with a post chain is unchanged. With FXAA off
+  nothing changes.
 - 2026-11-19: API 0.2 (addition, preview): `MaterialInput.lit_tint`, vanilla's lit vertex colour as Horizon's terrain
   draws it: `shaded_tint` times the lightmap (coloured lights added under it) at each corner, then smoothed over the
   face, so `albedo * lit_tint` is vanilla's lit colour where multiplying the two smoothed apart is not (6.6 steps of

@@ -61,6 +61,17 @@ pub trait LevelsBackend {
         structure: &str,
         parameters: StructureSearch,
     ) -> Option<StructureSearchResult>;
+    /// Side: server.
+    /// `StructureManager.getStructureAt` and `getStructureWithPieceAt` in one read: every
+    /// structure the chunk at `pos` refers to whose start's box or one of whose pieces, as
+    /// placed, holds `pos`, with which of the two (`in_box`, `in_piece`). Reads the level in place or
+    /// parked from the starts the generator holds: loads no chunk and builds no start. Empty
+    /// for a chunk that refers to no structure there; None on a client, for a stale or
+    /// unavailable level, for a chunk that isn't loaded and for one whose references the level
+    /// can't resolve now (a level without generated terrain, or starts the generator no longer
+    /// holds).
+    #[access(WorldOnly)]
+    fn level_structures_at(&self, level: LevelRef, pos: [i32; 3]) -> Option<Vec<StructureAt>>;
     /// Side: both.
     /// `Level.getSkyDarken`: the sky-light reduction from dimension, time and weather.
     /// Reads any loaded server level, including parked levels, or the current client level.
@@ -765,6 +776,14 @@ pub trait LevelsBackend {
     /// height. Constant time, no allocation.
     #[access(WorldOnly)]
     fn level_capability_generation(&self, level: LevelRef, pos: [i32; 3]) -> Option<u64>;
+    /// Side: server.
+    /// `BlockState.isRedstoneConductor(level, pos)` for the block at `pos`: whether it passes
+    /// strong power on to its neighbours (stone and soul sand do; glass, single slabs and
+    /// leaves don't), answered by the game's redstone engine. The engine reads the state
+    /// alone, so today a block entity's live shape is ignored: an open shulker box still
+    /// conducts. None for a position that isn't loaded, and as for `signal`.
+    #[access(WorldOnly)]
+    fn level_is_redstone_conductor(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
 }
 /// The handles' writes of the `levels` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

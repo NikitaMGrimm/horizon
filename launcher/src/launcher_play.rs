@@ -172,9 +172,14 @@ impl Launcher {
     /// Prepares the selected version, its Minecraft files from the player's install or, for an
     /// owner who asks, from Mojang.
     pub(crate) fn prepare(&mut self, from: backend::MinecraftFrom) {
-        let Some(tag) = self.selected().cloned() else {
-            return;
-        };
+        if let Some(tag) = self.selected().cloned() {
+            self.prepare_version(tag, from);
+        }
+    }
+
+    /// [`Self::prepare`] for `tag` rather than the selected version.
+    pub(crate) fn prepare_version(&mut self, tag: String, from: backend::MinecraftFrom) {
+        self.prepare_tag = Some(tag.clone());
         horizon_launcher::mojang::CANCEL.store(false, Ordering::Relaxed);
         let minecraft = self
             .settings
@@ -191,6 +196,8 @@ impl Launcher {
             let log = |line| {
                 let _ = tx.send(Msg::Line(Job::Prepare, line));
             };
+            // A native build reads its base's files: those are the ones prepared.
+            let tag = backend::prepared_in(&tag);
             let result = backend::preparer(&tag, &minecraft, from, &log)
                 .inspect(|(_, minecraft)| backend::sounds(&tag, minecraft, &log))
                 .map(|(p, _)| {
