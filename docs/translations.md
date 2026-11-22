@@ -128,8 +128,8 @@ get in and where a single wrong string is still reported.
   - **length**: at most 4× the English length in characters or the English length + 80, whichever is more, and no
     token of more than 60 characters the game cannot wrap unless the English text has a longer one. A token is what
     lies between spaces and line breaks, the only places the game breaks a line (a no-break or ideographic space
-    doesn't count); letters of a script written without spaces (Han, kana, Hangul, Thai, Lao, Khmer, Myanmar)
-    don't count towards it, everything else in it does, their marks and unassigned code points included;
+    doesn't count); letters of a script written without spaces (Han, kana, Hangul syllables, Thai, Lao, Khmer,
+    Myanmar) don't count towards it, everything else in it does, their marks and unassigned code points included;
   - **invisible characters**: none of these the English text lacks: zero-width space, word joiner, line and
     paragraph separators, byte order mark, soft hyphen, combining grapheme joiner, Mongolian vowel separator, Hangul
     fillers, interlinear annotation controls, tags, noncharacters and private-use characters. A variation selector

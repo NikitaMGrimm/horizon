@@ -46,6 +46,8 @@
     {"case": "a letter between marks", "english": "ok", "text": "a\u0301\u0301\u0301\u0301b\u0301\u0301\u0301\u0301", "rule": null},
     {"case": "marks of the extended block", "english": "ok", "text": "a\u1acf\u1acf\u1acf\u1acf\u1acf", "rule": "combining_marks"},
     {"case": "an unassigned Lao code point inside a run", "english": "OK", "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83\u0e83", "rule": "unbroken_run"},
+    {"case": "Hangul jamo inside a run", "english": "OK", "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161\u1161", "rule": "unbroken_run"},
+    {"case": "a Korean sentence", "english": "Hello, how are you?", "text": "\uc548\ub155\ud558\uc138\uc694, \uc798 \uc9c0\ub0b4\uc138\uc694?", "rule": null},
     {"case": "an emoji modifier between marks", "english": "ok", "text": "a\u0301\u0301\u0301\u0301\ud83c\udffb\u0301\u0301\u0301\u0301", "rule": "combining_marks"},
     {"case": "marks new in Unicode 17", "english": "ok", "text": "a\ud839\udee3\ud839\udee3\ud839\udee3\ud839\udee3\ud839\udee3", "rule": "combining_marks"},
     {"case": "an emoji with a skin-tone modifier", "english": "Thumbs up", "text": "\ud83d\udc4d\ud83c\udffd", "rule": null},

@@ -2,10 +2,12 @@
 """Write tools/lang_unicode_tables.json, the character tables the translation text rules read
 (docs/translations.md, "Rules"), from three files of the Unicode Character Database:
 
-    python3 -I tools/gen_lang_unicode_tables.py UnicodeData.txt Scripts.txt GraphemeBreakProperty.txt
+    python3 -I tools/gen_lang_unicode_tables.py \
+        UnicodeData.txt Scripts.txt GraphemeBreakProperty.txt
 
 The UCD files are not committed: download them from https://www.unicode.org/Public/<version>/ucd/
-(GraphemeBreakProperty.txt is under auxiliary/). The output records their version and SHA-256.
+(GraphemeBreakProperty.txt is under auxiliary/) into an empty folder outside the repository. The
+output records their version and SHA-256.
 tools/lang_coverage.py and lang.rs's tests read only the output, so both apply the same tables.
 """
 from __future__ import annotations
@@ -22,17 +24,20 @@ OUTPUT = ROOT / "tools/lang_unicode_tables.json"
 # or a line break and cuts a longer one where it overflows, so their letters make no unbroken word.
 SPACELESS_SCRIPTS = {"Han", "Hiragana", "Katakana", "Hangul", "Thai", "Lao", "Khmer", "Myanmar"}
 LETTERS = {"Lo", "Lm"}
+# Of Hangul, only the precomposed syllables: jamo and fillers are no syllable on their own.
+HANGUL_SYLLABLES = {"LV", "LVT"}
 MARKS = {"Mn", "Me"}
 # Grapheme_Cluster_Break values that attach to the character before them like a mark does.
 EXTENDING = {"Extend", "ZWJ"}
-ABOUT = ("Inclusive, sorted, disjoint code point ranges, written by tools/gen_lang_unicode_tables.py "
-         "from the Unicode Character Database files named in \"sources\"; tools/lang_coverage.py "
-         "and lang.rs's tests read only this file. \"spaceless\": letters (Lo, Lm) of the scripts "
-         "written without spaces (Han, Hiragana, Katakana, Hangul, Thai, Lao, Khmer, Myanmar), "
-         "fillers left out; they don't count towards a token. \"combining\": general category Mn "
-         "and Me; at most a few in a row. \"transparent\": format characters (Cf) and the other "
-         "characters of Grapheme_Cluster_Break Extend or ZWJ (emoji modifiers, some spacing "
-         "marks); they neither count as a combining mark nor end a row of them.")
+ABOUT = ("Inclusive, sorted, disjoint code point ranges, written by "
+         "tools/gen_lang_unicode_tables.py from Unicode {version} ({sources}); "
+         "tools/lang_coverage.py and lang.rs's tests read only this file. \"spaceless\": letters "
+         "(Lo, Lm) of the scripts written without spaces (Han, Hiragana, Katakana, Thai, Lao, Khmer, Myanmar) and Hangul "
+         "syllables (Grapheme_Cluster_Break LV, LVT); they don't count towards a token. "
+         "\"combining\": general category Mn and Me; at most a few in a row. \"transparent\": "
+         "format characters (Cf) and the other characters of Grapheme_Cluster_Break Extend or ZWJ "
+         "(emoji modifiers, some spacing marks); they neither count as a combining mark nor end a "
+         "row of them.")
 
 
 def property_lines(path: Path):
@@ -47,7 +52,8 @@ def property_lines(path: Path):
 
 
 def unicode_data(path: Path) -> dict[int, tuple[str, str]]:
-    """Code point to (name, general category); a `<..., First>`/`<..., Last>` pair covers its range."""
+    """Code point to (name, general category); a `<..., First>` and `<..., Last>` pair stands for
+    every code point between them."""
     found, first = {}, None
     for line in path.read_text(encoding="utf-8").splitlines():
         fields = line.split(";")
@@ -75,7 +81,8 @@ def ranges(points) -> list[list[int]]:
 
 
 def version(path: Path) -> str:
-    match = re.match(r"# \S+-(\d+\.\d+\.\d+)\.txt", path.read_text(encoding="utf-8").split("\n", 1)[0])
+    first_line = path.read_text(encoding="utf-8").split("\n", 1)[0]
+    match = re.match(r"# \S+-(\d+\.\d+\.\d+)\.txt", first_line)
     if not match:
         sys.exit(f"{path}: no version in its first line")
     return match.group(1)
@@ -85,22 +92,28 @@ def tables(data_path: Path, scripts_path: Path, breaks_path: Path) -> dict:
     data = unicode_data(data_path)
     scripts = {c: value for low, high, value in property_lines(scripts_path)
                for c in range(low, high + 1)}
-    extending = {c for low, high, value in property_lines(breaks_path) if value in EXTENDING
-                 for c in range(low, high + 1)}
-    spaceless = {c for c, (name, category) in data.items() if category in LETTERS
-                 and scripts.get(c) in SPACELESS_SCRIPTS and "FILLER" not in name}
+    breaks = {c: value for low, high, value in property_lines(breaks_path)
+              for c in range(low, high + 1)}
+    spaceless = {c for c, (_, category) in data.items() if category in LETTERS
+                 and scripts.get(c) in SPACELESS_SCRIPTS
+                 and (scripts[c] != "Hangul" or breaks.get(c) in HANGUL_SYLLABLES)}
     combining = {c for c, (_, category) in data.items() if category in MARKS}
-    transparent = ({c for c, (_, category) in data.items() if category == "Cf"} | extending) - combining
+    transparent = {c for c, (_, category) in data.items() if category == "Cf"}
+    transparent |= {c for c, value in breaks.items() if value in EXTENDING}
+    transparent -= combining
     if spaceless & (combining | transparent):
         sys.exit("a spaceless letter is also a mark or transparent")
     versions = {version(scripts_path), version(breaks_path)}
     if len(versions) != 1:
         sys.exit(f"the files are of different Unicode versions: {sorted(versions)}")
+    unicode = versions.pop()
+    sources = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+               for path in (data_path, scripts_path, breaks_path)}
     return {
-        "about": ABOUT,
-        "unicode": versions.pop(),
-        "sources": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                    for path in (data_path, scripts_path, breaks_path)},
+        "about": ABOUT.format(version=unicode, sources=", ".join(
+            f"{name} SHA-256 {digest}" for name, digest in sources.items())),
+        "unicode": unicode,
+        "sources": sources,
         "spaceless": ranges(spaceless),
         "combining": ranges(combining),
         "transparent": ranges(transparent),

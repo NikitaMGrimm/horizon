@@ -1,18 +1,16 @@
 {
-  "about": "Inclusive, sorted, disjoint code point ranges, written by tools/gen_lang_unicode_tables.py from the Unicode Character Database files named in \"sources\"; tools/lang_coverage.py and lang.rs's tests read only this file. \"spaceless\": letters (Lo, Lm) of the scripts written without spaces (Han, Hiragana, Katakana, Hangul, Thai, Lao, Khmer, Myanmar), fillers left out; they don't count towards a token. \"combining\": general category Mn and Me; at most a few in a row. \"transparent\": format characters (Cf) and the other characters of Grapheme_Cluster_Break Extend or ZWJ (emoji modifiers, some spacing marks); they neither count as a combining mark nor end a row of them.",
+  "about": "Inclusive, sorted, disjoint code point ranges, written by tools/gen_lang_unicode_tables.py from Unicode 17.0.0 (UnicodeData.txt SHA-256 2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c, Scripts.txt SHA-256 9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf, GraphemeBreakProperty.txt SHA-256 d6b51d1d2ae5c33b451b7ed994b48f1f4dc62b2272a5831e7fd418514a6bae89); tools/lang_coverage.py and lang.rs's tests read only this file. \"spaceless\": letters (Lo, Lm) of the scripts written without spaces (Han, Hiragana, Katakana, Thai, Lao, Khmer, Myanmar) and Hangul syllables (Grapheme_Cluster_Break LV, LVT); they don't count towards a token. \"combining\": general category Mn and Me; at most a few in a row. \"transparent\": format characters (Cf) and the other characters of Grapheme_Cluster_Break Extend or ZWJ (emoji modifiers, some spacing marks); they neither count as a combining mark nor end a row of them.",
   "unicode": "17.0.0",
   "sources": {"UnicodeData.txt": "2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c", "Scripts.txt": "9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf", "GraphemeBreakProperty.txt": "d6b51d1d2ae5c33b451b7ed994b48f1f4dc62b2272a5831e7fd418514a6bae89"},
   "spaceless": [
     [3585, 3632], [3634, 3635], [3648, 3654], [3713, 3714], [3716, 3716], [3718, 3722], [3724, 3747], [3749, 3749],
     [3751, 3760], [3762, 3763], [3773, 3773], [3776, 3780], [3782, 3782], [3804, 3807], [4096, 4138], [4159, 4159],
-    [4176, 4181], [4186, 4189], [4193, 4193], [4197, 4198], [4206, 4208], [4213, 4225], [4238, 4238], [4352, 4446],
-    [4449, 4607], [6016, 6067], [6103, 6103], [6108, 6108], [12293, 12293], [12347, 12347], [12353, 12438], [12445, 12447],
-    [12449, 12538], [12541, 12543], [12593, 12643], [12645, 12686], [12784, 12799], [13312, 19903], [19968, 40959], [43360, 43388],
-    [43488, 43492], [43494, 43503], [43514, 43518], [43616, 43638], [43642, 43642], [43646, 43647], [44032, 55203], [55216, 55238],
-    [55243, 55291], [63744, 64109], [64112, 64217], [65382, 65391], [65393, 65437], [65441, 65470], [65474, 65479], [65482, 65487],
-    [65490, 65495], [65498, 65500], [94179, 94179], [94194, 94195], [110576, 110579], [110581, 110587], [110589, 110590], [110592, 110882],
-    [110898, 110898], [110928, 110930], [110933, 110933], [110948, 110951], [131072, 173791], [173824, 178205], [178208, 183981], [183984, 191456],
-    [191472, 192093], [194560, 195101], [196608, 201546], [201552, 210041]
+    [4176, 4181], [4186, 4189], [4193, 4193], [4197, 4198], [4206, 4208], [4213, 4225], [4238, 4238], [6016, 6067],
+    [6103, 6103], [6108, 6108], [12293, 12293], [12347, 12347], [12353, 12438], [12445, 12447], [12449, 12538], [12541, 12543],
+    [12784, 12799], [13312, 19903], [19968, 40959], [43488, 43492], [43494, 43503], [43514, 43518], [43616, 43638], [43642, 43642],
+    [43646, 43647], [44032, 55203], [63744, 64109], [64112, 64217], [65382, 65391], [65393, 65437], [94179, 94179], [94194, 94195],
+    [110576, 110579], [110581, 110587], [110589, 110590], [110592, 110882], [110898, 110898], [110928, 110930], [110933, 110933], [110948, 110951],
+    [131072, 173791], [173824, 178205], [178208, 183981], [183984, 191456], [191472, 192093], [194560, 195101], [196608, 201546], [201552, 210041]
   ],
   "combining": [
     [768, 879], [1155, 1161], [1425, 1469], [1471, 1471], [1473, 1474], [1476, 1477], [1479, 1479], [1552, 1562],
