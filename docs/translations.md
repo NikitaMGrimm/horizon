@@ -120,6 +120,21 @@ get in and where a single wrong string is still reported.
 - Keep placeholders as they are (`%s`, `%1$s` in the game, `{name}` in the launcher): `lang_coverage.py` reports a
   changed one, the Crowdin import refuses to write it, and `lang.rs`'s test fails on a bundled one. Both read
   templates the way the game's formatter does (`tests/fixtures/translation_templates.json` holds the cases they share).
+- A game translation keeps what its English text allows; the import drops a string that doesn't, and `lang.rs`'s
+  test fails on a bundled one (`tests/fixtures/translation_text_rules.json` holds the cases both read):
+  - **formatting codes**: exactly the `§` codes the English text has (a `§` hides the character after it, any one;
+    letters match without case), so no added colour, style or `§k` obfuscation;
+  - **line breaks**: at most twice as many as the English text has, so none where it has none;
+  - **length**: at most 4× the English length in characters or the English length + 80, whichever is more, and no
+    run of more than 60 characters without a space unless the English text has a longer one (characters of scripts
+    written without spaces, such as Chinese, Japanese and Thai, end a run);
+  - **invisible characters**: no zero-width space, line or paragraph separator, byte order mark, tag, noncharacter
+    or private-use character the English text lacks, and a variation selector only after a character; joiners
+    (U+200C, U+200D) and direction marks (U+200E, U+200F, U+061C) stay allowed;
+  - **controls**: no control character but a line break, and a tab or a bidi control only where the English text
+    has one; bidi embeddings, overrides and isolates close in order, and no more open than in the English text.
+- An approved export that is missing or empty for a language the sync recorded proofread keys for fails the import:
+  it is an incomplete download, and the marks stay as they were.
 
 ## How the first record was made
 

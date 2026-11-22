@@ -156,6 +156,19 @@ class SyncTests(unittest.TestCase):
                                        "horizon.c": "Cereza"})
             self.assertIn("3 translations", err)
 
+    def test_a_translation_with_codes_breaks_or_length_english_lacks_is_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, lang, review, export = self.fixture(tmp)
+            write(export, "es-ES.json", {"horizon.a": "§kManzana", "horizon.b": "Plátano\n%s",
+                                         "horizon.c": "Cereza " * 20})
+            code, _, err = run("--translations", export, "--approved", root / "approved",
+                               "--lang", lang, "--review", review)
+            self.assertEqual(code, 0)
+            entries = json.loads((lang / "es_es.json").read_text(encoding="utf-8"))
+            self.assertEqual(entries, {"horizon.a": "Manzana", "horizon.b": "Plátano %s",
+                                       "horizon.c": "Cereza"})
+            self.assertIn("3 translations", err)
+
     def test_a_broken_export_fails_the_run_naming_its_language_and_writes_nothing(self):
         bounds = {"MAX_EXPORT_BYTES": 64, "MAX_TEXT_CHARS": 8}
         good = json.dumps({"horizon.a": "Manzana"}).encode()
@@ -310,20 +323,42 @@ class SyncTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root, lang, review, export = self.fixture(tmp)
             approved = root / "approved"
-            write(export, "es-ES.json", {"horizon.c": "Picota"})
-            write(approved, "es-ES.json", {"horizon.c": "Picota"})
+            write(export, "es-ES.json", {"horizon.a": "Manzana", "horizon.c": "Picota"})
+            write(approved, "es-ES.json", {"horizon.a": "Manzana", "horizon.c": "Picota"})
             run("--translations", export, "--approved", approved, "--lang", lang, "--review", review)
             record = json.loads((review / "es_es.json").read_text(encoding="utf-8"))
-            self.assertEqual(record, {"horizon.c": "Picota"})
+            self.assertEqual(record, {"horizon.a": "Manzana", "horizon.c": "Picota"})
 
-            # the proofread is withdrawn in Crowdin, the text stays what it was
-            for path in approved.glob("*.json"):
-                path.unlink()
+            # one proofread is withdrawn in Crowdin, the text stays what it was
+            write(approved, "es-ES.json", {"horizon.a": "Manzana"})
             run("--translations", export, "--approved", approved, "--lang", lang, "--review", review)
-            self.assertFalse((review / "es_es.json").exists())
+            record = json.loads((review / "es_es.json").read_text(encoding="utf-8"))
+            self.assertEqual(record, {"horizon.a": "Manzana"})
             rows = lang_coverage.game_rows(lang, set(), review)[1]
             row = next(row for row in rows if row["code"] == "es_es")
             self.assertIn("horizon.c", row["unreviewed"])
+
+    def test_a_missing_or_empty_approved_export_does_not_take_every_mark_back(self):
+        for body in (None, b"", b"{}"):
+            with self.subTest(body), tempfile.TemporaryDirectory() as tmp:
+                root, lang, review, export = self.fixture(tmp)
+                approved = root / "approved"
+                write(export, "es-ES.json", {"horizon.c": "Picota"})
+                write(approved, "es-ES.json", {"horizon.c": "Picota"})
+                run("--translations", export, "--approved", approved, "--lang", lang,
+                    "--review", review)
+                write(export, "es-ES.json", {"horizon.c": "Guinda"})
+                if body is None:
+                    (approved / "es-ES.json").unlink()
+                else:
+                    (approved / "es-ES.json").write_bytes(body)
+                before = {path: path.read_bytes() for path in [*lang.iterdir(), *review.rglob("*.json")]}
+                code, _, err = run("--translations", export, "--approved", approved, "--lang", lang,
+                                   "--review", review)
+                self.assertEqual(code, 1)
+                self.assertIn("es_es (", err)
+                self.assertIn("approved export incomplete", err)
+                self.assertEqual({path: path.read_bytes() for path in before}, before)
 
     def test_a_persons_own_entry_survives_the_sync(self):
         with tempfile.TemporaryDirectory() as tmp:

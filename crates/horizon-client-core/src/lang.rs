@@ -1030,13 +1030,161 @@ mod tests {
                 return Some("drops the percent sign the English text shows");
             }
         }
-        let stray = value.chars().any(|c| match c {
+        text_problem(english, value).map(|rule| match rule {
+            "control" => "carries a control character its English text lacks",
+            "invisible" => "carries an invisible character its English text lacks",
+            "bidi" => "opens bidi controls it does not close, or more than its English text",
+            "formatting_code" => "has other `§` formatting codes than its English text",
+            "line_break" => "has more line breaks than twice its English text's",
+            "length" => "is longer than its English text allows",
+            _ => "has a longer unbroken run than its English text allows",
+        })
+    }
+
+    /// At most this many times the English length in characters, or the English length plus
+    /// `LENGTH_SLACK`, whichever is more; the longest run without a break is `MAX_RUN` unless
+    /// English has a longer one. The same as `tools/lang_coverage.py`.
+    const LENGTH_FACTOR: usize = 4;
+    const LENGTH_SLACK: usize = 80;
+    const MAX_RUN: usize = 60;
+
+    fn is_invisible(c: char) -> bool {
+        matches!(c,
+            '\u{200b}' | '\u{2028}' | '\u{2029}' | '\u{feff}'
+            | '\u{e0000}'..='\u{e007f}'
+            | '\u{fdd0}'..='\u{fdef}'
+            | '\u{e000}'..='\u{f8ff}'
+            | '\u{f0000}'..='\u{ffffd}'
+            | '\u{100000}'..='\u{10fffd}')
+            || ((c as u32) & 0xfffe) == 0xfffe
+    }
+    fn is_variation_selector(c: char) -> bool {
+        matches!(c, '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}')
+    }
+    /// Scripts written without spaces between words: a line may break after any of their
+    /// characters, so they end a run.
+    fn is_spaceless(c: char) -> bool {
+        matches!(c,
+            '\u{0e00}'..='\u{0fff}'
+            | '\u{1000}'..='\u{109f}'
+            | '\u{1780}'..='\u{17ff}'
+            | '\u{3000}'..='\u{30ff}'
+            | '\u{31f0}'..='\u{31ff}'
+            | '\u{3400}'..='\u{4dbf}'
+            | '\u{4e00}'..='\u{9fff}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{ff00}'..='\u{ffef}'
+            | '\u{20000}'..='\u{3ffff}')
+    }
+    /// The legacy codes in `text`, lowercased: a `§` takes the character after it, whatever it
+    /// is, and neither is drawn (`Text::resolve_legacy`); a `§` at the end is a code of its own.
+    fn formatting_codes(text: &str) -> std::collections::BTreeSet<Option<char>> {
+        let mut found = std::collections::BTreeSet::new();
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            if c == '§' {
+                found.insert(chars.next().map(|code| code.to_ascii_lowercase()));
+            }
+        }
+        found
+    }
+    fn longest_run(text: &str) -> usize {
+        let (mut longest, mut current) = (0, 0);
+        for c in text.chars() {
+            if c.is_whitespace() || is_spaceless(c) {
+                current = 0;
+            } else {
+                current += 1;
+                longest = longest.max(current);
+            }
+        }
+        longest
+    }
+    /// Every bidi embedding, override and isolate `text` opens it closes, nested, and no more of
+    /// each than English opens.
+    fn bidi_balanced(english: &str, text: &str) -> bool {
+        let embedding = |c: char| matches!(c, '\u{202a}' | '\u{202b}' | '\u{202d}' | '\u{202e}');
+        let isolate = |c: char| matches!(c, '\u{2066}'..='\u{2068}');
+        let count = |s: &str, c: char| s.chars().filter(|&x| x == c).count();
+        if text
+            .chars()
+            .filter(|&c| embedding(c) || isolate(c))
+            .any(|c| count(text, c) > count(english, c))
+        {
+            return false;
+        }
+        let mut open = Vec::new();
+        for c in text.chars() {
+            if embedding(c) || isolate(c) {
+                open.push(c);
+            } else if c == '\u{202c}' || c == '\u{2069}' {
+                let closes: fn(char) -> bool = if c == '\u{202c}' { embedding } else { isolate };
+                if !open.pop().is_some_and(closes) {
+                    return false;
+                }
+            }
+        }
+        open.is_empty()
+    }
+    /// The first rule `text`, a translation of `english`, breaks, by its name in
+    /// `tests/fixtures/translation_text_rules.json`: what it may carry beyond its placeholders.
+    fn text_problem(english: &str, text: &str) -> Option<&'static str> {
+        let stray = text.chars().any(|c| match c {
             '\n' => false,
             '\t' => !english.contains('\t'),
             c if is_bidi_control(c) => !english.contains(c),
             c => c.is_control(),
         });
-        stray.then_some("carries a control character its English text lacks")
+        if stray {
+            return Some("control");
+        }
+        let mut previous: Option<char> = None;
+        for c in text.chars() {
+            if is_invisible(c) && !english.contains(c)
+                || is_variation_selector(c)
+                    && previous.is_none_or(|p| p.is_whitespace() || is_variation_selector(p))
+            {
+                return Some("invisible");
+            }
+            previous = Some(c);
+        }
+        if !bidi_balanced(english, text) {
+            return Some("bidi");
+        }
+        if formatting_codes(text) != formatting_codes(english) {
+            return Some("formatting_code");
+        }
+        let breaks = |s: &str| s.matches('\n').count();
+        if breaks(text) > 2 * breaks(english) {
+            return Some("line_break");
+        }
+        let length = english.chars().count();
+        if text.chars().count() > (LENGTH_FACTOR * length).max(length + LENGTH_SLACK) {
+            return Some("length");
+        }
+        (longest_run(text) > MAX_RUN.max(longest_run(english))).then_some("unbroken_run")
+    }
+
+    #[test]
+    fn translated_text_keeps_what_its_english_allows() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/translation_text_rules.json"
+        );
+        let fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let (english, text) = (
+                case["english"].as_str().unwrap(),
+                case["text"].as_str().unwrap(),
+            );
+            assert_eq!(
+                text_problem(english, text),
+                case["rule"].as_str(),
+                "{}",
+                case["case"]
+            );
+        }
     }
 
     #[test]

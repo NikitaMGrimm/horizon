@@ -116,6 +116,14 @@ class GameCoverageTests(unittest.TestCase):
         self.assertEqual(lang_coverage.stray_controls("a⁧b⁩\t", "c⁧d⁩\t"), [])
         self.assertEqual(lang_coverage.stray_controls("a\x1b", "b\x1b"), ["\x1b"])
 
+    def test_translated_text_keeps_what_its_english_allows(self):
+        # The same cases lang.rs's bundled-file test reads, so the importer and the test agree.
+        fixture = Path(__file__).parent / "fixtures/translation_text_rules.json"
+        for case in json.loads(fixture.read_text(encoding="utf-8"))["cases"]:
+            with self.subTest(case["case"]):
+                self.assertEqual(lang_coverage.text_problem(case["english"], case["text"]),
+                                 case["rule"])
+
     def test_a_repeated_key_or_a_missing_indent_is_a_problem(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)

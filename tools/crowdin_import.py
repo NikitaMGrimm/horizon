@@ -287,10 +287,11 @@ def inventory(folder: Path, table: dict[str, str]) -> dict[str, Path]:
 
 
 def acceptable(name: str, english: str, text: str, plain: set[str]) -> bool:
-    """A translation the game can format with the English text's arguments, and without a control
-    character it must not carry (`lang_coverage.formats_like`, `stray_controls`)."""
+    """A translation the game can format with the English text's arguments, that keeps the
+    formatting codes, line breaks, length and characters the English text allows
+    (`lang_coverage.formats_like`, `text_problem`)."""
     return (lang_coverage.formats_like(name, english, text, plain)
-            and not lang_coverage.stray_controls(english, text))
+            and lang_coverage.text_problem(english, text) is None)
 
 
 def merge(existing: dict[str, str], incoming: dict[str, str],
@@ -411,6 +412,14 @@ def sync(translations: Path, approved: Path, lang: Path = LANG, review: Path = R
     wanted = set(english)
     exports = {code: read_export(code, path, wanted) for code, path in sorted(exported.items())}
     checked = {code: read_export(code, path, wanted) for code, path in sorted(proofread.items())}
+    # A language whose proofread export is missing or empty while its translations came down would
+    # lose every mark the sync recorded for it: that is an incomplete download, not a withdrawal.
+    for code in exports:
+        recorded = read_keys(review.parent / "crowdin" / f"{code}.json")
+        if recorded and not checked.get(code):
+            path = proofread.get(code, approved / (LOCALES[code][0].replace("-", "_") + ".json"))
+            raise ExportError(code, path, f"approved export incomplete: missing or empty, while "
+                                          f"{len(recorded)} keys are recorded as proofread")
     return [sync_language(code, entries, checked.get(code), lang, review, english, write)
             for code, entries in exports.items()]
 
@@ -515,7 +524,7 @@ def main(argv: list[str] | None = None) -> int:
     for row in rows:
         if row["dropped"]:
             print(f"\n{row['code']}: {len(row['dropped'])} translations change the placeholders of "
-                  f"the English text, cannot be formatted, add a control character or are the "
+                  f"the English text, cannot be formatted, break a text rule (docs/translations.md) or are the "
                   f"English text, and were not written: {', '.join(row['dropped'][:5])}",
                   file=sys.stderr)
     return 0
