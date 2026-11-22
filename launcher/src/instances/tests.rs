@@ -256,7 +256,7 @@ fn names_stay_unique_and_packs_are_not_copied() {
     let grouped = edit_in(&home, &data, "Survival", |m| m.group = Some(" ".into())).unwrap();
     assert_eq!(grouped.group, None);
     // An import named like an instance: both can still change everything but their names.
-    let mut store = Store::load(&data);
+    let mut store = Store::load(&data).unwrap();
     store.instances.entry(port.id.clone()).or_default().name = Some("Survival".into());
     store.save(&data).unwrap();
     let launched = edit_in(&home, &data, "survival", |m| {
@@ -376,6 +376,12 @@ fn use_version_pins_only_the_selected_horizon_instance_and_newest_clears_it() {
     let before = fs::read(&settings_file).unwrap();
 
     assert_eq!(selected().resolve_version(None).unwrap(), NOV_22);
+    assert!(backend::remove_version(NOV_22)
+        .unwrap_err()
+        .contains("Horizon"));
+    assert!(backend::version_dir(NOV_22)
+        .join(backend::COMPLETE)
+        .is_file());
     use_version(NOV_21).unwrap();
     assert_eq!(selected().version.as_deref(), Some(NOV_21));
     assert_eq!(selected().resolve_version(None).unwrap(), NOV_21);
@@ -398,7 +404,58 @@ fn use_version_pins_only_the_selected_horizon_instance_and_newest_clears_it() {
     edit("selected", |meta| meta.java = Some(JavaGame::default())).unwrap();
     use_version(NOV_21).unwrap();
     assert_eq!(selected().version, None);
+
+    // The window still shows Horizon while another launcher selected the Java instance.
+    use_version_for(DEFAULT, NOV_21).unwrap();
+    assert_eq!(find(DEFAULT).unwrap().version.as_deref(), Some(NOV_21));
+    assert_eq!(selected().id, "selected");
+    assert_eq!(selected().version, None);
     assert_eq!(fs::read(settings_file).unwrap(), before);
+}
+
+#[test]
+fn migration_leaves_both_files_untouched_when_version_or_instance_data_cannot_be_read() {
+    if std::env::var_os("HORIZON_TEST_MIGRATION_READ").is_none() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "instances::tests::migration_leaves_both_files_untouched_when_version_or_instance_data_cannot_be_read"])
+            .env("HORIZON_TEST_MIGRATION_READ", root.path())
+            .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+            .env("HORIZON_HOME", root.path().join("game"))
+            .env("HORIZON_LAUNCHER_LOCATION_FILE", root.path().join("location.json"))
+            .status().unwrap().success());
+        return;
+    }
+    let data = backend::data_dir();
+    let settings = data.join("settings.json");
+    let instances = data.join(FILE);
+    let old_settings = format!(r#"{{"selected":"{NOV_21}","following":null}}"#);
+    put(&settings, &old_settings);
+    for tag in [NOV_21, NOV_22] {
+        put(&backend::version_dir(tag).join(backend::COMPLETE), "");
+    }
+
+    put(&instances, r#"{"instances":{"horizon":"incomplete"}"#);
+    let corrupt = fs::read(&instances).unwrap();
+    assert!(absorb_held_selection().unwrap_err().contains(FILE));
+    assert_eq!(fs::read(&instances).unwrap(), corrupt);
+    assert_eq!(fs::read_to_string(&settings).unwrap(), old_settings);
+
+    fs::remove_file(&instances).unwrap();
+    fs::create_dir(&instances).unwrap();
+    assert!(absorb_held_selection().unwrap_err().contains(FILE));
+    assert!(instances.is_dir());
+    assert_eq!(fs::read_to_string(&settings).unwrap(), old_settings);
+
+    fs::remove_dir(&instances).unwrap();
+    let saved = r#"{"instances":{"horizon":{"name":"Keep this name"}}}"#;
+    put(&instances, saved);
+    let versions = data.join("versions");
+    fs::rename(&versions, data.join("versions-kept")).unwrap();
+    put(&versions, "not a readable directory");
+    assert!(absorb_held_selection().unwrap_err().contains("versions"));
+    assert_eq!(fs::read_to_string(&instances).unwrap(), saved);
+    assert_eq!(fs::read_to_string(&settings).unwrap(), old_settings);
 }
 
 #[test]
@@ -561,7 +618,10 @@ fn deleted_instances_go_to_the_trash_and_are_forgotten() {
         b"base"
     );
     assert!(find_in(&list_in(&home, &data), "Survival").is_err());
-    assert!(!Store::load(&data).instances.contains_key("survival"));
+    assert!(!Store::load(&data)
+        .unwrap()
+        .instances
+        .contains_key("survival"));
     // The game's home stays; an imported pack goes like an instance.
     assert!(delete_in(&home, &data, DEFAULT, &to_trash)
         .unwrap_err()
@@ -576,7 +636,10 @@ fn deleted_instances_go_to_the_trash_and_are_forgotten() {
     edit_in(&home, &data, "Skyblock", |m| m.group = Some("Old".into())).unwrap();
     fs::remove_dir_all(home.join(OWN).join("skyblock")).unwrap();
     assert!(find_in(&list_in(&home, &data), "Skyblock").is_err());
-    assert!(!Store::load(&data).instances.contains_key("skyblock"));
+    assert!(!Store::load(&data)
+        .unwrap()
+        .instances
+        .contains_key("skyblock"));
     let again = create_in(&home, &data, "Skyblock", None, None).unwrap();
     assert_eq!(again.group, None);
     fs::remove_dir_all(&root).unwrap();

@@ -214,6 +214,22 @@ impl Settings {
         Self::from_saved(&text, installed).0
     }
 
+    /// Reads settings for operations that must preserve existing data on any read failure.
+    pub(crate) fn load_checked() -> Result<Self, String> {
+        let path = data_dir().join("settings.json");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !path.is_symlink() => {
+                return Ok(Self {
+                    instance_versions_migrated: true,
+                    ..Self::default()
+                });
+            }
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        Self::parse_checked(&text).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
     /// The saved settings when an install of a version just ended, `before` being what was
     /// installed before it. A file from before `following` is judged against `before`, as the
     /// update rule of launchers before it judged it before moving the selection: against the list
@@ -281,7 +297,7 @@ impl Settings {
     /// selection on ([`select_after_update`]), so those players keep the behaviour they had; it
     /// can't tell a pick of the newest from following, and doesn't need to. An older one stays a
     /// pick.
-    pub(super) fn adopt_legacy_selection(&mut self, installed: &[String]) {
+    pub(crate) fn adopt_legacy_selection(&mut self, installed: &[String]) {
         let newest = installed
             .iter()
             .find(|t| crate::nightly::date_of(t).is_some());
@@ -305,9 +321,11 @@ impl Settings {
         }
     }
     pub fn parse(text: &str) -> Self {
-        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text) else {
-            return Self::default();
-        };
+        Self::parse_checked(text).unwrap_or_default()
+    }
+
+    fn parse_checked(text: &str) -> serde_json::Result<Self> {
+        let mut value = serde_json::from_str::<serde_json::Value>(text)?;
         if let Some(fields) = value.as_object_mut() {
             // An appearance from a newer launcher is Dark, not a reason to lose every setting.
             if fields
@@ -347,9 +365,9 @@ impl Settings {
                 fields.remove("language");
             }
         }
-        let mut settings: Self = serde_json::from_value(value).unwrap_or_default();
+        let mut settings: Self = serde_json::from_value(value)?;
         look_settings::settle(&mut settings);
-        settings
+        Ok(settings)
     }
     /// Whether the launcher keeps its entry in the applications menu (Linux).
     pub fn desktop_entry(&self) -> bool {

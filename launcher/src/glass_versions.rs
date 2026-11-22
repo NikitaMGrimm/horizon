@@ -75,7 +75,7 @@ impl Launcher {
     }
 
     /// The action Versions offers for this build on the instance Play starts.
-    pub(super) fn use_version_tip(&self, tag: &str) -> Option<String> {
+    pub(super) fn use_version_action(&self, tag: &str) -> Option<(String, String)> {
         let instance = self.selected_instance().filter(|i| i.java.is_none())?;
         let latest = horizon_launcher::nightly::latest_for(
             instance.channel,
@@ -85,7 +85,7 @@ impl Launcher {
         let follows = latest.as_deref() == Some(tag);
         let pin = (!follows).then_some(tag);
         (instance.version.as_deref() != pin).then(|| {
-            if follows {
+            let tip = if follows {
                 trf(
                     "Play the latest in {instance}. It moves to each new one.",
                     &[("instance", &instance.name)],
@@ -95,7 +95,8 @@ impl Launcher {
                     "Keep {instance} on this version. To follow new ones again, choose Latest in its settings, Installation.",
                     &[("instance", &instance.name)],
                 )
-            }
+            };
+            (instance.id.clone(), tip)
         })
     }
 
@@ -583,12 +584,12 @@ impl Launcher {
                     )),
                 );
         }
-        if let Some(tip) = self.use_version_tip(tag) {
+        if let Some((id, tip)) = self.use_version_action(tag) {
             d = d.child(
                 ui::quiet(SharedString::from(format!("use-{tag}")), tr("Use"), 36., &t)
                     .tooltip(ui::tip(tip))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        if let Err(e) = this.use_version(&t1) {
+                        if let Err(e) = this.use_version_for(&id, &t1) {
                             this.install_error = Some((t1.clone(), e));
                         }
                         cx.notify();

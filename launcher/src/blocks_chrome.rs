@@ -460,7 +460,7 @@ impl Launcher {
                     cx.notify();
                 })),
         );
-        if self.picker.open {
+        if let Some(instance) = instance.filter(|i| self.picker.open && i.java.is_none()) {
             let mut menu = div()
                 .absolute()
                 .top(px(theme::night::PLAY + 6.))
@@ -478,14 +478,13 @@ impl Launcher {
                     this.menu_closed_at = Some(event.position);
                     cx.notify();
                 }));
-            let follows = instance.and_then(|i| {
-                horizon_launcher::nightly::latest_for(
-                    i.channel,
-                    &self.installed,
-                    self.settings.selected.as_deref(),
-                )
-            });
+            let follows = horizon_launcher::nightly::latest_for(
+                instance.channel,
+                &self.installed,
+                self.settings.selected.as_deref(),
+            );
             for tag in &self.installed {
+                let id = instance.id.clone();
                 let selected = self.selected() == Some(tag);
                 let tag = tag.clone();
                 let latest = follows.as_ref() == Some(&tag);
@@ -517,7 +516,7 @@ impl Launcher {
                                 .when(selected, |d| d.child(div().size(px(6.)).bg(t.accent))),
                         )
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            if let Err(e) = this.use_version(&tag) {
+                            if let Err(e) = this.use_version_for(&id, &tag) {
                                 this.client_error = Some(e);
                             }
                             this.picker.open = false;

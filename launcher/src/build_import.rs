@@ -96,6 +96,14 @@ fn base_for(
 /// can be, and uses it for the selected Horizon instance. Importing the same program again uses
 /// the version it made before.
 pub fn import(path: &Path, requested: Option<&str>) -> Result<String, String> {
+    import_for(path, requested, &crate::instances::selected())
+}
+
+pub fn import_for(
+    path: &Path,
+    requested: Option<&str>,
+    instance: &crate::instances::Instance,
+) -> Result<String, String> {
     let file = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
@@ -104,7 +112,6 @@ pub fn import(path: &Path, requested: Option<&str>) -> Result<String, String> {
     if !is_game(&program) {
         return Err(not_a_game(&file));
     }
-    let instance = crate::instances::selected();
     let selected = instance
         .resolve_version(None)
         .ok()
@@ -120,7 +127,7 @@ pub fn import(path: &Path, requested: Option<&str>) -> Result<String, String> {
         ));
     }
     backend::reuse_prepared_for(&tag);
-    crate::instances::use_version(&tag)?;
+    crate::instances::use_version_for(&instance.id, &tag)?;
     Ok(tag)
 }
 

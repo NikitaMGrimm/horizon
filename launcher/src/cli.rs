@@ -3008,11 +3008,8 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
         }
         InstanceCmd::Select { instance } => changed(instances::select(&instance)?),
         InstanceCmd::Version { instance, version } => {
-            let pin = match version.as_str() {
-                "latest" => None,
-                tag => Some(backend::resolve_version(Some(tag))?),
-            };
-            changed(instances::edit(&instance, |m| m.version = pin)?)
+            let pin = (version != "latest").then_some(version.as_str());
+            changed(instances::pin_installed_version(&instance, pin)?)
         }
         InstanceCmd::Launch {
             instance,

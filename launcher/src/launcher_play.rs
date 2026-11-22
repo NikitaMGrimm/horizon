@@ -159,14 +159,20 @@ impl Launcher {
     /// start the same import (`import_dropped`) without a picker. Does nothing
     /// when one is already running. `Msg::Imported` ends it.
     pub(crate) fn start_build_import(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
-        if !self.can_import_build() {
+        let Some(instance) = self
+            .selected_instance()
+            .filter(|_| self.can_import_build())
+            .cloned()
+        else {
             return;
-        }
+        };
         self.importing_build = true;
         self.import_error = None;
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(Msg::Imported(build_import::import(&path, None)));
+            let _ = tx.send(Msg::Imported(build_import::import_for(
+                &path, None, &instance,
+            )));
         });
         cx.notify();
     }

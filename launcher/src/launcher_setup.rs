@@ -50,6 +50,9 @@ impl Launcher {
         })
         .detach();
         let mut settings = Settings::load();
+        if migration_error.is_some() {
+            settings.instance_versions_migrated = false;
+        }
         i18n::set(settings.language());
         if settings.minecraft_dir.is_none() {
             settings.minecraft_dir = backend::default_minecraft_dir();

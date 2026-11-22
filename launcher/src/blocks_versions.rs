@@ -35,13 +35,13 @@ impl Launcher {
             .items_center()
             .gap(px(4.))
             .children(
-                self.use_version_tip(tag)
+                self.use_version_action(tag)
                     .filter(|_| !confirming)
-                    .map(|tip| {
+                    .map(|(id, tip)| {
                         button(format!("use-{tag}"), "Use", Kind::Ghost, &t)
                             .tooltip(crate::glass_ui::tip(tip))
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                if let Err(e) = this.use_version(&t1) {
+                                if let Err(e) = this.use_version_for(&id, &t1) {
                                     this.install_error = Some((t1.clone(), e));
                                 }
                                 cx.notify();

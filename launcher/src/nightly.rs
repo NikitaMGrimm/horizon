@@ -185,7 +185,10 @@ fn is_date(text: &str) -> bool {
 pub fn after_update(version: &str) {
     let installed = backend::installed();
     let settings = backend::Settings::load();
-    let protected = instances::protected_versions(&installed, settings.selected.as_deref());
+    let Ok(protected) = instances::protected_versions(&installed, settings.selected.as_deref())
+    else {
+        return;
+    };
     for old in stale(&installed, version, &protected, backend::auto_installed) {
         let _ = backend::remove(&old);
     }
@@ -324,23 +327,30 @@ pub fn install_stable(
     }
 }
 
-/// What a Stable instance set to Latest plays, from the installed builds alone (`selected`: the
-/// launcher's version): the newest release after [`LAST_BEFORE_NIGHTLIES`]; else the launcher's
-/// version, unless it is a release from before the Nightlies; else the newest Nightly. None when
-/// there is none of these: the caller falls back to the launcher's version.
-pub fn stable_latest(installed: &[String], selected: Option<&str>) -> Option<String> {
-    let before_nightlies = |tag: &str| {
-        backend::is_game_tag(tag) && backend::compare_versions(tag, LAST_BEFORE_NIGHTLIES).is_le()
-    };
-    newest(installed, |t| {
-        backend::is_game_tag(t) && !t.contains('-') && !before_nightlies(t)
+/// The newest installed Stable release, or the newest Nightly while Stable uses weekly builds.
+fn stable_latest(installed: &[String]) -> Option<String> {
+    newest_stable_release(installed).or_else(|| newest(installed, |tag| date_of(tag).is_some()))
+}
+
+fn before_nightlies(tag: &str) -> bool {
+    backend::is_game_tag(tag) && backend::compare_versions(tag, LAST_BEFORE_NIGHTLIES).is_le()
+}
+
+fn newest_stable_release(installed: &[String]) -> Option<String> {
+    newest(installed, |tag| {
+        backend::is_game_tag(tag) && !tag.contains('-') && !before_nightlies(tag)
     })
-    .or_else(|| {
-        selected
-            .filter(|s| installed.iter().any(|t| t == s) && !before_nightlies(s))
-            .map(str::to_owned)
-    })
-    .or_else(|| newest(installed, |t| date_of(t).is_some()))
+}
+
+/// Reconstructs what the old Stable resolver played before the global pick became an instance pin.
+pub(crate) fn legacy_stable_latest(installed: &[String], selected: Option<&str>) -> Option<String> {
+    newest_stable_release(installed)
+        .or_else(|| {
+            selected
+                .filter(|tag| !before_nightlies(tag))
+                .map(str::to_owned)
+        })
+        .or_else(|| newest(installed, |tag| date_of(tag).is_some()))
 }
 
 /// The installed build a Horizon instance on Latest plays for its channel.
@@ -350,15 +360,14 @@ pub fn latest_for(
     selected: Option<&str>,
 ) -> Option<String> {
     match channel {
-        Channel::Nightly => newest(installed, |tag| date_of(tag).is_some()),
-        Channel::Stable => stable_latest(installed, selected),
+        Channel::Nightly => newest(installed, |tag| date_of(tag).is_some()).or_else(|| {
+            installed
+                .iter()
+                .find(|tag| Some(tag.as_str()) == selected)
+                .cloned()
+        }),
+        Channel::Stable => stable_latest(installed),
     }
-    .or_else(|| {
-        installed
-            .iter()
-            .find(|tag| Some(tag.as_str()) == selected)
-            .cloned()
-    })
     .or_else(|| installed.first().cloned())
 }
 
@@ -529,32 +538,43 @@ mod tests {
         ];
         // The release from before the Nightlies, selected: the newest Nightly instead.
         assert_eq!(
-            stable_latest(&installed(&nightlies), Some("v0.2.97")).as_deref(),
+            latest_for(Channel::Stable, &installed(&nightlies), Some("v0.2.97")).as_deref(),
             Some("nightly-2026-11-13-aaaaaaa")
         );
         assert_eq!(
-            stable_latest(&installed(&nightlies), Some("v0.2.97.1")).as_deref(),
+            latest_for(Channel::Stable, &installed(&nightlies), Some("v0.2.97.1")).as_deref(),
             Some("nightly-2026-11-13-aaaaaaa")
         );
         // A release after them wins.
         let with_release = [&["v0.3.0"], &nightlies[..]].concat();
         assert_eq!(
-            stable_latest(
+            latest_for(
+                Channel::Stable,
                 &installed(&with_release),
                 Some("nightly-2026-11-13-aaaaaaa")
             )
             .as_deref(),
             Some("v0.3.0")
         );
-        // An older Nightly picked by hand stays picked.
+        // A weekly install immediately advances Stable Latest, even with an older global pick.
         assert_eq!(
-            stable_latest(&installed(&nightlies), Some("nightly-2026-11-08-ddddddd")).as_deref(),
-            Some("nightly-2026-11-08-ddddddd")
+            latest_for(
+                Channel::Stable,
+                &installed(&nightlies),
+                Some("nightly-2026-11-08-ddddddd")
+            )
+            .as_deref(),
+            Some("nightly-2026-11-13-aaaaaaa")
         );
-        // Only the old release: none, so the caller's fallback (the launcher's version) plays.
+        // Without an eligible Stable or Nightly, fall back to the newest installed build.
         assert_eq!(
-            stable_latest(&installed(&["v0.2.97"]), Some("v0.2.97")),
-            None
+            latest_for(
+                Channel::Stable,
+                &installed(&["v0.2.97", "v0.2.96"]),
+                Some("v0.2.96")
+            )
+            .as_deref(),
+            Some("v0.2.97")
         );
     }
 

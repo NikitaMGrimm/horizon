@@ -239,7 +239,9 @@ impl Launcher {
                             });
                             let manual = as_update.is_none() && instance.is_none();
                             let saved = if manual {
-                                match self.use_version(&tag) {
+                                let id =
+                                    self.selected_instance().map(|instance| instance.id.clone());
+                                match id.map_or(Ok(()), |id| self.use_version_for(&id, &tag)) {
                                     Ok(()) => true,
                                     Err(e) => {
                                         self.install_error = Some((tag.clone(), e));

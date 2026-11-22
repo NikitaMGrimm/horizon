@@ -1109,13 +1109,42 @@ pub fn installed() -> Vec<String> {
 }
 
 fn installed_in(versions: &Path) -> Vec<String> {
-    let mut tags: Vec<String> = fs::read_dir(versions)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().join(COMPLETE).exists())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
+    installed_checked_in(versions).unwrap_or_default()
+}
+
+pub(crate) fn installed_checked() -> Result<Vec<String>, String> {
+    installed_checked_in(&versions_dir())
+}
+
+fn installed_checked_in(versions: &Path) -> Result<Vec<String>, String> {
+    let read = || -> std::io::Result<Vec<String>> {
+        let entries = match fs::read_dir(versions) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !versions.is_symlink() => {
+                return Ok(Vec::new());
+            }
+            Err(e) => return Err(e),
+        };
+        let mut tags = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let Ok(tag) = entry.file_name().into_string() else {
+                continue;
+            };
+            if entry.path().join(COMPLETE).try_exists().or_else(|e| {
+                // The versions folder can also hold temporary files from installation.
+                if e.kind() == std::io::ErrorKind::NotADirectory {
+                    Ok(false)
+                } else {
+                    Err(e)
+                }
+            })? {
+                tags.push(tag);
+            }
+        }
+        Ok(tags)
+    };
+    let mut tags = read().map_err(|e| format!("{}: {e}", versions.display()))?;
     // Read once: a later release list notes the times itself.
     static READ_KEPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !newest_first(&mut tags, crate::nightly::published_at)
@@ -1128,7 +1157,7 @@ fn installed_in(versions: &Path) -> Vec<String> {
         }
         newest_first(&mut tags, crate::nightly::published_at);
     }
-    tags
+    Ok(tags)
 }
 
 /// Sorts `tags` newest first: by [`release_order`], then Nightlies of one day by when they came
@@ -1360,13 +1389,28 @@ pub use developer_play::client_as;
 mod installation;
 pub(crate) use installation::install_as;
 
-/// Removes the installed version `tag` unless a program runs from it or a native build takes its
-/// resources. A build that predates runtime leases takes none, so no lease can ever prove its
+/// Removes `tag` unless an instance or program uses it, or a native build takes its resources.
+/// A build that predates runtime leases takes none, so no lease can ever prove its
 /// folder unused: the check [`in_use`] makes here is that proof, and it stands beside the removal
 /// it justifies. Both vetoes belong to this path, so every caller inherits them; the dependency
 /// one runs inside the removal's exclusive publication lock, so an install that finishes in
 /// between cannot lose the base it started from.
-pub fn remove(tag: &str) -> Result<(), String> {
+pub(crate) fn remove(tag: &str) -> Result<(), String> {
+    // Hold the instance store lock through the deletion so a pin cannot land after the check.
+    let _store_lock = crate::instances::lock_store(&data_dir())?;
+    let installed = installed_checked()?;
+    if !installed.iter().any(|t| t == tag) {
+        return Err(format!("{tag} is not installed."));
+    }
+    let settings = Settings::load_checked()?;
+    if let Some(instance) =
+        crate::instances::version_user(&installed, settings.selected.as_deref(), tag)?
+    {
+        return Err(crate::i18n::trf(
+            "In use by {names}. Pick another version for it first.",
+            &[("names", &instance)],
+        ));
+    }
     if in_use(tag) {
         return Err(format!("{tag} is running. Quit it first."));
     }
@@ -3178,24 +3222,12 @@ pub fn no_version_installed() -> String {
     )
 }
 
-/// Removes an installed version unless pinned or in use and refreshes the compatibility
+/// Removes an installed version unless an instance or program uses it. Refreshes the compatibility
 /// selection if it pointed at the removed build.
 pub fn remove_version(tag: &str) -> Result<(), String> {
-    if !installed().iter().any(|t| t == tag) {
-        return Err(format!("{tag} is not installed."));
-    }
-    if let Some(instance) = crate::instances::list()
-        .into_iter()
-        .find(|instance| instance.version.as_deref() == Some(tag))
-    {
-        return Err(crate::i18n::trf(
-            "In use by {names}. Pick another version for it first.",
-            &[("names", &instance.name)],
-        ));
-    }
     remove(tag)?;
     crate::storage::eviction::request_cleanup();
-    let mut settings = Settings::load();
+    let mut settings = Settings::load_checked()?;
     if [settings.selected.as_deref(), settings.following.as_deref()].contains(&Some(tag)) {
         let newest =
             crate::nightly::latest_for(crate::instances::Channel::Nightly, &installed(), None);
@@ -3293,14 +3325,25 @@ pub fn prune_old_versions() -> Vec<String> {
         return Vec::new();
     }
     let installed = installed();
-    let protected = crate::instances::protected_versions(&installed, settings.selected.as_deref());
-    let mut gone = Vec::new();
-    for tag in stale_versions(
+    let protected =
+        match crate::instances::protected_versions(&installed, settings.selected.as_deref()) {
+            Ok(protected) => protected,
+            Err(e) => {
+                eprintln!("Could not check instance versions before pruning: {e}");
+                return Vec::new();
+            }
+        };
+    prune_versions(stale_versions(
         &installed,
         settings.keep_newest(),
         &protected,
         auto_installed,
-    ) {
+    ))
+}
+
+fn prune_versions(candidates: Vec<String>) -> Vec<String> {
+    let mut gone = Vec::new();
+    for tag in candidates {
         if crate::native_mods::resource_dependents(&tag) {
             eprintln!("Keeping old version {tag}: a native build uses its resources.");
             continue;
@@ -4671,9 +4714,13 @@ mod tests {
             Err(crate::native_cache::Error::UnprovenExclusion)
         ));
         assert_eq!(fs::read(cache.join("pack.hpack")).unwrap(), b"whole pack");
+        // Latest now resolves to a different installation.
+        let newer = versions.join("v0.2.0");
+        fs::create_dir(&newer).unwrap();
+        fs::write(newer.join(COMPLETE), b"").unwrap();
         remove_version("v0.1.0").unwrap();
         assert!(!dir.exists());
-        assert!(installed_in(&versions).is_empty());
+        assert_eq!(installed_in(&versions), ["v0.2.0"]);
     }
 
     /// [#18393](https://github.com/horizon-rust/horizon/issues/18393): the proof is the check that
@@ -4713,6 +4760,9 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(COMPLETE), b"").unwrap();
         fs::write(dir.join(CLIENT), b"pre-holder game").unwrap();
+        let newer = versions.join("v0.2.0");
+        fs::create_dir(&newer).unwrap();
+        fs::write(newer.join(COMPLETE), b"").unwrap();
         // A running image refuses writes the way the loader's own handle does, which is what the
         // check standing in for the missing lease looks at.
         let running = fs::File::options()
@@ -4725,11 +4775,11 @@ mod tests {
             dir.join(COMPLETE).exists(),
             "the version stays whole for the retry"
         );
-        assert_eq!(installed_in(&versions), vec!["v0.1.0".to_owned()]);
+        assert_eq!(installed_in(&versions), ["v0.2.0", "v0.1.0"]);
         drop(running);
         remove_version("v0.1.0").unwrap();
         assert!(!dir.exists());
-        assert!(installed_in(&versions).is_empty());
+        assert_eq!(installed_in(&versions), ["v0.2.0"]);
     }
 
     /// [#18393](https://github.com/horizon-rust/horizon/issues/18393): the dependency veto belongs
@@ -4777,6 +4827,9 @@ mod tests {
             ),
         )
         .unwrap();
+        let newer = versions.join("nightly-2026-11-14-aaaaaaa");
+        fs::create_dir(&newer).unwrap();
+        fs::write(newer.join(COMPLETE), b"").unwrap();
         let refused = remove_version("nightly-2026-11-13-9f42064").unwrap_err();
         assert!(refused.contains("native-phone"), "{refused}");
         assert!(
@@ -7868,6 +7921,48 @@ pub fn {f}("
             tags(&["v0.2.88", "v0.2.85", "v0.2.80"])
         );
         assert!(stale_versions(&installed, 9, &[], |_| false).is_empty());
+    }
+
+    #[test]
+    fn pruning_rechecks_candidates_after_an_instance_pins_one() {
+        let Some(root) = std::env::var_os("PRUNE_INSTANCE_TEST_ROOT") else {
+            let root = tempfile::tempdir().unwrap();
+            assert!(Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "backend::tests::pruning_rechecks_candidates_after_an_instance_pins_one"
+                ])
+                .env("PRUNE_INSTANCE_TEST_ROOT", root.path())
+                .env("HORIZON_LAUNCHER_HOME", root.path())
+                .env("HORIZON_HOME", root.path().join("game"))
+                .env(
+                    "HORIZON_LAUNCHER_LOCATION_FILE",
+                    root.path().join("location.json")
+                )
+                .status()
+                .unwrap()
+                .success());
+            return;
+        };
+        let latest = "nightly-2026-11-22-aaaaaaa";
+        let newly_pinned = "nightly-2026-11-21-bbbbbbb";
+        let unused = "nightly-2026-11-20-ccccccc";
+        for tag in [latest, newly_pinned, unused] {
+            let dir = version_dir(tag);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(COMPLETE), b"").unwrap();
+            fs::write(dir.join(CLIENT), b"pre-holder game").unwrap();
+            mark_auto_installed(tag).unwrap();
+        }
+        let installed = installed();
+        let protected = crate::instances::protected_versions(&installed, None).unwrap();
+        let candidates = stale_versions(&installed, 1, &protected, auto_installed);
+        assert_eq!(candidates, [newly_pinned, unused]);
+
+        crate::instances::use_version_for(crate::instances::DEFAULT, newly_pinned).unwrap();
+        assert_eq!(prune_versions(candidates), [unused]);
+        assert!(version_dir(newly_pinned).join(COMPLETE).is_file());
+        assert!(!PathBuf::from(root).join("versions").join(unused).exists());
     }
 
     #[test]

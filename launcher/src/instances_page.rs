@@ -116,8 +116,8 @@ impl Launcher {
     }
 
     /// Use an installed build for the instance Play starts and refresh its displayed pin.
-    pub(super) fn use_version(&mut self, tag: &str) -> Result<(), String> {
-        instances::use_version(tag)?;
+    pub(super) fn use_version_for(&mut self, id: &str, tag: &str) -> Result<(), String> {
+        instances::use_version_for(id, tag)?;
         self.reload_instances();
         Ok(())
     }
