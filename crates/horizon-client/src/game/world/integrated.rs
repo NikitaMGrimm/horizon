@@ -45,10 +45,6 @@ pub(super) mod capture;
 #[path = "integrated/export_clock.rs"]
 mod export_clock;
 pub(super) use export_clock::ExportLockstep;
-#[cfg(test)]
-pub(super) fn with_export_clock(test: impl FnOnce(&Integrated)) {
-    export_clock::tests::with_clock(|server, _| test(server));
-}
 
 /// How long the window waits for the server thread to answer a `call`.
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1660,6 +1656,11 @@ impl Game<'_> {
         }
         std::process::exit(101);
     }
+}
+
+#[cfg(test)]
+pub(super) fn with_export_clock(test: impl FnOnce(&Integrated)) {
+    export_clock::tests::with_clock(|server, _| test(server));
 }
 
 #[cfg(test)]
