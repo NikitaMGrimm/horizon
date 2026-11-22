@@ -4,6 +4,7 @@ use super::*;
 
 impl Launcher {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let migration_error = instances::absorb_held_selection().err();
         horizon_launcher::game_shader_api::draws_here();
         horizon_launcher::storage::eviction::cleanup_after_start();
         let (tx, rx) = channel();
@@ -192,7 +193,7 @@ impl Launcher {
             proxy_focused: false,
             proxy_focus: cx.focus_handle(),
             settings,
-            settings_save_error: None,
+            settings_save_error: migration_error,
             links: backend::Links::default(),
             preparing: false,
             prepare_log: VecDeque::new(),
@@ -371,6 +372,15 @@ impl Launcher {
 
     /// Keeps the current choices in memory if writing fails; every page offers the same retry.
     pub(crate) fn save_settings(&mut self) -> bool {
+        if !self.settings.instance_versions_migrated {
+            if let Err(error) = instances::absorb_held_selection() {
+                self.settings_save_error = Some(error);
+                return false;
+            }
+            self.settings.selection_from(&Settings::load());
+            self.settings.instance_versions_migrated = true;
+            self.reload_instances();
+        }
         self.settings_save_error = self.settings.save().err();
         self.settings_save_error.is_none()
     }

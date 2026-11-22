@@ -109,34 +109,17 @@ impl Launcher {
         list.iter().find(|i| i.id == id).or(list.first())
     }
 
-    /// The installed version `instance` plays: its own, else the launcher's.
+    /// The installed build this instance plays.
     pub(super) fn version_of(&self, instance: &Instance) -> Option<&String> {
-        match &instance.version {
-            Some(own) => self.installed.iter().find(|t| *t == own),
-            // Latest of its channel: on Stable the rule `Instance::resolve_version` uses, from
-            // the installed builds; else the launcher's version (which follows the newest
-            // Nightly; also what is left offline).
-            None => match instance.channel {
-                instances::Channel::Stable => horizon_launcher::nightly::stable_latest(
-                    &self.installed,
-                    self.launcher_version().map(String::as_str),
-                )
-                .and_then(|tag| self.installed.iter().find(|t| **t == tag))
-                .or_else(|| self.launcher_version()),
-                instances::Channel::Nightly => self.launcher_version(),
-            },
-        }
+        let tag = instance.installed_version(&self.installed, self.settings.selected.as_deref())?;
+        self.installed.iter().find(|installed| **installed == tag)
     }
 
-    /// Keeps the selected instance on `tag`, or lets it follow the launcher's version.
-    pub(super) fn pin_version(&mut self, tag: Option<String>) {
-        let Some(id) = self.selected_instance().map(|i| i.id.clone()) else {
-            return;
-        };
-        match instances::edit(&id, |m| m.version = tag) {
-            Ok(_) => self.reload_instances(),
-            Err(e) => self.client_error = Some(e),
-        }
+    /// Use an installed build for the instance Play starts and refresh its displayed pin.
+    pub(super) fn use_version(&mut self, tag: &str) -> Result<(), String> {
+        instances::use_version(tag)?;
+        self.reload_instances();
+        Ok(())
     }
 
     pub(super) fn select_instance(&mut self, instance: &Instance) {
@@ -458,10 +441,7 @@ impl Launcher {
                 return;
             }
         };
-        // A Horizon version picked but not installed downloads once the instance is saved.
-        let download = self
-            .draft_horizon()
-            .and_then(|tag| self.release_to_install(&tag));
+        let download = self.draft_download();
         // An edited instance switched to another game (`instances::switch`).
         let switch_to = self
             .instances

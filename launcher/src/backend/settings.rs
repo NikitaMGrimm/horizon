@@ -60,14 +60,15 @@ impl WhilePlaying {
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
+    /// Compatibility selection for older launchers and for channels' fallback rules.
     pub selected: Option<String>,
-    /// The version the launcher itself selected (an update, or a newer Nightly installed for an
-    /// instance): while `selected` is this one, it follows each newer Nightly. A person's pick
-    /// leaves it behind, and a settings file from before it has none: neither follows
-    /// ([`selection_after_install`]). Always written, `null` for a pick, so a file from before
-    /// it is told apart ([`Settings::load`]).
+    /// Compatibility record of the last version followed by the launcher.
     #[serde(default)]
     pub following: Option<String>,
+    /// Older settings may hold Latest on a global pick. Once absorbed, a later install can
+    /// advance Latest without turning the former build into a pin at the next start.
+    #[serde(default)]
+    pub instance_versions_migrated: bool,
     /// Game asset architecture. Auto preserves the launcher's process-architecture behavior.
     #[serde(default)]
     pub game_architecture: GameArchitecture,
@@ -190,13 +191,6 @@ impl Settings {
         self.following = saved.following.clone();
     }
 
-    /// A person picks `tag` (Use, an import, the command line): it stays until a person picks
-    /// another, or an update finds it the newest ([`selection_after_install`]).
-    pub fn pick(&mut self, tag: String) {
-        self.selected = Some(tag);
-        self.following = None;
-    }
-
     /// Remember an explicit approval; merely finding an installed toolchain never grants it.
     pub fn allow_native_mods(&mut self) -> Result<(), String> {
         self.native_mods_allowed_at = Some(
@@ -238,6 +232,10 @@ impl Settings {
     /// selection is then judged against `installed` (read only for such a file).
     fn from_saved(text: &str, installed: impl FnOnce() -> Vec<String>) -> (Self, bool) {
         let mut settings = Self::parse(text);
+        if text.is_empty() {
+            // A fresh launcher has no global pick to absorb.
+            settings.instance_versions_migrated = true;
+        }
         let legacy = serde_json::from_str::<serde_json::Value>(text)
             .ok()
             .and_then(|v| v.as_object().map(|o| !o.contains_key("following")))
@@ -301,7 +299,8 @@ impl Settings {
             .as_ref()
             .is_none_or(|s| !installed.contains(s))
         {
-            self.selected = installed.first().cloned();
+            self.selected =
+                crate::nightly::latest_for(crate::instances::Channel::Nightly, installed, None);
             self.following = self.selected.clone();
         }
     }

@@ -25,24 +25,22 @@ impl Launcher {
         }
     }
 
-    /// The version Play starts: the selected instance's own, else the launcher's. None while the
-    /// instance's pinned version isn't installed ([`instances::Instance::missing_pin`]): Home says
-    /// so, and its worlds never open in another version.
+    /// The version Play starts. A Horizon instance with a missing pin has no playable build.
     pub(crate) fn selected(&self) -> Option<&String> {
-        match self.selected_instance() {
-            Some(i) if i.missing_pin(&self.installed).is_some() => None,
-            i => i
-                .and_then(|i| self.version_of(i))
-                .or_else(|| self.launcher_version()),
+        match self.selected_instance().filter(|i| i.java.is_none()) {
+            Some(instance) => self.version_of(instance),
+            None => self.launcher_version(),
         }
     }
 
-    /// The launcher's version: what instances without one of their own play.
+    /// The launcher's default resolution for screens that need a Horizon build without an instance.
     pub(crate) fn launcher_version(&self) -> Option<&String> {
-        self.settings
-            .selected
-            .as_ref()
-            .filter(|s| self.installed.contains(s))
+        let version = horizon_launcher::nightly::latest_for(
+            instances::Channel::Nightly,
+            &self.installed,
+            self.settings.selected.as_deref(),
+        )?;
+        self.installed.iter().find(|tag| **tag == version)
     }
 
     /// Installs `release` for an instance made or edited to play it, after the install running
@@ -212,7 +210,7 @@ impl Launcher {
                 self.settings.keep_installed_selection(&self.installed);
                 backend::forget_prepared();
             }
-            None => self.install(release),
+            None => self.install_for_instance(release.clone()),
         }
     }
 
@@ -364,7 +362,8 @@ impl Launcher {
     /// running or starting.
     pub(crate) fn can_start(&self, tag: &str) -> bool {
         let running = self.client.is_some() || self.starting_client.is_some();
-        starts_now(backend::is_prepared(tag), self.preparing, running)
+        self.settings.instance_versions_migrated
+            && starts_now(backend::is_prepared(tag), self.preparing, running)
     }
 
     /// Whether the selected instance's version can start now, from a shortcut (a server's Join,
@@ -404,7 +403,8 @@ impl Launcher {
     /// Starts the game: the session first (a network round trip when the token needs
     /// renewing), then `drain` starts the process when it arrives.
     pub(crate) fn start_client(&mut self, tag: String, instance_id: Option<String>) {
-        if !self.version_still_installed(&tag) {
+        // If the migration could not save a pin, starting Latest could upgrade a held world.
+        if !self.settings.instance_versions_migrated || !self.version_still_installed(&tag) {
             self.starting_pack = None;
             self.joining = None;
             self.quick_play = None;

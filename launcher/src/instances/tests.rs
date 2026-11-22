@@ -331,7 +331,7 @@ fn an_instance_keeps_its_own_version_until_it_follows_updates_again() {
     })
     .unwrap();
     assert_eq!(pinned.version.as_deref(), Some("v0.1.0"));
-    // Renaming keeps it; the other instances follow the launcher's version.
+    // Renaming keeps it; the other instances stay on Latest.
     let renamed = edit_in(&home, &data, "old-world", |m| m.name = Some("Older".into())).unwrap();
     assert_eq!(renamed.version.as_deref(), Some("v0.1.0"));
     assert!(list_in(&home, &data)
@@ -341,6 +341,132 @@ fn an_instance_keeps_its_own_version_until_it_follows_updates_again() {
     let follows = edit_in(&home, &data, "Older", |m| m.version = None).unwrap();
     assert_eq!(follows.version, None);
     fs::remove_dir_all(&root).unwrap();
+}
+
+const NOV_21: &str = "nightly-2026-11-21-aaaaaaa";
+const NOV_22: &str = "nightly-2026-11-22-bbbbbbb";
+
+#[test]
+fn use_version_pins_only_the_selected_horizon_instance_and_newest_clears_it() {
+    let Some(root) = std::env::var_os("HORIZON_TEST_USE_VERSION") else {
+        let root = tempfile::tempdir().unwrap();
+        assert!(Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "instances::tests::use_version_pins_only_the_selected_horizon_instance_and_newest_clears_it"])
+            .env("HORIZON_TEST_USE_VERSION", root.path())
+            .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+            .env("HORIZON_HOME", root.path().join("game"))
+            .env("HORIZON_LAUNCHER_LOCATION_FILE", root.path().join("location.json"))
+            .status()
+            .unwrap()
+            .success());
+        return;
+    };
+    let root = PathBuf::from(root);
+    fs::create_dir_all(root.join("game").join(OWN).join("selected")).unwrap();
+    for tag in [NOV_21, NOV_22] {
+        put(&backend::version_dir(tag).join(backend::COMPLETE), "");
+    }
+    let settings = backend::Settings {
+        instance: Some("selected".into()),
+        selected: Some(NOV_21.into()),
+        ..backend::Settings::default()
+    };
+    settings.save().unwrap();
+    let settings_file = backend::data_dir().join("settings.json");
+    let before = fs::read(&settings_file).unwrap();
+
+    assert_eq!(selected().resolve_version(None).unwrap(), NOV_22);
+    use_version(NOV_21).unwrap();
+    assert_eq!(selected().version.as_deref(), Some(NOV_21));
+    assert_eq!(selected().resolve_version(None).unwrap(), NOV_21);
+    assert!(backend::remove_version(NOV_21)
+        .unwrap_err()
+        .contains("selected"));
+    fs::create_dir_all(root.join("game").join(OWN).join(nightly::INSTANCE)).unwrap();
+    edit(nightly::INSTANCE, |meta| meta.version = Some(NOV_21.into())).unwrap();
+    backend::mark_auto_installed(NOV_21).unwrap();
+    nightly::after_update(NOV_22);
+    assert_eq!(
+        find(nightly::INSTANCE).unwrap().version.as_deref(),
+        Some(NOV_21)
+    );
+    assert!(backend::installed().iter().any(|tag| tag == NOV_21));
+    assert_eq!(find(DEFAULT).unwrap().version, None);
+    use_version(NOV_22).unwrap();
+    assert_eq!(selected().version, None);
+
+    edit("selected", |meta| meta.java = Some(JavaGame::default())).unwrap();
+    use_version(NOV_21).unwrap();
+    assert_eq!(selected().version, None);
+    assert_eq!(fs::read(settings_file).unwrap(), before);
+}
+
+#[test]
+fn migration_preserves_held_builds_and_is_safe_to_retry_before_settings_save() {
+    let root = tempfile::tempdir().unwrap();
+    let (game, data) = (root.path().join("game"), root.path().join("launcher"));
+    for id in ["latest", "pinned", "java", "stable"] {
+        fs::create_dir_all(game.join(OWN).join(id)).unwrap();
+    }
+    edit_in(&game, &data, "pinned", |meta| {
+        meta.version = Some("v0.2.97".into())
+    })
+    .unwrap();
+    edit_in(&game, &data, "java", |meta| {
+        meta.java = Some(JavaGame::default())
+    })
+    .unwrap();
+    edit_in(&game, &data, "stable", |meta| {
+        meta.channel = Some(Channel::Stable)
+    })
+    .unwrap();
+
+    let installed = [NOV_22, NOV_21, "v0.2.97"].map(String::from);
+    let legacy = format!(r#"{{"selected":"{NOV_21}","following":null}}"#);
+    let mut settings = backend::Settings::parse(&legacy);
+    absorb_held_selection_in(&game, &data, &installed, &mut settings).unwrap();
+    let instance = |id| find_in(&list_in(&game, &data), id).unwrap();
+    for id in [DEFAULT, "latest", "stable"] {
+        assert_eq!(instance(id).version.as_deref(), Some(NOV_21));
+    }
+    assert_eq!(instance("pinned").version.as_deref(), Some("v0.2.97"));
+    assert_eq!(instance("java").version, None);
+    let migrated = serde_json::to_string(&settings).unwrap();
+    assert_eq!(settings.selected.as_deref(), Some(NOV_22));
+    assert_eq!(settings.following.as_deref(), Some(NOV_22));
+
+    let pins = fs::read(data.join(FILE)).unwrap();
+    // An interruption after writing pins, with the old settings still on disk.
+    let mut retried = backend::Settings::parse(&legacy);
+    absorb_held_selection_in(&game, &data, &installed, &mut retried).unwrap();
+    assert_eq!(serde_json::to_string(&retried).unwrap(), migrated);
+
+    let mut saved = backend::Settings::parse(&migrated);
+    absorb_held_selection_in(&game, &data, &installed, &mut saved).unwrap();
+    assert_eq!(serde_json::to_string(&saved).unwrap(), migrated);
+    assert_eq!(fs::read(data.join(FILE)).unwrap(), pins);
+}
+
+#[test]
+fn migration_keeps_a_legacy_follower_on_latest_as_new_builds_arrive() {
+    let root = tempfile::tempdir().unwrap();
+    let (game, data) = (root.path().join("game"), root.path().join("launcher"));
+    let installed = [NOV_21.to_owned()];
+    let mut settings = backend::Settings::parse(&format!(r#"{{"selected":"{NOV_21}"}}"#));
+    absorb_held_selection_in(&game, &data, &installed, &mut settings).unwrap();
+    assert_eq!(settings.following.as_deref(), Some(NOV_21));
+    assert!(!data.join(FILE).exists());
+
+    let installed = [NOV_22, NOV_21].map(String::from);
+    absorb_held_selection_in(&game, &data, &installed, &mut settings).unwrap();
+    assert!(!data.join(FILE).exists());
+    let default = &list_in(&game, &data)[0];
+    assert_eq!(
+        default
+            .installed_version(&installed, settings.selected.as_deref())
+            .as_deref(),
+        Some(NOV_22)
+    );
 }
 
 #[test]

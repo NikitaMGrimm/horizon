@@ -51,8 +51,7 @@ impl Launcher {
                     self.notes.clear();
                 }
                 Msg::StableRetry(next) => {
-                    // The same download under its new build: it stays the instance's, and keeps
-                    // the version picked on Versions.
+                    // The same download under its new tag still belongs to the instance's update.
                     if self.stable_install.take().is_some() {
                         self.instance_install = Some(next.tag.clone());
                         self.stable_install = Some(next);
@@ -215,12 +214,8 @@ impl Launcher {
                                 .filter(|t| **t != tag)
                                 .cloned()
                                 .collect();
-                            // Judged on the selection as saved now, not when the download
-                            // started: a version picked on Versions or with `settings
-                            // selected-version` meanwhile stays picked. A file from before
-                            // `following` is read against the list before this install.
-                            // A saved selection that isn't installed is the one the window
-                            // replaced at start: the window's stays then.
+                            // Keep compatibility fields current for older launchers, including
+                            // changes saved by the command line during the download.
                             let saved = Settings::load_for_install(&before);
                             if self.settings_save_error.is_none()
                                 && saved
@@ -242,18 +237,28 @@ impl Launcher {
                                             && i.version.as_deref() == Some(tag.as_str())
                                     })
                             });
-                            self.settings.apply_install(
-                                &tag,
-                                &before,
-                                &self.installed,
-                                backend::InstallCause {
-                                    update: as_update.is_some(),
-                                    instance,
-                                },
-                            );
-                            // Pruning reads settings from disk: protect the selection only once
-                            // it has been saved there. A failed save leaves all versions in place.
-                            if self.save_settings() {
+                            let manual = as_update.is_none() && instance.is_none();
+                            let saved = if manual {
+                                match self.use_version(&tag) {
+                                    Ok(()) => true,
+                                    Err(e) => {
+                                        self.install_error = Some((tag.clone(), e));
+                                        false
+                                    }
+                                }
+                            } else {
+                                self.settings.apply_install(
+                                    &tag,
+                                    &before,
+                                    &self.installed,
+                                    backend::InstallCause {
+                                        update: as_update.is_some(),
+                                        instance,
+                                    },
+                                );
+                                self.save_settings()
+                            };
+                            if saved {
                                 let tx = self.tx.clone();
                                 std::thread::spawn(move || {
                                     let _ = tx.send(Msg::Pruned(backend::prune_old_versions()));
@@ -292,8 +297,8 @@ impl Launcher {
                     self.importing_build = false;
                     self.installed = backend::installed();
                     match result {
-                        // `build_import::import` saved the selection; this keeps the window's copy.
-                        Ok(tag) => self.settings.pick(tag),
+                        // Import already used the build for the selected instance on disk.
+                        Ok(_) => self.reload_instances(),
                         Err(e) => self.import_error = Some(e),
                     }
                 }

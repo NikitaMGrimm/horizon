@@ -9,10 +9,11 @@
 use crate::backend;
 use crate::browser::horizon::pack as registry_pack;
 use crate::launch::Launch;
-use crate::modpacks;
+use crate::{modpacks, nightly};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -163,8 +164,8 @@ pub struct Meta {
     pub icon: Option<Icon>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
-    /// The Horizon version this instance plays, kept when newer ones are installed. None: the
-    /// launcher's own version, which follows updates.
+    /// The Horizon version this instance plays, kept when newer ones are installed. None follows
+    /// its channel's Latest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// The builds "latest" means for it; missing is [`Channel::Nightly`].
@@ -264,8 +265,14 @@ impl Store {
     }
     fn save(&self, data: &Path) -> Result<(), String> {
         fs::create_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
-        let text = serde_json::to_string_pretty(self).unwrap();
-        fs::write(data.join(FILE), text).map_err(|e| format!("{FILE}: {e}"))
+        // A launcher interrupted during migration must leave either all pins or the old store.
+        let write = || -> std::io::Result<()> {
+            let mut pending = tempfile::NamedTempFile::new_in(data)?;
+            pending.write_all(&serde_json::to_vec_pretty(self).unwrap())?;
+            pending.persist(data.join(FILE))?;
+            Ok(())
+        };
+        write().map_err(|e| format!("{FILE}: {e}"))
     }
 }
 
@@ -322,26 +329,37 @@ impl Instance {
         self.version.is_none() && self.java.is_none()
     }
 
-    /// The installed version this instance plays: its pinned one, else `requested` (the
-    /// command line's `--version`), else on Stable its channel's ([`crate::nightly::stable_latest`],
-    /// as Home's), else the launcher's (`backend::resolve_version`).
+    /// The installed build this Horizon instance plays. A missing pin cannot fall back.
+    pub fn installed_version(
+        &self,
+        installed: &[String],
+        selected: Option<&str>,
+    ) -> Option<String> {
+        if self.java.is_some() {
+            return None;
+        }
+        match &self.version {
+            Some(pin) => installed.iter().find(|tag| *tag == pin).cloned(),
+            None => nightly::latest_for(self.channel, installed, selected),
+        }
+    }
+
+    /// The installed version it plays: an explicit CLI request, its pin, or its channel's Latest.
     pub fn resolve_version(&self, requested: Option<&str>) -> Result<String, String> {
         self.horizon()?;
-        match (requested, &self.version) {
-            (None, Some(pinned)) => backend::resolve_version(Some(pinned)).map_err(|_| {
-                format!(
-                    "{} plays {pinned}, which is not installed: install it, or horizon-launcher \
-                     instance version \"{}\" latest",
-                    self.name, self.name
-                )
-            }),
-            (None, None) if self.channel == Channel::Stable => {
-                let selected = backend::Settings::load().selected;
-                crate::nightly::stable_latest(&backend::installed(), selected.as_deref())
-                    .map_or_else(|| backend::resolve_version(None), Ok)
-            }
-            _ => backend::resolve_version(requested),
+        if let Some(tag) = requested {
+            return backend::resolve_version(Some(tag));
         }
+        let installed = backend::installed();
+        if let Some(pinned) = self.missing_pin(&installed) {
+            return Err(crate::i18n::trf(
+                "{instance} plays {version}, which is not installed: install it, or horizon-launcher instance version \"{instance}\" latest",
+                &[("instance", &self.name), ("version", pinned)],
+            ));
+        }
+        let settings = backend::Settings::load();
+        self.installed_version(&installed, settings.selected.as_deref())
+            .ok_or_else(backend::no_version_installed)
     }
 }
 
@@ -497,11 +515,101 @@ fn delete_in(
 
 /// The instance Play starts: the one picked in the launcher, else Horizon.
 pub fn selected() -> Instance {
+    selected_with(&backend::Settings::load())
+}
+
+pub(crate) fn selected_with(settings: &backend::Settings) -> Instance {
     let all = list();
-    backend::Settings::load()
-        .instance
-        .and_then(|id| all.iter().find(|i| i.id == id).cloned())
-        .unwrap_or_else(|| all[0].clone())
+    all.iter()
+        .find(|i| Some(i.id.as_str()) == settings.instance.as_deref())
+        .unwrap_or(&all[0])
+        .clone()
+}
+
+/// Use an installed build for the instance Play starts. Choosing the channel's Latest follows it.
+pub fn use_version(tag: &str) -> Result<(), String> {
+    let settings = backend::Settings::load();
+    let instance = selected_with(&settings);
+    if instance.java.is_some() {
+        return Ok(());
+    }
+    let installed = backend::installed();
+    if !installed.iter().any(|installed| installed == tag) {
+        return Err(backend::version_gone(tag));
+    }
+    let latest = nightly::latest_for(instance.channel, &installed, settings.selected.as_deref());
+    let pin = (latest.as_deref() != Some(tag)).then(|| tag.to_owned());
+    if instance.version != pin {
+        edit(&instance.id, |meta| meta.version = pin)?;
+    }
+    Ok(())
+}
+
+/// The builds that must survive automatic cleanup.
+pub(crate) fn protected_versions(installed: &[String], selected: Option<&str>) -> Vec<String> {
+    list()
+        .iter()
+        .filter_map(|i| {
+            i.version
+                .clone()
+                .or_else(|| i.installed_version(installed, selected))
+        })
+        .collect()
+}
+
+/// Preserve what old launchers played before Latest became independent of their global pick.
+pub fn absorb_held_selection() -> Result<(), String> {
+    // Settings::load adopts a pre-following selection before this migration sees it.
+    let mut settings = backend::Settings::load();
+    if settings.instance_versions_migrated {
+        return Ok(());
+    }
+    let installed = backend::installed();
+    absorb_held_selection_in(
+        &backend::game_home(),
+        &backend::data_dir(),
+        &installed,
+        &mut settings,
+    )?;
+    settings.save()
+}
+
+fn absorb_held_selection_in(
+    game_home: &Path,
+    data: &Path,
+    installed: &[String],
+    settings: &mut backend::Settings,
+) -> Result<(), String> {
+    if settings.instance_versions_migrated {
+        return Ok(());
+    }
+    let old_selection = installed
+        .iter()
+        .find(|t| Some(t.as_str()) == settings.selected.as_deref())
+        .or_else(|| installed.first());
+    let newest = nightly::latest_for(Channel::Nightly, installed, None);
+    let instances = list_in(game_home, data);
+    let mut store = Store::load(data);
+    let mut changed = false;
+    for instance in instances.into_iter().filter(Instance::follows_horizon) {
+        let old = match instance.channel {
+            Channel::Stable => nightly::stable_latest(installed, old_selection.map(String::as_str)),
+            Channel::Nightly => None,
+        }
+        .or_else(|| old_selection.cloned());
+        let latest = nightly::latest_for(instance.channel, installed, newest.as_deref());
+        if old != latest {
+            store.instances.entry(instance.id).or_default().version = old;
+            changed = true;
+        }
+    }
+    if changed {
+        store.save(data)?;
+    }
+    settings.selected = newest.clone();
+    settings.following = newest;
+    settings.instance_versions_migrated = true;
+    Ok(())
 }
 
 pub fn select(query: &str) -> Result<Instance, String> {

@@ -878,11 +878,11 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<AccountCmd>,
     },
-    /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
-    /// game-architecture auto|x64|arm64,
+    /// Show the launcher's settings, or set one (the Settings page): selected-version TAG
+    /// (use this version for the selected Horizon instance), game-architecture auto|x64|arm64,
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
     /// on|off, prune-old-versions on|off (delete old versions after an install, keeping the
-    /// selected one, the ones instances use and the newest few), keep-versions N (how many of the
+    /// ones instances use and the newest few), keep-versions N (how many of the
     /// newest to keep; "default" is 2), opening-animation on|off, proxy http://host:port|socks5://host:port
     /// ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language
     /// system|en|fr|ru|de|zh|es|uk|pl (the window's language; system follows the computer's), accent
@@ -1073,7 +1073,6 @@ fn on_off(value: &str) -> Result<bool, String> {
 fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), String> {
     let folder = |value: &str| (value != "default").then(|| PathBuf::from(value));
     match key {
-        "selected-version" => s.pick(backend::resolve_version(Some(value))?),
         "minecraft-dir" => s.minecraft_dir = folder(value),
         "server-dir" => s.server_dir = folder(value),
         "install-new-versions" => s.install_new_versions = Some(on_off(value)?),
@@ -1175,7 +1174,7 @@ pub fn run() -> Option<i32> {
     }
     let cli = Cli::from_arg_matches(&definition.get_matches()).unwrap_or_else(|e| e.exit());
     let command = cli.command?;
-    let result = match command {
+    let result = instances::absorb_held_selection().and_then(|()| match command {
         Cmd::Mcp | Cmd::AgentConfig { .. } if no_ai => Err(horizon_platform::no_ai::REFUSAL.into()),
         Cmd::Mcp => crate::mcp::serve().map(|()| 0),
         command => {
@@ -1185,7 +1184,7 @@ pub fn run() -> Option<i32> {
             account::discard_unread_sessions();
             result
         }
-    };
+    });
     Some(match result {
         Ok(code) => code,
         Err(e) => {
@@ -1244,7 +1243,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<i32, String> {
         }
         Cmd::Versions { installed: true } => {
             let installed = backend::installed();
-            let selected = backend::resolve_version(None).ok();
+            let selected = instances::selected().resolve_version(None).ok();
             if as_json {
                 json(serde_json::json!({ "installed": installed, "selected": selected }));
             } else if installed.is_empty() {
@@ -1728,9 +1727,13 @@ fn execute(command: Cmd, as_json: bool) -> Result<i32, String> {
             let mut settings = backend::Settings::load();
             if let Some(key) = key {
                 let value = value.ok_or("settings KEY VALUE: the value is missing")?;
-                set_setting(&mut settings, &key, &value)?;
-                settings.save()?;
-                horizon_launcher::proxy::announce(settings.proxy.clone());
+                if key == "selected-version" {
+                    instances::use_version(&value)?;
+                } else {
+                    set_setting(&mut settings, &key, &value)?;
+                    settings.save()?;
+                    horizon_launcher::proxy::announce(settings.proxy.clone());
+                }
             }
             let all = settings_json(&settings);
             if as_json {
