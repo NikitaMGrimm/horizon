@@ -109,7 +109,7 @@ impl Game<'_> {
                 |column| self.world.chunks.contains_key(&column),
             )
             || !self.pending_uploads.is_empty()
-            || self.remote_backlog() != 0
+            || self.remote_backlog_delays_frame()
             || !self.world.dirty_light.is_empty()
             || !self.world.dirty_sections.is_empty()
     }

@@ -96,11 +96,14 @@ pub(in crate::game) enum ExportIngress {
 }
 
 impl LiveExport {
-    fn ingress(&self) -> Option<ExportIngress> {
+    fn ingress(&self, frame_pending: bool) -> Option<ExportIngress> {
         if let Some((fence, _)) = self.start {
             return Some(ExportIngress::Through(fence));
         }
-        let turn = self.turn.as_ref()?;
+        let Some(turn) = &self.turn else {
+            // The completed turn's world must survive settling and draw retries.
+            return frame_pending.then_some(ExportIngress::Blocked);
+        };
         Some(
             if turn.received || turn.tick.is_some_and(|tick| !self.clock.completed(tick)) {
                 ExportIngress::Blocked
@@ -111,9 +114,25 @@ impl LiveExport {
     }
 }
 
+impl super::Session {
+    fn live_ingress(&self) -> Option<ExportIngress> {
+        self.live.as_ref()?.ingress(self.pending.is_some())
+    }
+}
+
+fn backlog_delays_frame(ingress: Option<ExportIngress>, backlog: usize) -> bool {
+    // Blocked packets belong to a future turn. The current frame still waits
+    // on terrain work already started by packets it applied through its fence.
+    backlog != 0 && !matches!(ingress, Some(ExportIngress::Blocked))
+}
+
 impl Game<'_> {
     pub(in crate::game) fn export_ingress(&self) -> Option<ExportIngress> {
-        self.export.as_ref()?.live.as_ref()?.ingress()
+        self.export.as_ref()?.live_ingress()
+    }
+
+    pub(in crate::game) fn remote_backlog_delays_frame(&self) -> bool {
+        backlog_delays_frame(self.export_ingress(), self.remote_backlog())
     }
 
     pub(in crate::game) fn note_export_fence(&mut self, fence: u64) {
@@ -254,8 +273,8 @@ impl LiveExport {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{Requests, check_export_server_command, parse_start};
+    use super::*;
     use crate::game::integrated::with_export_clock;
 
     #[test]
@@ -295,8 +314,33 @@ mod tests {
                 received: false,
                 tick: Some(live.clock.request(91).unwrap()),
             });
-            assert!(matches!(live.ingress(), Some(ExportIngress::Blocked)));
+            assert!(matches!(live.ingress(false), Some(ExportIngress::Blocked)));
             assert!(!live.ready_for_frame());
+        });
+    }
+
+    #[test]
+    fn post_fence_packets_wait_across_capture_retries() {
+        with_export_clock(|server| {
+            let root = tempfile::tempdir().unwrap();
+            let mut session = super::super::tests::test_session(root.path());
+            let mut live = LiveExport::new(server, 1).unwrap();
+            live.start = None;
+            session.live = Some(live);
+            session.begin_capture();
+
+            // The final turn already completed, but the frame must still settle.
+            for _ in 0..2 {
+                assert!(matches!(
+                    session.live_ingress(),
+                    Some(ExportIngress::Blocked)
+                ));
+                assert!(!backlog_delays_frame(session.live_ingress(), 1));
+                assert_eq!(session.pending, Some(0));
+            }
+            session.capture_submitted();
+            assert!(session.live_ingress().is_none());
+            assert!(backlog_delays_frame(session.live_ingress(), 1));
         });
     }
 

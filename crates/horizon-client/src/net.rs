@@ -417,20 +417,15 @@ impl Session {
             if let Some(w) = thread_writer.lock().unwrap().take() {
                 w.shutdown();
             }
-            // Nothing else tells the game the connection ended: wait for room (#18380).
-            let _ = send.send_waiting(Event::Disconnected {
-                reason: why.text,
-                key: why.key,
-                from_server,
-            });
+            publish_disconnect(&send, why, from_server);
         })
         .inspect_err(|error| {
             // No reader runs to report the end: say it here, or the session waits forever.
-            let _ = payload_events.send(Event::Disconnected {
-                reason: format!("network thread: {error}"),
-                key: None,
-                from_server: false,
-            });
+            publish_disconnect(
+                &payload_events,
+                Reason::plain(format!("network thread: {error}")),
+                false,
+            );
         })
         .ok();
         let debug = std::env::var_os("HORIZON_NET_DEBUG").is_some();
@@ -1339,6 +1334,16 @@ fn receive_play(
 fn deliver(send: &ingress::Producer<Event>, lang: &Language, event: Event) -> Result<(), Reason> {
     send.send_waiting(event)
         .map_err(|refused| refusal(refused, lang))
+}
+
+fn publish_disconnect(send: &ingress::Producer<Event>, why: Reason, from_server: bool) {
+    // The game may be retaining every ordinary receive lease behind an export
+    // fence. Keep the disconnect ordered, but publish it in the control allowance.
+    let _ = send.send_over_budget(Event::Disconnected {
+        reason: why.text,
+        key: why.key,
+        from_server,
+    });
 }
 
 /// Why an event the game must get was refused. One larger than the whole incoming queue
@@ -2633,6 +2638,30 @@ mod tests {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect()
+    }
+
+    #[test]
+    fn export_disconnect_uses_control_credit_when_gameplay_fills_the_budget() {
+        let packet_charge = horizon_mod_runtime::byte_channel::message_overhead::<Event>() + 1;
+        let (send, events) = ingress::channel(packet_charge, |_: &Event| 1).unwrap();
+        send.send(Event::Packet(Box::new(play::Clientbound::Unknown(
+            1,
+            Vec::new(),
+        ))))
+        .unwrap();
+        let held = events.try_recv_owned().unwrap();
+        assert_eq!(events.stats().reserved_bytes, packet_charge);
+
+        let reader = std::thread::spawn(move || {
+            publish_disconnect(&send, Reason::plain("test close"), true);
+        });
+        let disconnect = events.recv_timeout_owned(Duration::from_secs(1));
+        drop(held);
+        reader.join().unwrap();
+        assert!(matches!(
+            disconnect.unwrap().into_parts().0,
+            Event::Disconnected { reason, from_server: true, .. } if reason == "test close"
+        ));
     }
 
     #[test]
