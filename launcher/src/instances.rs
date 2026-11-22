@@ -719,9 +719,9 @@ pub fn manual_install_target(id: String) -> Result<ManualInstallTarget, String> 
         let _lock = lock_store(&backend::data_dir())?;
         launch_instances()?
             .into_iter()
-            .find(|instance| instance.id == id)
+            .find(|instance| instance.id == id && instance.java.is_none())
             .map(|instance| ensure_identity(&instance.work))
-            .transpose()?
+            .and_then(|identity| identity.inspect_err(|e| eprintln!("{e}")).ok())
     };
     Ok(ManualInstallTarget { id, identity })
 }

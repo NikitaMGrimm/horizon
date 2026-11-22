@@ -561,6 +561,34 @@ fn migration_keeps_a_legacy_follower_on_latest_as_new_builds_arrive() {
 }
 
 #[test]
+fn a_manual_install_for_java_does_not_create_an_instance_identity() {
+    if std::env::var_os("HORIZON_TEST_JAVA_INSTALL").is_none() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--include-ignored",
+                "--exact",
+                "instances::tests::a_manual_install_for_java_does_not_create_an_instance_identity"
+            ])
+            .env("HORIZON_TEST_JAVA_INSTALL", "1")
+            .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+            .env("HORIZON_HOME", root.path().join("game"))
+            .env(
+                "HORIZON_LAUNCHER_LOCATION_FILE",
+                root.path().join("location.json")
+            )
+            .status()
+            .unwrap()
+            .success());
+        return;
+    }
+    let java = create_java("Java", "26.3").unwrap();
+    let target = manual_install_target(java.id).unwrap();
+    assert!(target.identity.is_none());
+    assert!(!java.work.join(IDENTITY).exists());
+}
+
+#[test]
 fn pack_play_uses_its_pin_and_refuses_an_unreadable_manifest() {
     if std::env::var_os("HORIZON_TEST_PACK_PLAY").is_none() {
         let root = tempfile::tempdir().unwrap();
