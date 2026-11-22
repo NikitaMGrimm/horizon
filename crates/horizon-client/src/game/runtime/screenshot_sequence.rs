@@ -58,7 +58,7 @@ fn capture_terrain_loading(
     view: &horizon_client::streaming::ViewArrival,
     has_column: impl Fn((i32, i32)) -> bool,
 ) -> bool {
-    // Replay columns can only arrive as the recording advances.
+    // Replay and lockstep columns can only arrive as the capture clock advances.
     streaming_busy || (!replaying && view.arrival_incomplete(has_column))
 }
 
@@ -80,20 +80,22 @@ impl Game<'_> {
 
     /// The drawn world still has terrain or resources to put in place.
     fn capture_terrain_loading(&self) -> bool {
+        let lockstep = self.export.as_ref().is_some_and(|s| s.server_clock);
         self.title.is_some()
             || self.player.is_none()
             || self.integrated_starting.is_some()
             || self.pending_entry.is_some()
             || self.pack_reload.is_some()
             || self.pending_save.is_some()
-            || self
-                .remote
-                .as_ref()
-                .is_some_and(|r| r.level_load.is_active())
-            || self.world.chunks.is_empty()
+            || (!lockstep
+                && (self.world.chunks.is_empty()
+                    || self
+                        .remote
+                        .as_ref()
+                        .is_some_and(|r| r.level_load.is_active())))
             || capture_terrain_loading(
                 self.streaming.busy(),
-                self.replay.playing(),
+                self.replay.playing() || lockstep,
                 &self.view_arrival,
                 |column| self.world.chunks.contains_key(&column),
             )

@@ -158,6 +158,14 @@ Every command `horizon-ctl` takes, its MCP tool in `horizon-ctl mcp` (the launch
 | `record-replay NAME [--stop] [--in-place] [--keep-world] [--timeout S]` | `record_replay` | Replay a recording, best effort | `name` (string): recording from record-list<br>`--stop` (boolean): stop the running replay<br>`--in-place` (boolean): feed the open world instead of opening the copy<br>`--keep-world` (boolean): leave the copied world in saves/<br>`--timeout` (integer): give up after this many seconds (default 300) |
 | `repro-export [NAME] [PATH] [--no-world]` | `repro_export` | Zip a recording with the logs, crash report and status | `name` (string): recording from record-list (default the newest)<br>`path` (string): where to write the zip<br>`--no-world` (boolean): leave the world out |
 
+Live `export start` requires a private single-player world on an `--offscreen`
+client. The integrated server advances one tick per export client tick and
+resumes its normal clock when export stops. Live settling waits for terrain work
+already queued on the client. Opening to LAN, starting splitscreen,
+or losing the integrated server interrupts the take. Starting a live export is
+unavailable in LAN, splitscreen, or remote multiplayer sessions. Replay export
+works without an integrated server.
+
 ## Replies
 
 The reply fields of the commands described so far (more follow, a group at a time). Each reply is one JSON object; a type ending in `null` may be `null` when the field does not apply. A reader ignores keys it does not know: replies may gain fields within a protocol line. The MCP tool list declares the same fields as `outputSchema`.

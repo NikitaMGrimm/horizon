@@ -1,6 +1,10 @@
 //! Fixed-clock offscreen export sessions shared by the control socket and client mods.
 
 use super::{EventLoopCtl, Game, KeyCode, MouseButton, Screen, Vec3, native_export};
+use crate::game::integrated::Integrated;
+
+#[path = "export/live.rs"]
+mod live;
 use horizon_client::{
     Result,
     export::{
@@ -10,6 +14,7 @@ use horizon_client::{
     gfx::{ExportFrame, FRAME_EXPORT_STALL_TIMEOUT, pack_uniforms::FrameTiming},
     packet_source::PacketSource as _,
 };
+use live::LiveExport;
 use mod_api::{ExportState, ExportStatus};
 use serde_json::{Value, json};
 use std::{
@@ -207,7 +212,8 @@ pub(super) struct Session {
     gpu: String,
     previous_hide_gui: bool,
     pub(super) released_mappings: HashSet<std::result::Result<KeyCode, MouseButton>>,
-    server_clock: bool,
+    pub(super) server_clock: bool,
+    live: Option<LiveExport>,
     writer: Option<JoinHandle<std::io::Result<u64>>>,
     cancel_encoder: Option<Box<dyn FnOnce() + Send>>,
     progress: Arc<Progress>,
@@ -396,7 +402,13 @@ impl Session {
         }
     }
 
+    fn release_server_clock(&mut self) {
+        self.server_clock = false;
+        self.live = None;
+    }
+
     fn begin_drain(&mut self, state: &'static str, renderer: Option<&mut super::Renderer>) {
+        self.release_server_clock();
         if self.draining.is_none() {
             self.draining = Some(Drain::new(state));
             self.pending = None;
@@ -443,7 +455,10 @@ impl Session {
     }
 
     fn can_begin_frame(&self) -> bool {
-        !self.requests.held() && self.draining.is_none() && self.pending.is_none()
+        !self.requests.held()
+            && self.draining.is_none()
+            && self.pending.is_none()
+            && self.live.as_ref().is_none_or(LiveExport::started)
     }
 
     fn begin_capture(&mut self) {
@@ -612,6 +627,11 @@ impl Game<'_> {
             self.cancel_export_on_quit();
         }
         match &self.export {
+            Some(session)
+                if session.server_clock && matches!(words, ["server-hold", "on" | "off"]) =>
+            {
+                Ok(())
+            }
             Some(session) if session.draining.is_some() && !allowed_while_running(words) => {
                 Err("export output is draining".into())
             }
@@ -672,6 +692,7 @@ impl Game<'_> {
         {
             return Err("export needs a world in play with --offscreen".into());
         }
+        self.export_server()?;
         let renderer = self.renderer.as_ref().ok_or("no renderer")?;
         if renderer.screenshot.is_some() {
             return Err("a screenshot is already pending".into());
@@ -728,12 +749,6 @@ impl Game<'_> {
             initial_tick_phase: true,
             partial: (self.replay.virtual_tick_ms / 50.0).clamp(0.0, 1.0),
         });
-        let server_clock = output.ready()
-            && replay.is_none()
-            && self
-                .integrated
-                .as_ref()
-                .is_some_and(|s| s.published().is_none());
         let mut session = Session {
             spec: start.spec,
             mod_request: output.mod_request(),
@@ -756,7 +771,8 @@ impl Game<'_> {
             gpu,
             previous_hide_gui: self.ui.hide_gui,
             released_mappings: HashSet::new(),
-            server_clock,
+            server_clock: false,
+            live: None,
             writer: None,
             cancel_encoder: None,
             progress: Arc::default(),
@@ -806,6 +822,16 @@ impl Game<'_> {
                     result.and(finished)
                 },
             )?);
+            if let Some(server) = self.export_server()? {
+                let conn = self
+                    .remote
+                    .as_ref()
+                    .ok_or("no local connection")?
+                    .session
+                    .serial();
+                session.live = Some(LiveExport::new(server, conn)?);
+                session.server_clock = true;
+            }
             Ok(())
         })();
         let response = session.status("running");
@@ -816,14 +842,6 @@ impl Game<'_> {
         if let Err(error) = setup {
             self.abort_export(Some(error.to_string()));
             return Err(error);
-        }
-        if server_clock && let Some(server) = &self.integrated {
-            server.export_clock(true);
-            if server.call(|_| ()).is_none() {
-                let error = "could not acquire the integrated server's export clock";
-                self.abort_export(Some(error.into()));
-                return Err(error.into());
-            }
         }
         self.notify_window_resize();
         Ok(response)
@@ -852,6 +870,7 @@ impl Game<'_> {
         let Some(session) = &mut self.export else {
             return;
         };
+        session.release_server_clock();
         if session.is_mod_export()
             && session
                 .draining
@@ -900,11 +919,6 @@ impl Game<'_> {
         self.native_export.ending = session.is_mod_export();
         self.ui.hide_gui = session.previous_hide_gui;
         self.reconcile_export_releases(&session.released_mappings);
-        if session.server_clock
-            && let Some(server) = &self.integrated
-        {
-            server.export_clock(false);
-        }
         self.visual_offset = session.visual_millis() - self.base_visual_millis();
         self.resume_flight_clock();
         self.replay.last_tick = Some(Instant::now());
@@ -936,6 +950,9 @@ impl Game<'_> {
     pub(super) fn poll_export(&mut self) {
         if let Some(pending) = self.native_export.pending.take() {
             self.start_queued_export(pending);
+        }
+        if let Err(error) = self.poll_live_export() {
+            self.abort_export(Some(error.to_string()));
         }
         if self
             .export
@@ -1095,22 +1112,42 @@ impl Game<'_> {
         event_loop: &dyn EventLoopCtl,
     ) -> Result<()> {
         let steps = self.clock.advance_set(step.sim, step.ticks, step.partial);
-        let Some(replay) = self.export.as_ref().and_then(|s| s.replay.as_ref()) else {
-            if self.export.as_ref().is_some_and(|s| s.server_clock) {
-                for _ in 0..steps {
-                    self.integrated
-                        .as_ref()
-                        .ok_or("the integrated server stopped")?
-                        .export_tick()?;
-                    self.poll_remote()?;
-                    self.client_tick_steps(1, Some(event_loop))?;
-                }
-            } else {
-                self.client_tick_steps(steps, Some(event_loop))?;
-            }
-            return Ok(());
-        };
-        self.apply_export_replay_step(step, replay.cursor_ns, Some(event_loop))
+        if let Some(cursor) = self
+            .export
+            .as_ref()
+            .and_then(|s| s.replay.as_ref())
+            .map(|r| r.cursor_ns)
+        {
+            return self.apply_export_replay_step(step, cursor, Some(event_loop));
+        }
+        if let Some(live) = self.export.as_mut().and_then(|s| s.live.as_mut()) {
+            live.begin_frame(steps);
+        }
+        Ok(())
+    }
+
+    pub(super) fn export_progress_frame(&mut self, event_loop: &dyn EventLoopCtl) -> Result<bool> {
+        if self.export.as_ref().is_some_and(|s| s.server_clock) {
+            return self.advance_live_export(event_loop);
+        }
+        Ok(true)
+    }
+
+    /// The same source admission check for the control socket and mod API.
+    pub(super) fn export_server(&self) -> std::result::Result<Option<&Integrated>, &'static str> {
+        let integrated = self.integrated.as_ref().filter(|server| {
+            !server.stopped()
+                && self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|r| r.session.address == "local")
+        });
+        export_source(
+            self.replay.export_driver().is_some(),
+            self.is_published(),
+            self.options.paced_by_split || self.options.split_guest || self.has_split_players(),
+            integrated,
+        )
     }
 
     fn apply_export_replay_step(
@@ -1273,6 +1310,21 @@ impl Drop for Game<'_> {
     }
 }
 
+fn export_source<T>(
+    replay: bool,
+    lan: bool,
+    split: bool,
+    integrated: Option<T>,
+) -> std::result::Result<Option<T>, &'static str> {
+    match (replay, lan, split, integrated) {
+        (true, _, _, _) => Ok(None),
+        (_, true, _, _) => Err("live export is unavailable while the world is open to LAN"),
+        (_, _, true, _) => Err("live export is unavailable in splitscreen"),
+        (_, _, _, None) => Err("live export needs a local single-player world"),
+        (_, _, _, server) => Ok(server),
+    }
+}
+
 fn terrain_ready(player: Option<Vec3>, center: (i32, i32), loading: bool) -> bool {
     // Simulation or a flight can move after update_world tracked the view.
     !loading && player.is_some_and(|at| super::player_chunk(at) == center)
@@ -1339,6 +1391,167 @@ mod tests {
         studio::{McprWriter, Metadata, ReplayDriver},
     };
     use horizon_protocol::{buf::Reader, packets::play};
+
+    #[test]
+    fn export_source_requires_a_private_integrated_server_for_live_play() {
+        for (lan, split, server, error) in [
+            (true, false, Some(1), "LAN"),
+            (false, true, Some(1), "splitscreen"),
+            (false, false, None, "local single-player"),
+        ] {
+            assert!(
+                export_source(false, lan, split, server)
+                    .unwrap_err()
+                    .contains(error)
+            );
+            assert_eq!(export_source(true, lan, split, server), Ok(None));
+        }
+        assert_eq!(export_source(false, false, false, Some(1)), Ok(Some(1)));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn live_export_steps_a_joined_world_and_interrupts_on_lan_publication() {
+        use crate::game::{
+            execution_role::ExecutionRole, native_entity_refs::tests::with_game_role,
+        };
+
+        struct TestLoop;
+        impl EventLoopCtl for TestLoop {
+            fn exit(&self) {
+                panic!("unexpected client exit");
+            }
+            fn set_control_flow(&self, _: winit::event_loop::ControlFlow) {}
+        }
+
+        fn until(timeout: Duration, mut ready: impl FnMut() -> bool) {
+            let deadline = Instant::now() + timeout;
+            while !ready() {
+                assert!(Instant::now() < deadline, "live export fixture timed out");
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        crate::game::in_own_process(
+            "game::export::tests::live_export_steps_a_joined_world_and_interrupts_on_lan_publication",
+            || {
+                let resources = std::fs::canonicalize(
+                    std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared vanilla resources"),
+                )
+                .unwrap();
+                let game_dir = tempfile::tempdir().unwrap();
+                let original_dir = std::env::current_dir().unwrap();
+                std::env::set_current_dir(game_dir.path()).unwrap();
+                with_game_role(resources, ExecutionRole::Client, |game| {
+                    game.options.offscreen = true;
+                    game.settings.render_distance = 2;
+                    game.settings.simulation_distance = 2;
+                    let options = horizon_client::title::WorldOptions {
+                        world_type: horizon_client::save::WorldPreset::Flat,
+                        ..Default::default()
+                    };
+                    game.open_integrated("export", Some("Export"), Some(1), true, Some(&options))
+                        .unwrap();
+                    until(Duration::from_secs(60), || {
+                        game.update_world();
+                        game.remote
+                            .as_ref()
+                            .is_some_and(|r| r.logged_in && r.joined)
+                            && game.player.is_some()
+                    });
+                    game.screen = Screen::Playing;
+                    game.pause = true;
+                    let server = |game: &Game<'_>| {
+                        game.integrated.as_ref().unwrap().call(|g| g.ticks).unwrap()
+                    };
+                    let folder = tempfile::tempdir().unwrap();
+                    let mut session = test_session(folder.path());
+                    session.mod_request = Some(1);
+                    session.live = Some(
+                        LiveExport::new(
+                            game.export_server().unwrap().unwrap(),
+                            game.remote.as_ref().unwrap().session.serial(),
+                        )
+                        .unwrap(),
+                    );
+                    session.server_clock = true;
+                    game.export = Some(session);
+                    until(Duration::from_secs(4), || {
+                        game.poll_remote().unwrap();
+                        game.export
+                            .as_ref()
+                            .unwrap()
+                            .live
+                            .as_ref()
+                            .unwrap()
+                            .started()
+                    });
+                    let before = game
+                        .integrated
+                        .as_ref()
+                        .unwrap()
+                        .call(|g| {
+                            g.world.game_time = 12_345;
+                            g.lan.as_mut().unwrap().hub.ticks = 19;
+                            g.agent.hold_server = true;
+                            g.ticks
+                        })
+                        .unwrap();
+
+                    let step = ExportClock::new((20, 1))
+                        .unwrap()
+                        .step(1_000_000, 50_000_000)
+                        .unwrap();
+                    assert_eq!(step.ticks, 1);
+                    game.export_tick_frame(&step, &TestLoop).unwrap();
+                    assert!(!game.export_progress_frame(&TestLoop).unwrap());
+                    for _ in 0..3 {
+                        assert!(!game.export_progress_frame(&TestLoop).unwrap());
+                        assert_eq!(server(game), before);
+                    }
+                    game.integrated
+                        .as_ref()
+                        .unwrap()
+                        .call(|g| g.agent.hold_server = false)
+                        .unwrap();
+                    until(Duration::from_secs(4), || {
+                        game.export_progress_frame(&TestLoop).unwrap()
+                    });
+                    assert_eq!(server(game), before + 1);
+                    // The hub's twentieth tick publishes its time. The client was paused
+                    // for the test, so only receiving that packet can update its time.
+                    assert!((12_345..=12_346).contains(&game.world.game_time));
+                    thread::sleep(Duration::from_millis(120));
+                    assert_eq!(server(game), before + 1);
+
+                    game.lan_open(crate::game::lan::LanSettings {
+                        port: 0,
+                        guest_commands: false,
+                        force_game_mode: false,
+                    })
+                    .unwrap();
+                    until(Duration::from_secs(5), || {
+                        game.poll_export();
+                        game.export.is_none()
+                    });
+                    let status = game.mod_export_status().unwrap();
+                    assert_eq!(
+                        (status.request, status.state, status.frame),
+                        (1, ExportState::Failed, 0)
+                    );
+                    until(Duration::from_secs(5), || server(game) > before + 1);
+                    let error = game
+                        .frame_export_command(&[
+                            "start", "refused", "--size", "16x16", "--fps", "20",
+                        ])
+                        .unwrap_err();
+                    assert!(error.to_string().contains("LAN"));
+                    assert!(!game_dir.path().join("exports/refused").exists());
+                });
+                std::env::set_current_dir(original_dir).unwrap();
+            },
+        );
+    }
 
     #[test]
     fn held_export_accepts_exactly_the_requested_frames_and_automatic_export_gates_commands() {
@@ -1542,7 +1755,7 @@ mod tests {
         }
     }
 
-    fn test_session(root: &std::path::Path) -> Session {
+    pub(super) fn test_session(root: &std::path::Path) -> Session {
         let folder = Arc::new(ExportFolder::create(root, "take").unwrap());
         let spec = parse_start(&["take", "--size", "16x16", "--fps", "30"])
             .unwrap()
@@ -1567,6 +1780,7 @@ mod tests {
             previous_hide_gui: false,
             released_mappings: HashSet::new(),
             server_clock: false,
+            live: None,
             writer: None,
             cancel_encoder: None,
             progress: Arc::default(),

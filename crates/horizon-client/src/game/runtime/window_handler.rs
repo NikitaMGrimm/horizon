@@ -431,6 +431,12 @@ impl Game<'_> {
             );
             return;
         }
+        if self.live_export_waiting() {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(1),
+            ));
+            return;
+        }
         // Consume the last frame's result: a hidden compositor may stop sending
         // redraws altogether, leaving a successful result stale indefinitely.
         event_loop.set_control_flow(event_loop::redraw_flow(

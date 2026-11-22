@@ -268,6 +268,12 @@ impl Game<'_> {
                     }
                 }
                 Event::Packet(packet) => match *packet {
+                    C::Unknown(horizon_client::net::EXPORT_FENCE, ref bytes)
+                        if self.remote.as_ref().is_some_and(|r| r.session.address == "local")
+                            && let Ok(bytes) = bytes.as_slice().try_into() =>
+                    {
+                        self.note_export_fence(u64::from_be_bytes(bytes));
+                    }
                     C::CustomPayload(p) if p.channel == horizon_client::perf_net::CHANNEL => {
                         self.remote_perf_reply(&p.data)
                     }
