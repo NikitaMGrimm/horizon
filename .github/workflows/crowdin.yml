@@ -17,7 +17,6 @@ on:
     paths:
       - crates/horizon-client/assets/horizon/lang/en_us.json
       - crowdin.yml
-      - .github/crowdin-approved.yml
       - tools/crowdin_import.py
       - .github/workflows/crowdin.yml
   schedule:
@@ -77,6 +76,26 @@ jobs:
         env:
           CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
           CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+      - name: Count the proofread strings
+        id: proofread
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'download'))
+        # With nothing approved the approved export may carry no file, and then the CLI fails with
+        # "Couldn't find any file to download"; the count tells that case from a broken download, so
+        # the download below is skipped only when Crowdin itself says there is nothing to fetch. Any
+        # error here fails the run rather than reading as zero, because an empty approved folder takes
+        # every mark the sync made back off (tools/crowdin_import.py).
+        # `l10n` is made here, as the runner's user: the action's container writes as root, and the
+        # folder moves below need a parent the runner may write to.
+        env:
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+        run: |
+          mkdir -p l10n
+          progress=$(curl -q --fail --silent --show-error --proto '=https' --retry 3 --max-time 60             --header "Authorization: Bearer ${CROWDIN_PERSONAL_TOKEN}"             "https://api.crowdin.com/api/v2/projects/${CROWDIN_PROJECT_ID}/languages/progress?limit=500")
+          approved=$(jq -e '[.data[].data.phrases.approved]
+            | if length > 0 and all(type == "number") then add else error("no approval counts") end' <<< "$progress")
+          echo "proofread strings across the project's languages: $approved"
+          echo "approved=$approved" >> "$GITHUB_OUTPUT"
       - name: Download every translation
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'download'))
         uses: crowdin/github-action@d651c77756acbe11a31d77a6fb79d8a239e1e05a # v3.6.0
@@ -92,11 +111,19 @@ jobs:
         env:
           CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
           CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+      - name: Set the full export aside
+        if: steps.proofread.outputs.approved != '' && steps.proofread.outputs.approved != '0'
+        # The CLI keeps only the archive entries at the paths the config's `translation` pattern
+        # names, and the archive is laid out by the pattern Crowdin stored when crowdin.yml uploaded
+        # the source: a second config with another folder matches nothing. So the approved export
+        # goes through crowdin.yml too, into an `l10n/game` that is empty first. Moved, not copied:
+        # a full-export file left behind would read as approved.
+        run: mv l10n/game l10n/game-all
       - name: Download the proofread translations
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'download'))
+        if: steps.proofread.outputs.approved != '' && steps.proofread.outputs.approved != '0'
         uses: crowdin/github-action@d651c77756acbe11a31d77a6fb79d8a239e1e05a # v3.6.0
         with:
-          config: .github/crowdin-approved.yml
+          config: crowdin.yml
           upload_sources: false
           download_translations: true
           export_only_approved: true
@@ -108,7 +135,15 @@ jobs:
           CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
       - name: Write the lang files and the review record
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'download'))
+        env:
+          APPROVED: ${{ steps.proofread.outputs.approved }}
         run: |
+          if [ "$APPROVED" = 0 ]; then
+            mkdir l10n/game-approved
+          else
+            mv l10n/game l10n/game-approved
+            mv l10n/game-all l10n/game
+          fi
           python3 tools/crowdin_import.py --check
           python3 tools/crowdin_import.py --translations l10n/game --approved l10n/game-approved
           python3 tools/lang_coverage.py --summary

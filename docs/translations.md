@@ -33,8 +33,11 @@ file, and `.github/workflows/crowdin.yml` is the whole sync:
   lands;
 - the nightly run (and a run by hand, which says which half to do) downloads two exports and opens one pull
   request, `translations from Crowdin`: every translation into `l10n/game`, and the strings a proofreader approved
-  into `l10n/game-approved`. Neither folder is committed — `tools/crowdin_import.py` reads them, writes the lang
-  files and the review record, and the workflow commits the result.
+  into `l10n/game-approved`. Both come through `crowdin.yml`, because the CLI keeps only the files at the path its
+  `translation` pattern names; the approved export lands in `l10n/game` and is renamed once the full one is moved
+  aside. With nothing approved in the project the second download is skipped and the approved folder stays empty.
+  Neither folder is committed — `tools/crowdin_import.py` reads them, writes the lang files and the review record,
+  and the workflow commits the result.
 
 **An approval in Crowdin is what clears the mark.** The import records a key as reviewed exactly when the approved
 export carries the text the lang file now has, so a translator's edit that nobody proofread takes the mark off again
