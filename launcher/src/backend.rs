@@ -3313,22 +3313,22 @@ pub(crate) fn in_use(_tag: &str) -> bool {
 }
 
 /// Deletes the release versions nothing needs after an install or update, unless the player
-/// turned that off: all but the newest few (`Settings::keep_newest`), the ones instances play,
-/// and the ones a program is running from. A version that does not delete
-/// is logged and the rest still go. Returns the versions deleted. They install again from GitHub.
-pub fn prune_old_versions() -> Vec<String> {
+/// turned that off, keeping the just-installed version, the newest few, and the builds in use.
+/// Failed removals are logged. Returns the versions deleted.
+pub fn prune_old_versions(just_installed: &str) -> Vec<String> {
     let settings = Settings::load();
     if !settings.auto_prune() {
         return Vec::new();
     }
     let installed = installed();
-    let protected = match crate::instances::protected_versions(&installed, &settings) {
+    let mut protected = match crate::instances::protected_versions(&installed, &settings) {
         Ok(protected) => protected,
         Err(e) => {
             eprintln!("Could not check instance versions before pruning: {e}");
             return Vec::new();
         }
     };
+    protected.push(just_installed.to_owned());
     prune_versions(stale_versions(
         &installed,
         settings.keep_newest(),
@@ -3667,11 +3667,10 @@ fn install_tag_with(
     let target = if as_update {
         None
     } else {
-        Some(
-            Settings::load_checked()?
-                .instance
-                .unwrap_or_else(|| crate::instances::DEFAULT.into()),
-        )
+        let id = Settings::load_checked()?
+            .instance
+            .unwrap_or_else(|| crate::instances::DEFAULT.into());
+        Some(crate::instances::manual_install_target(id)?)
     };
     let releases = releases()?;
     let release = if tag == "latest" {
@@ -3712,13 +3711,13 @@ fn install_tag_with(
         {
             settings.save()?;
         }
-    } else if let Some(id) = target {
-        crate::instances::finish_manual_install(&id, &release.tag)?;
+    } else if let Some(target) = target {
+        crate::instances::finish_manual_install(&target, &release.tag)?;
     }
     if as_update && release.nightly.is_some() {
         crate::nightly::after_update(&release.tag);
     }
-    prune_old_versions();
+    prune_old_versions(&release.tag);
     Ok(release.tag.clone())
 }
 
@@ -7956,17 +7955,19 @@ pub fn {f}("
                 .status().unwrap().success());
             return;
         }
-        let (old, newest) = ("v0.2.90", "v0.3.0");
+        let (old, newer, newest) = ("v0.2.90", "v0.2.97", "v0.3.0");
         let marker = |tag: &str| -> std::io::Result<()> {
             let dir = version_dir(tag);
             fs::create_dir_all(&dir)?;
+            fs::write(dir.join(CLIENT), b"pre-holder game")?;
             fs::write(dir.join(COMPLETE), "")
         };
+        marker(newer).unwrap();
         marker(newest).unwrap();
         let first = instances::create("First", None).unwrap();
         let second = instances::create("Second", None).unwrap();
         instances::pin_installed_version(&second.id, Some(newest)).unwrap();
-        let install = |tag: &str, delete_first: bool| {
+        let install = |tag: &str, while_downloading: &dyn Fn()| {
             instances::select(&first.id).unwrap();
             let release = Release {
                 tag: tag.into(),
@@ -7984,27 +7985,40 @@ pub fn {f}("
                 || Ok(vec![release]),
                 |release| {
                     instances::select(&second.id)?;
-                    if delete_first {
-                        fs::remove_dir_all(&first.home).map_err(|e| e.to_string())?;
-                    }
+                    while_downloading();
                     marker(&release.tag).map_err(|e| e.to_string())
                 },
             )
             .unwrap()
         };
-        assert_eq!(install(old, false), old);
+        assert_eq!(install(old, &|| {}), old);
         assert_eq!(
             instances::find(&first.id).unwrap().version.as_deref(),
             Some(old)
         );
         assert_eq!(instances::selected().version.as_deref(), Some(newest));
-        assert_eq!(install(newest, false), newest);
+        assert_eq!(install(newest, &|| {}), newest);
         assert_eq!(instances::find(&first.id).unwrap().version, None);
         assert_eq!(instances::selected().version.as_deref(), Some(newest));
 
-        assert_eq!(install(old, true), old);
+        // The old build was eligible for pruning once the original instance stopped playing it.
+        assert!(!is_installed(old));
+        let delete_first = || fs::remove_dir_all(&first.home).unwrap();
+        let replace_first = || {
+            delete_first();
+            let replacement = instances::create("First", None).unwrap();
+            assert_eq!(replacement.id, first.id);
+            instances::manual_install_target(replacement.id).unwrap();
+        };
+        assert_eq!(install(old, &replace_first), old);
+        assert_eq!(instances::find(&first.id).unwrap().version, None);
+        assert_eq!(instances::selected().version.as_deref(), Some(newest));
+        assert!(is_installed(old));
+
+        assert_eq!(install(old, &delete_first), old);
         assert!(instances::find(&first.id).is_err());
         assert_eq!(instances::selected().version.as_deref(), Some(newest));
+        assert!(is_installed(old));
     }
 
     #[test]

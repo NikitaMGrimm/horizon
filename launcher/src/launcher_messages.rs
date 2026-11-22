@@ -238,9 +238,10 @@ impl Launcher {
                                             && i.version.as_deref() == Some(tag.as_str())
                                     })
                             });
-                            let saved = if let Some(id) = manual_target {
-                                match horizon_launcher::instances::finish_manual_install(&id, &tag)
-                                {
+                            let saved = if let Some(target) = manual_target {
+                                match horizon_launcher::instances::finish_manual_install(
+                                    &target, &tag,
+                                ) {
                                     Ok(()) => {
                                         self.reload_instances();
                                         true
@@ -265,7 +266,7 @@ impl Launcher {
                             if saved {
                                 let tx = self.tx.clone();
                                 std::thread::spawn(move || {
-                                    let _ = tx.send(Msg::Pruned(backend::prune_old_versions()));
+                                    let _ = tx.send(Msg::Pruned(backend::prune_old_versions(&tag)));
                                 });
                             }
                         }

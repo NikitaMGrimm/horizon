@@ -87,6 +87,16 @@ impl Launcher {
         {
             return;
         }
+        let manual_target = match manual_target
+            .map(instances::manual_install_target)
+            .transpose()
+        {
+            Ok(target) => target,
+            Err(e) => {
+                self.install_error = Some((release.tag.clone(), e));
+                return;
+            }
+        };
         let (release, tx) = (release.clone(), self.tx.clone());
         let tag = release.tag.clone();
         self.installing = Some((tag.clone(), 0.0));

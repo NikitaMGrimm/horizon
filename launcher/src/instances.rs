@@ -21,6 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// The default instance's id: the game's home itself.
 pub const DEFAULT: &str = "horizon";
 const FILE: &str = "instances.json";
+const IDENTITY: &str = ".horizon-instance-id";
 /// Where new instances live, in the game's home.
 const OWN: &str = "instances";
 
@@ -693,23 +694,79 @@ fn selected_in<'a>(all: &'a [Instance], settings: &backend::Settings) -> &'a Ins
 
 /// Use an installed build for the instance Play starts. Choosing the channel's Latest follows it.
 pub fn use_version(tag: &str) -> Result<(), String> {
-    use_version_in(None, tag).map(|_| ())
+    use_version_in(None, None, tag).map(|_| ())
 }
 
 /// Use a build for the named instance, even if another launcher changed the selected instance.
 pub fn use_version_for(id: &str, tag: &str) -> Result<(), String> {
-    match use_version_in(Some(id), tag)? {
+    match use_version_in(Some(id), None, tag)? {
         true => Ok(()),
         false => Err(instance_unavailable(id)),
     }
 }
 
-/// Selects a manual download for the instance that requested it, if it still exists.
-pub fn finish_manual_install(id: &str, tag: &str) -> Result<(), String> {
-    use_version_in(Some(id), tag).map(|_| ())
+/// The instance that started a manual download. Recreated folders have their own identity.
+pub struct ManualInstallTarget {
+    id: String,
+    identity: Option<[u8; 16]>,
 }
 
-fn use_version_in(id: Option<&str>, tag: &str) -> Result<bool, String> {
+/// Captures the instance's identity before downloading. The default instance cannot be deleted.
+pub fn manual_install_target(id: String) -> Result<ManualInstallTarget, String> {
+    let identity = if id == DEFAULT {
+        None
+    } else {
+        let _lock = lock_store(&backend::data_dir())?;
+        launch_instances()?
+            .into_iter()
+            .find(|instance| instance.id == id)
+            .map(|instance| ensure_identity(&instance.work))
+            .transpose()?
+    };
+    Ok(ManualInstallTarget { id, identity })
+}
+
+fn read_identity(file: &Path) -> std::io::Result<Option<[u8; 16]>> {
+    match fs::read(file) {
+        Ok(bytes) => bytes.try_into().map(Some).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid instance identity")
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn ensure_identity(work: &Path) -> Result<[u8; 16], String> {
+    let path = work.join(IDENTITY);
+    let ensure = || -> std::io::Result<[u8; 16]> {
+        if let Some(existing) = read_identity(&path)? {
+            return Ok(existing);
+        }
+        let mut identity = [0; 16];
+        getrandom::fill(&mut identity).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut pending = tempfile::NamedTempFile::new_in(work)?;
+        pending.write_all(&identity)?;
+        match pending.persist_noclobber(&path) {
+            Ok(_) => Ok(identity),
+            Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                read_identity(&path)?.ok_or(e.error)
+            }
+            Err(e) => Err(e.error),
+        }
+    };
+    ensure().map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Selects a manual download for the original instance if it still exists.
+pub fn finish_manual_install(target: &ManualInstallTarget, tag: &str) -> Result<(), String> {
+    use_version_in(Some(&target.id), Some(target), tag).map(|_| ())
+}
+
+fn use_version_in(
+    id: Option<&str>,
+    target: Option<&ManualInstallTarget>,
+    tag: &str,
+) -> Result<bool, String> {
     let data = backend::data_dir();
     let _lock = lock_store(&data)?;
     let settings = backend::Settings::load_checked()?;
@@ -729,6 +786,15 @@ fn use_version_in(id: Option<&str>, tag: &str) -> Result<bool, String> {
     };
     if instance.java.is_some() {
         return Ok(true);
+    }
+    if let Some(target) = target.filter(|_| instance.id != DEFAULT) {
+        let file = instance.work.join(IDENTITY);
+        if target.identity.is_none()
+            || read_identity(&file).map_err(|e| format!("{}: {e}", file.display()))?
+                != target.identity
+        {
+            return Ok(false);
+        }
     }
     let installed = backend::installed_checked()?;
     if !installed.iter().any(|installed| installed == tag) {
@@ -896,6 +962,7 @@ pub(crate) fn game_caches(game_home: &Path) -> Vec<PathBuf> {
 /// caches, data collection's state, and sign-in sessions (a session never leaves its folder).
 const NOT_COPIED: &[&str] = &[
     OWN,
+    IDENTITY,
     "ports",
     "horizon-packs",
     "logs",
