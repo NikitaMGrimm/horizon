@@ -124,6 +124,26 @@ class GameCoverageTests(unittest.TestCase):
                 self.assertEqual(lang_coverage.text_problem(case["english"], case["text"]),
                                  case["rule"])
 
+    def test_the_unicode_tables_are_sorted_disjoint_ranges_of_unicode_17(self):
+        # tools/gen_lang_unicode_tables.py writes the file from UCD files that are not committed,
+        # so the test checks only what any correct output holds.
+        body = json.loads(lang_coverage.UNICODE_TABLES_FILE.read_text(encoding="utf-8"))
+        self.assertEqual(body["unicode"], "17.0.0")
+        self.assertEqual(set(body["sources"]),
+                         {"UnicodeData.txt", "Scripts.txt", "GraphemeBreakProperty.txt"})
+        every = []
+        for name in lang_coverage.UNICODE_TABLES:
+            ranges = body[name]
+            with self.subTest(name):
+                self.assertTrue(ranges)
+                self.assertTrue(all(0 <= low <= high <= 0x10FFFF for low, high in ranges))
+                # Sorted and apart: touching ranges would have been written as one.
+                self.assertTrue(all(a[1] + 1 < b[0] for a, b in zip(ranges, ranges[1:])))
+            every += ranges
+        every.sort()
+        # No character is in two tables.
+        self.assertTrue(all(a[1] < b[0] for a, b in zip(every, every[1:])))
+
     def test_a_repeated_key_or_a_missing_indent_is_a_problem(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)

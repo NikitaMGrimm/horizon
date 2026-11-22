@@ -200,40 +200,21 @@ INVISIBLE = frozenset("\u200b\u2060\u2028\u2029\ufeff\u00ad\u034f\u180e"
                       "\u115f\u1160\u3164\uffa0\ufff9\ufffa\ufffb")
 # Openers of a bidi embedding or override (closed by U+202C) and of an isolate (closed by U+2069).
 EMBEDDINGS, ISOLATES = frozenset("\u202a\u202b\u202d\u202e"), frozenset("\u2066\u2067\u2068")
-# Assigned letters of scripts written without spaces between words (Han, kana, Hangul syllables,
-# Thai, Lao, Khmer, Myanmar). The game's wrapper breaks only at a space or a line break and cuts a
-# longer line where it overflows, so these letters do not count towards a token's length; every
-# other character does, their marks, tone marks and fillers and unassigned code points included.
-SPACELESS_LETTERS = (
-    (0x0E01, 0x0E30), (0x0E32, 0x0E33), (0x0E40, 0x0E46),  # Thai
-    (0x0E81, 0x0EB0), (0x0EB2, 0x0EB3), (0x0EBD, 0x0EBD), (0x0EC0, 0x0EC4), (0x0EC6, 0x0EC6),
-    (0x0EDC, 0x0EDF),  # Lao
-    (0x1000, 0x102A), (0x103F, 0x103F), (0x1050, 0x1055),  # Myanmar
-    (0x1780, 0x17B3),  # Khmer
-    (0x3041, 0x3096), (0x309D, 0x309F), (0x30A1, 0x30FA), (0x30FC, 0x30FF), (0x31F0, 0x31FF),
-    (0xFF66, 0xFF9D),  # kana
-    (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFA6D), (0xFA70, 0xFAD9),
-    (0x20000, 0x2A6DF), (0x2A700, 0x2B739), (0x2B740, 0x2B81D), (0x2B820, 0x2CEA1),
-    (0x2CEB0, 0x2EBE0), (0x2EBF0, 0x2EE5D), (0x2F800, 0x2FA1D), (0x30000, 0x3134A),
-    (0x31350, 0x323AF),  # Han
-    (0xAC00, 0xD7A3),  # Hangul syllables
-)
-COMBINING_MARKS_FILE = ROOT / "tools/lang_combining_marks.json"
-
-
-def _ranges_contain(ranges, c: str) -> bool:
-    o = ord(c)
-    return any(low <= o <= high for low, high in ranges)
-
-
+# Character tables both sides read, written by tools/gen_lang_unicode_tables.py from the Unicode
+# Character Database: "spaceless" letters of scripts written without spaces between words, which
+# the game's wrapper cuts where a line overflows, so they don't count towards a token;
+# "combining" marks; and "transparent" characters (format characters, emoji modifiers and other
+# grapheme extenders) that neither count as a mark nor end a row of them.
+UNICODE_TABLES_FILE = ROOT / "tools/lang_unicode_tables.json"
+UNICODE_TABLES = ("spaceless", "combining", "transparent")
 _TABLES: dict[str, list[tuple[int, int]]] = {}
 
 
 def _in_table(name: str, c: str) -> bool:
-    """`c` in one of the sorted, disjoint range lists of tools/lang_combining_marks.json."""
+    """`c` in one of the sorted, disjoint range lists of tools/lang_unicode_tables.json."""
     if not _TABLES:
-        body = json.loads(COMBINING_MARKS_FILE.read_text(encoding="utf-8"))
-        _TABLES.update({key: [tuple(r) for r in body[key]] for key in ("combining", "format")})
+        body = json.loads(UNICODE_TABLES_FILE.read_text(encoding="utf-8"))
+        _TABLES.update({key: [tuple(r) for r in body[key]] for key in UNICODE_TABLES})
     table, o = _TABLES[name], ord(c)
     low, high = 0, len(table)
     while low < high:
@@ -243,16 +224,6 @@ def _in_table(name: str, c: str) -> bool:
         else:
             high = middle
     return low < len(table) and table[low][0] <= o
-
-
-def combining(c: str) -> bool:
-    """A combining mark (general category Mn or Me), from the table both sides read."""
-    return _in_table("combining", c)
-
-
-def format_character(c: str) -> bool:
-    """A format character (general category Cf: joiners, direction marks...), from the same table."""
-    return _in_table("format", c)
 
 
 def invisible(c: str) -> bool:
@@ -284,18 +255,18 @@ def longest_run(text: str) -> int:
     """The most characters one token holds that the game's wrapper cannot break inside: a token is
     what lies between spaces and line breaks (`Font::split_lines` breaks there only), and letters of
     a script written without spaces do not count, since a line of them is cut where it overflows."""
-    return max((sum(1 for c in token if not _ranges_contain(SPACELESS_LETTERS, c))
+    return max((sum(1 for c in token if not _in_table("spaceless", c))
                 for line in text.split("\n") for token in line.split(" ")), default=0)
 
 
 def most_marks(text: str) -> int:
-    """The most combining marks in a row; a format character between them (a joiner, a direction
-    mark) neither counts nor ends the row."""
+    """The most combining marks in a row; a transparent character between them (a joiner, a
+    direction mark, an emoji modifier) neither counts nor ends the row."""
     most = current = 0
     for c in text:
-        if format_character(c):
+        if _in_table("transparent", c):
             continue
-        current = current + 1 if combining(c) else 0
+        current = current + 1 if _in_table("combining", c) else 0
         most = max(most, current)
     return most
 

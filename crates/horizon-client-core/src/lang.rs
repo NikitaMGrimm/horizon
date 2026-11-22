@@ -1067,38 +1067,20 @@ mod tests {
         matches!(c,
             '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}' | '\u{180b}'..='\u{180d}' | '\u{180f}')
     }
-    /// Letters of scripts written without spaces (Thai, Lao, Myanmar, Khmer, kana, Han, Hangul
-    /// syllables): the game's wrapper breaks only at a space and cuts a longer line where it
-    /// overflows, so a run of these is no unbroken word. Their marks and fillers are no letters.
-    fn is_spaceless_letter(c: char) -> bool {
-        matches!(c,
-            '\u{0e01}'..='\u{0e30}' | '\u{0e32}'..='\u{0e33}' | '\u{0e40}'..='\u{0e46}'
-            | '\u{0e81}'..='\u{0eb0}' | '\u{0eb2}'..='\u{0eb3}' | '\u{0ebd}' | '\u{0ec0}'..='\u{0ec4}'
-            | '\u{0ec6}' | '\u{0edc}'..='\u{0edf}'
-            | '\u{1000}'..='\u{102a}' | '\u{103f}' | '\u{1050}'..='\u{1055}'
-            | '\u{1780}'..='\u{17b3}'
-            | '\u{3041}'..='\u{3096}' | '\u{309d}'..='\u{309f}' | '\u{30a1}'..='\u{30fa}'
-            | '\u{30fc}'..='\u{30ff}' | '\u{31f0}'..='\u{31ff}' | '\u{ff66}'..='\u{ff9d}'
-            | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{fa6d}'
-            | '\u{fa70}'..='\u{fad9}'
-            | '\u{20000}'..='\u{2a6df}' | '\u{2a700}'..='\u{2b739}' | '\u{2b740}'..='\u{2b81d}'
-            | '\u{2b820}'..='\u{2cea1}' | '\u{2ceb0}'..='\u{2ebe0}' | '\u{2ebf0}'..='\u{2ee5d}'
-            | '\u{2f800}'..='\u{2fa1d}' | '\u{30000}'..='\u{3134a}' | '\u{31350}'..='\u{323af}'
-            | '\u{ac00}'..='\u{d7a3}')
-    }
-    /// One of the sorted, disjoint range lists of `tools/lang_combining_marks.json`, which
-    /// `tools/lang_coverage.py` reads too: std has no general category.
+    /// One of the sorted, disjoint range lists of `tools/lang_unicode_tables.json`, which
+    /// `tools/gen_lang_unicode_tables.py` writes from the Unicode Character Database and
+    /// `tools/lang_coverage.py` reads too: std has no general category or script.
     fn in_table(name: &str, c: char) -> bool {
         type Tables = HashMap<String, Vec<(u32, u32)>>;
         static TABLES: std::sync::OnceLock<Tables> = std::sync::OnceLock::new();
         let tables = TABLES.get_or_init(|| {
             let path = concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../tools/lang_combining_marks.json"
+                "/../../tools/lang_unicode_tables.json"
             );
             let body: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-            ["combining", "format"]
+            ["spaceless", "combining", "transparent"]
                 .into_iter()
                 .map(|key| {
                     let ranges = serde_json::from_value(body[key].clone()).unwrap();
@@ -1109,14 +1091,6 @@ mod tests {
         let ranges = &tables[name];
         let at = ranges.partition_point(|&(_, high)| high < c as u32);
         ranges.get(at).is_some_and(|&(low, _)| low <= c as u32)
-    }
-    /// A combining mark (general category Mn or Me).
-    fn is_combining(c: char) -> bool {
-        in_table("combining", c)
-    }
-    /// A format character (general category Cf: joiners, direction marks...).
-    fn is_format(c: char) -> bool {
-        in_table("format", c)
     }
     /// The legacy codes in `text` in order, ASCII ones lowercased: a `§` takes the character
     /// after it, whatever it is, and neither is drawn (`Text::resolve_legacy`); a `§` at the end
@@ -1137,16 +1111,20 @@ mod tests {
     /// where it overflows.
     fn longest_run(text: &str) -> usize {
         text.split(['\n', ' '])
-            .map(|token| token.chars().filter(|&c| !is_spaceless_letter(c)).count())
+            .map(|token| token.chars().filter(|&c| !in_table("spaceless", c)).count())
             .max()
             .unwrap_or(0)
     }
-    /// The most combining marks in a row; a format character between them (a joiner, a
-    /// direction mark) neither counts nor ends the row.
+    /// The most combining marks in a row; a transparent character between them (a joiner, a
+    /// direction mark, an emoji modifier) neither counts nor ends the row.
     fn most_marks(text: &str) -> usize {
         let (mut most, mut current) = (0, 0);
-        for c in text.chars().filter(|&c| !is_format(c)) {
-            current = if is_combining(c) { current + 1 } else { 0 };
+        for c in text.chars().filter(|&c| !in_table("transparent", c)) {
+            current = if in_table("combining", c) {
+                current + 1
+            } else {
+                0
+            };
             most = most.max(current);
         }
         most
