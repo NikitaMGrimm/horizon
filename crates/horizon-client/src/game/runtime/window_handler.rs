@@ -345,6 +345,8 @@ impl Game<'_> {
             }
         }
         self.poll_export();
+        // Also runs without a redraw, so a hidden window still handles a server crash.
+        self.exit_after_server_crash();
         if self.pending_save.is_some() {
             if self
                 .pending_save
@@ -586,9 +588,6 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Every event-loop pass, drawn or not: a window that stops redrawing (a lost
-        // device, an occluded window) must still end after a server crash.
-        self.exit_after_server_crash();
         self.idle(event_loop);
     }
     /// The application is ending. On macOS, Quit (Cmd+Q) ends it through

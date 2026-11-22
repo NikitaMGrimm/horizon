@@ -707,10 +707,11 @@ impl Game<'_> {
                     _ => return Err("server-hold on|off".into()),
                 };
                 if let Some(server) = &self.integrated {
-                    if self
-                        .export
-                        .as_ref()
-                        .is_some_and(|session| session.server_clock)
+                    if server.running_export_tick()
+                        || self
+                            .export
+                            .as_ref()
+                            .is_some_and(|session| session.server_clock)
                     {
                         if !server.post(move |g| g.agent.hold_server = held) {
                             return Err("the integrated server stopped".into());

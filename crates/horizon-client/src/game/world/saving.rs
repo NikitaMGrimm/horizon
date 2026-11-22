@@ -30,6 +30,12 @@ enum Stage {
     Quit,
 }
 
+/// Joining a stopped server can surface its tick error and immediately end
+/// the event loop. Keep polling export output and its manifest first.
+pub(super) fn integrated_save_ready(stopped: bool, pending_mod_export: bool) -> bool {
+    stopped && !pending_mod_export
+}
+
 // Bound the work in both sparse and block-entity-heavy worlds. A single chunk
 // is indivisible; check the time budget after each snapshot, not each batch.
 const SNAPSHOTS_PER_FRAME: usize = 16;
@@ -174,7 +180,7 @@ impl Game<'_> {
                         .integrated
                         .as_ref()
                         .ok_or("the integrated server stopped with an error")?;
-                    if !server.stopped() {
+                    if !integrated_save_ready(server.stopped(), self.pending_mod_export()) {
                         return Ok(false);
                     }
                     // Drop/join only after completion; leave_server's teardown

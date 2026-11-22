@@ -623,20 +623,23 @@ impl Session {
 }
 
 impl Game<'_> {
+    /// Shared by the socket and redraw paths. A last credited tick may
+    /// still be running after a timeout or an explicit stop released its lease.
+    pub(super) fn export_server_calls_blocked(&self) -> bool {
+        self.live_export_waiting()
+            || self.integrated.as_ref().is_some_and(|server| {
+                server.running_export_tick()
+                    || self.export.as_ref().is_some_and(|session| {
+                        session.replay.is_none() && session.draining.is_some()
+                    })
+            })
+    }
+
     pub(super) fn export_gate(&mut self, words: &[&str]) -> Result<()> {
         if words.first() == Some(&"quit") {
             self.cancel_export_on_quit();
         }
-        let draining_live = self.integrated.is_some()
-            && self
-                .export
-                .as_ref()
-                .is_some_and(|session| session.replay.is_none() && session.draining.is_some());
-        if (draining_live || self.live_export_waiting())
-            && matches!(words, ["simulation" | "mobs", ..] | ["lan", "status"])
-        {
-            return Err("the integrated server is completing an export turn".into());
-        }
+        check_export_server_command(self.export_server_calls_blocked(), words)?;
         match &self.export {
             Some(session)
                 if session.server_clock && matches!(words, ["server-hold", "on" | "off"]) =>
@@ -962,6 +965,10 @@ impl Game<'_> {
         self.export
             .as_ref()
             .is_some_and(|s| s.requests.held() || s.draining.is_some())
+    }
+
+    pub(super) fn pending_mod_export(&self) -> bool {
+        self.export.as_ref().is_some_and(Session::is_mod_export)
     }
 
     pub(super) fn poll_export(&mut self) {
@@ -1341,6 +1348,21 @@ impl Drop for Game<'_> {
     }
 }
 
+fn check_export_server_command(blocked: bool, words: &[&str]) -> Result<()> {
+    if blocked
+        && matches!(
+            words,
+            [
+                "simulation" | "mobs" | "getblock" | "container" | "setblock" | "fill",
+                ..
+            ] | ["lan", "status"]
+        )
+    {
+        return Err("the integrated server is completing an export turn".into());
+    }
+    Ok(())
+}
+
 fn admit_control_output(
     admit: impl FnOnce() -> Result<Option<LiveExport>>,
     game_dir: &std::path::Path,
@@ -1432,6 +1454,65 @@ mod tests {
         studio::{McprWriter, Metadata, ReplayDriver},
     };
     use horizon_protocol::{buf::Reader, packets::play};
+
+    #[test]
+    fn outstanding_export_turn_rejects_server_queries_but_accepts_stop_and_status() {
+        for query in [
+            &["getblock", "0", "64", "0"][..],
+            &["container", "0", "64", "0"],
+        ] {
+            assert!(allowed_while_running(query));
+            assert!(check_export_server_command(true, query).is_err());
+            assert!(check_export_server_command(false, query).is_ok());
+        }
+        for command in [
+            ["export", "stop"],
+            ["export", "status"],
+            ["server-hold", "off"],
+        ] {
+            assert!(check_export_server_command(true, &command).is_ok());
+        }
+    }
+
+    #[test]
+    fn failed_server_save_waits_for_mod_export_manifest_to_settle() {
+        use crate::game::saving::integrated_save_ready;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut session = test_session(root.path());
+        session.mod_request = Some(14);
+        let (release, stalled) = sync_channel::<()>(1);
+        let manifest = ManifestJob::spawn(session.status("failed"), move |_| {
+            let _ = stalled.recv_timeout(Duration::from_secs(10));
+            Ok(())
+        });
+        let started = manifest.started;
+        session.draining = Some(Drain {
+            manifest: Some(manifest),
+            ..Drain::new("failed")
+        });
+        let deadline = started + FRAME_EXPORT_STALL_TIMEOUT;
+        assert!(
+            session
+                .poll_manifest_finish(
+                    deadline - Duration::from_millis(1),
+                    FRAME_EXPORT_STALL_TIMEOUT
+                )
+                .is_none()
+        );
+        assert!(!integrated_save_ready(true, session.is_mod_export()));
+
+        let event = session
+            .poll_manifest_finish(deadline, FRAME_EXPORT_STALL_TIMEOUT)
+            .unwrap();
+        let ended = session.mod_completion(&event).unwrap();
+        assert_eq!(
+            (ended.request, ended.state, ended.frame),
+            (14, ExportState::Failed, 0)
+        );
+        assert!(integrated_save_ready(true, false));
+        release.send(()).unwrap();
+    }
 
     #[test]
     fn a_settled_export_reserves_no_frame_during_the_loading_screen_delay() {
@@ -1759,6 +1840,14 @@ mod tests {
                         .unwrap()
                         .unwrap()["ok"]
                         == true
+                );
+                for query in ["getblock 0 64 0", "container 0 64 0"] {
+                    assert!(game.control_command(query, &reply, &TestLoop).is_err());
+                }
+                assert!(
+                    game.control_command("export status", &reply, &TestLoop)
+                        .unwrap()
+                        .is_some()
                 );
                 assert!(begin.elapsed() < Duration::from_secs(1));
                 owner.disconnect(horizon_protocol::text::translatable(

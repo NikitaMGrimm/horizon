@@ -13,11 +13,33 @@ use std::{
 };
 
 #[derive(Default)]
-pub(super) struct Slot(Mutex<Option<Arc<Ticks>>>);
+pub(super) struct Slot(Mutex<Option<Arc<Ticks>>>, AtomicBool);
+
+struct RunningExportTick<'a>(&'a AtomicBool);
+
+impl Drop for RunningExportTick<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 impl Slot {
     pub(super) fn active(&self) -> Option<Arc<Ticks>> {
         self.0.lock().unwrap().clone()
+    }
+
+    fn begin_tick(&self, ticks: &Ticks) -> Option<RunningExportTick<'_>> {
+        // Claim under the same lock as lease release. A cancelled credit
+        // cannot start after the client sees that the server is idle.
+        let active = self.0.lock().unwrap();
+        if !active
+            .as_deref()
+            .is_some_and(|current| std::ptr::eq(current, ticks))
+        {
+            return None;
+        }
+        self.1.store(true, Ordering::Release);
+        Some(RunningExportTick(&self.1))
     }
 
     pub(super) fn interrupt(&self) {
@@ -63,12 +85,17 @@ pub(in crate::game) struct ExportLockstep {
 }
 
 impl Integrated {
+    pub(in crate::game) fn running_export_tick(&self) -> bool {
+        self.flags.export_ticks.1.load(Ordering::Acquire)
+    }
+
     pub(in crate::game) fn export_lockstep(&self, start_fence: u64) -> Result<ExportLockstep> {
         let mut current = self.flags.export_ticks.0.lock().unwrap();
         if self.flags.stop.load(Ordering::Acquire) || self.stopped() {
             return Err("the integrated server stopped".into());
         }
         if current.is_some()
+            || self.running_export_tick()
             || self.flags.export_clock.load(Ordering::Acquire)
             || self.published().is_some()
             || self.has_split_players()
@@ -160,6 +187,9 @@ impl Game<'_> {
         if ticks.interrupted.load(Ordering::Acquire) || flags.stop.load(Ordering::Acquire) {
             return true;
         }
+        let Some(_running) = flags.export_ticks.begin_tick(ticks) else {
+            return true;
+        };
         if flags.run_tick(|| self.tick_for_export(flags)).is_err() {
             return false;
         }
@@ -216,6 +246,27 @@ pub(super) mod tests {
         // Release the fixture thread before Integrated joins, including on a failed assertion.
         let _stop = stop;
         test(&server, &receiver);
+    }
+
+    #[test]
+    fn running_export_tick_stays_busy_after_its_lease_is_released() {
+        with_clock(|server, _| {
+            let clock = server.export_lockstep(0).unwrap();
+            let slot = &server.flags.export_ticks;
+            let ticks = slot.active().unwrap();
+            let running = slot.begin_tick(&ticks).unwrap();
+            drop(clock);
+
+            assert!(server.running_export_tick());
+            assert!(server.export_lockstep(0).is_err());
+            drop(running);
+            assert!(!server.running_export_tick());
+            assert!(
+                slot.begin_tick(&ticks).is_none(),
+                "released work cannot start"
+            );
+            assert!(server.export_lockstep(0).is_ok());
+        });
     }
 
     #[test]

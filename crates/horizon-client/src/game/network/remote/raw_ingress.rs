@@ -60,15 +60,11 @@ fn prepare_export_ingress(
         events.push_back(end);
         return Ok(None);
     }
+    // The server has already completed this tick. Return receive credit as
+    // each available packet is applied so the rest of the batch can arrive.
     match gate {
-        ExportIngress::Through(fence)
-            if events
-                .iter()
-                .any(|(item, _)| export_fence(item) == Some(fence)) =>
-        {
-            Ok(Some(fence))
-        }
-        _ => Err(()),
+        ExportIngress::Through(fence) => Ok(Some(fence)),
+        ExportIngress::Blocked => Err(()),
     }
 }
 
@@ -78,6 +74,7 @@ impl Game<'_> {
         let Some(r) = self.remote.as_mut() else {
             return Ok(());
         };
+        let is_local = r.session.address == "local";
         let mut events = std::mem::take(&mut r.backlog);
         r.receive_credited_backlog(&mut events);
         let cutoff = match gate.map(|gate| prepare_export_ingress(&mut events, gate)) {
@@ -114,6 +111,13 @@ impl Game<'_> {
             {
                 events.push_front((item, queued_at));
                 break;
+            }
+            if is_local && let Some(fence) = export_fence(&item) {
+                self.note_export_fence(fence);
+                if cutoff == Some(fence) {
+                    break;
+                }
+                continue;
             }
             let started = chunk.then(Instant::now);
             let (event, _credit) = match item {
@@ -318,19 +322,6 @@ impl Game<'_> {
                     }
                 }
                 Event::Packet(packet) => match *packet {
-                    C::Unknown(horizon_client::net::EXPORT_FENCE, ref bytes)
-                        if self
-                            .remote
-                            .as_ref()
-                            .is_some_and(|r| r.session.address == "local")
-                            && let Ok(bytes) = bytes.as_slice().try_into() =>
-                    {
-                        let fence = u64::from_be_bytes(bytes);
-                        self.note_export_fence(fence);
-                        if cutoff == Some(fence) {
-                            break;
-                        }
-                    }
                     C::CustomPayload(p) if p.channel == horizon_client::perf_net::CHANNEL => {
                         self.remote_perf_reply(&p.data)
                     }
@@ -359,7 +350,55 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn export_ingress_waits_for_the_matching_fence_and_prioritizes_disconnect() {
+    fn completed_export_batch_returns_credit_before_its_fence_arrives() {
+        let packet_charge = horizon_mod_runtime::byte_channel::message_overhead::<Event>() + 1;
+        let (send, receive) =
+            horizon_client::net::ingress::channel(2 * packet_charge, |_: &Event| 1).unwrap();
+        let packet = |id| Event::Packet(Box::new(C::Unknown(id, Vec::new())));
+        let fence = 93_u64;
+        let marker = Event::Packet(Box::new(C::Unknown(
+            horizon_client::net::EXPORT_FENCE,
+            fence.to_be_bytes().to_vec(),
+        )));
+        let mut backlog = VecDeque::new();
+        let collect = |backlog: &mut VecDeque<_>| {
+            backlog.extend(receive.take_turn().into_iter().map(|receipt| {
+                let (event, lease) = receipt.into_parts();
+                (Received::Event(event, lease), Instant::now())
+            }));
+        };
+
+        send.send(packet(1)).unwrap();
+        send.send(packet(2)).unwrap();
+        let blocked = send.send(packet(3)).unwrap_err();
+        collect(&mut backlog);
+        assert!(prepare_export_ingress(&mut backlog, ExportIngress::Blocked).is_err());
+        assert_eq!(
+            prepare_export_ingress(&mut backlog, ExportIngress::Through(fence)),
+            Ok(Some(fence))
+        );
+        assert!(backlog.iter().all(|(item, _)| export_fence(item).is_none()));
+        assert_eq!(receive.stats().reserved_bytes, 2 * packet_charge);
+        backlog.clear();
+        assert_eq!(receive.stats().reserved_bytes, 0);
+
+        send.send(blocked.value).unwrap();
+        send.send(marker).unwrap();
+        collect(&mut backlog);
+        assert_eq!(
+            prepare_export_ingress(&mut backlog, ExportIngress::Through(fence)),
+            Ok(Some(fence))
+        );
+        let (last_packet, _) = backlog.pop_front().unwrap();
+        assert!(
+            matches!(last_packet, Received::Event(Event::Packet(p), _) if matches!(*p, C::Unknown(3, _)))
+        );
+        let (marker, _) = backlog.pop_front().unwrap();
+        assert_eq!(export_fence(&marker), Some(fence));
+    }
+
+    #[test]
+    fn export_ingress_drains_through_the_matching_fence_and_prioritizes_disconnect() {
         use super::*;
         use horizon_client::net::ingress;
         let (send, recv) = ingress::channel(1024, |_: &Event| 1).unwrap();
@@ -387,7 +426,7 @@ mod tests {
         add(&mut backlog, marker(8));
         assert_eq!(
             prepare_export_ingress(&mut backlog, ExportIngress::Through(9)),
-            Err(())
+            Ok(Some(9))
         );
         add(&mut backlog, marker(9));
         add(&mut backlog, packet(12));

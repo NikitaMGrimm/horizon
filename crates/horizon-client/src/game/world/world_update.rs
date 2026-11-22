@@ -40,7 +40,7 @@ impl Game<'_> {
         {
             self.clear_lod();
         }
-        if self.lod_source_attempted {
+        if self.lod_source_attempted || self.export_server_calls_blocked() {
             return;
         }
         self.lod_source_attempted = true;

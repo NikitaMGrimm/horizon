@@ -1642,6 +1642,12 @@ impl Game<'_> {
         if self.options.split_guest || !horizon_client::crash::server_crashed() {
             return;
         }
+        if self.pending_mod_export() {
+            self.abort_export(Some("the integrated server crashed during export".into()));
+            if self.pending_mod_export() {
+                return;
+            }
+        }
         // A crash while the world is still loading leaves the server in `integrated_starting`.
         let starting = self
             .integrated_starting
