@@ -87,7 +87,7 @@ class GameCoverageTests(unittest.TestCase):
     def test_an_argument_past_any_count_or_text_that_looks_like_one_is_no_argument(self):
         plain = set()
         self.assertFalse(lang_coverage.formats_like("k", "Durability", "Durability %33$s", plain))
-        self.assertFalse(lang_coverage.formats_like("k", "%s", "0", plain))
+        self.assertFalse(lang_coverage.formats_like("k", "%s", "\ue0000\ue001", plain))
         self.assertTrue(lang_coverage.formats_like("k", "%s" * 33, "%33$s" + "%s" * 32, plain))
 
     def test_a_percent_sign_english_writes_as_two_is_kept(self):
@@ -112,8 +112,8 @@ class GameCoverageTests(unittest.TestCase):
     def test_a_control_character_is_stray_unless_it_is_a_tab_or_bidi_control_english_has(self):
         self.assertEqual(lang_coverage.stray_controls("a", "b\nc"), [])
         self.assertEqual(lang_coverage.stray_controls("a", "b\tc\x7f\x85"), ["\t", "\x7f", "\x85"])
-        self.assertEqual(lang_coverage.stray_controls("a", "b‮c⁦"), ["‮", "⁦"])
-        self.assertEqual(lang_coverage.stray_controls("a⁧b⁩\t", "c⁧d⁩\t"), [])
+        self.assertEqual(lang_coverage.stray_controls("a", "b\u202ec\u2066"), ["\u202e", "\u2066"])
+        self.assertEqual(lang_coverage.stray_controls("a\u2067b\u2069\t", "c\u2067d\u2069\t"), [])
         self.assertEqual(lang_coverage.stray_controls("a\x1b", "b\x1b"), ["\x1b"])
 
     def test_translated_text_keeps_what_its_english_allows(self):

@@ -1079,25 +1079,44 @@ mod tests {
             | '\u{1780}'..='\u{17b3}'
             | '\u{3041}'..='\u{3096}' | '\u{309d}'..='\u{309f}' | '\u{30a1}'..='\u{30fa}'
             | '\u{30fc}'..='\u{30ff}' | '\u{31f0}'..='\u{31ff}' | '\u{ff66}'..='\u{ff9d}'
-            | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'
-            | '\u{20000}'..='\u{3ffff}'
+            | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{fa6d}'
+            | '\u{fa70}'..='\u{fad9}'
+            | '\u{20000}'..='\u{2a6df}' | '\u{2a700}'..='\u{2b739}' | '\u{2b740}'..='\u{2b81d}'
+            | '\u{2b820}'..='\u{2cea1}' | '\u{2ceb0}'..='\u{2ebe0}' | '\u{2ebf0}'..='\u{2ee5d}'
+            | '\u{2f800}'..='\u{2fa1d}' | '\u{30000}'..='\u{3134a}' | '\u{31350}'..='\u{323af}'
             | '\u{ac00}'..='\u{d7a3}')
     }
-    /// Combining marks (general category Mn and Me), from the table `tools/lang_coverage.py`
-    /// reads too: std has no general category.
-    fn is_combining(c: char) -> bool {
-        static RANGES: std::sync::OnceLock<Vec<(u32, u32)>> = std::sync::OnceLock::new();
-        let ranges = RANGES.get_or_init(|| {
+    /// One of the sorted, disjoint range lists of `tools/lang_combining_marks.json`, which
+    /// `tools/lang_coverage.py` reads too: std has no general category.
+    fn in_table(name: &str, c: char) -> bool {
+        type Tables = HashMap<String, Vec<(u32, u32)>>;
+        static TABLES: std::sync::OnceLock<Tables> = std::sync::OnceLock::new();
+        let tables = TABLES.get_or_init(|| {
             let path = concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../tools/lang_combining_marks.json"
             );
-            let table: serde_json::Value =
+            let body: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-            serde_json::from_value(table["ranges"].clone()).unwrap()
+            ["combining", "format"]
+                .into_iter()
+                .map(|key| {
+                    let ranges = serde_json::from_value(body[key].clone()).unwrap();
+                    (key.to_owned(), ranges)
+                })
+                .collect()
         });
+        let ranges = &tables[name];
         let at = ranges.partition_point(|&(_, high)| high < c as u32);
         ranges.get(at).is_some_and(|&(low, _)| low <= c as u32)
+    }
+    /// A combining mark (general category Mn or Me).
+    fn is_combining(c: char) -> bool {
+        in_table("combining", c)
+    }
+    /// A format character (general category Cf: joiners, direction marks...).
+    fn is_format(c: char) -> bool {
+        in_table("format", c)
     }
     /// The legacy codes in `text` in order, ASCII ones lowercased: a `§` takes the character
     /// after it, whatever it is, and neither is drawn (`Text::resolve_legacy`); a `§` at the end
@@ -1112,24 +1131,21 @@ mod tests {
         }
         found
     }
-    /// The most characters in a row the game's wrapper cannot break between: it breaks at a
-    /// space and a line break only (`Font::split_lines`), and a spaceless script's letter ends a
-    /// run too.
+    /// The most characters one token holds that the game's wrapper cannot break inside: a token
+    /// is what lies between spaces and line breaks (`Font::split_lines` breaks there only), and
+    /// letters of a script written without spaces do not count, since a line of them is cut
+    /// where it overflows.
     fn longest_run(text: &str) -> usize {
-        let (mut longest, mut current) = (0, 0);
-        for c in text.chars() {
-            if c == ' ' || c == '\n' || is_spaceless_letter(c) {
-                current = 0;
-            } else {
-                current += 1;
-                longest = longest.max(current);
-            }
-        }
-        longest
+        text.split(['\n', ' '])
+            .map(|token| token.chars().filter(|&c| !is_spaceless_letter(c)).count())
+            .max()
+            .unwrap_or(0)
     }
+    /// The most combining marks in a row; a format character between them (a joiner, a
+    /// direction mark) neither counts nor ends the row.
     fn most_marks(text: &str) -> usize {
         let (mut most, mut current) = (0, 0);
-        for c in text.chars() {
+        for c in text.chars().filter(|&c| !is_format(c)) {
             current = if is_combining(c) { current + 1 } else { 0 };
             most = most.max(current);
         }

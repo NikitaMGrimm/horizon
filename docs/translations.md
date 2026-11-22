@@ -126,16 +126,18 @@ get in and where a single wrong string is still reported.
     character after it, any one; ASCII letters match without case), so no added colour, style or `§k` obfuscation;
   - **line breaks**: at most twice as many as the English text has, so none where it has none;
   - **length**: at most 4× the English length in characters or the English length + 80, whichever is more, and no
-    run of more than 60 characters the game cannot wrap unless the English text has a longer one. The game breaks a
-    line only at a space or a line break (a no-break or ideographic space doesn't count); a letter of a script
-    written without spaces (Han, kana, Hangul syllables, Thai, Lao, Khmer, Myanmar) ends a run, its marks don't;
+    token of more than 60 characters the game cannot wrap unless the English text has a longer one. A token is what
+    lies between spaces and line breaks, the only places the game breaks a line (a no-break or ideographic space
+    doesn't count); letters of a script written without spaces (Han, kana, Hangul syllables, Thai, Lao, Khmer,
+    Myanmar) don't count towards it, everything else in it does, their marks and unassigned code points included;
   - **invisible characters**: none of these the English text lacks: zero-width space, word joiner, line and
     paragraph separators, byte order mark, soft hyphen, combining grapheme joiner, Mongolian vowel separator, Hangul
     fillers, interlinear annotation controls, tags, noncharacters and private-use characters. A variation selector
     (Mongolian ones included) only after a character. Joiners (U+200C, U+200D) and direction marks (U+200E, U+200F,
     U+061C) stay allowed;
-  - **combining marks**: at most 4 in a row unless the English text has more (today's files stack at most 3;
-    `tools/lang_combining_marks.json` is the table both sides read);
+  - **combining marks**: at most 4 in a row unless the English text has more, a joiner or other format character
+    between them not ending the row (today's files stack at most 3; `tools/lang_combining_marks.json` is the table
+    both sides read);
   - **controls**: no control character but a line break, and a tab or a bidi control only where the English text
     has one; bidi embeddings, overrides and isolates close in order, and no more open than in the English text.
 - One import takes back at most 3 review marks in a language, or 10% of those the sync recorded for it if that is

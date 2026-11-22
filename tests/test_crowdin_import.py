@@ -147,7 +147,7 @@ class SyncTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root, lang, review, export = self.fixture(tmp)
             write(export, "es-ES.json", {"horizon.a": "Manzana\x1b[0m", "horizon.b": "%s %q",
-                                         "horizon.c": "Cereza ‮azerec"})
+                                         "horizon.c": "Cereza \u202eazerec"})
             code, _, err = run("--translations", export, "--approved", root / "approved",
                                "--lang", lang, "--review", review)
             self.assertEqual(code, 0)
