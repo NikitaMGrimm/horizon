@@ -1349,18 +1349,26 @@ impl Drop for Game<'_> {
 }
 
 fn check_export_server_command(blocked: bool, words: &[&str]) -> Result<()> {
-    if blocked
-        && matches!(
+    if !blocked {
+        return Ok(());
+    }
+    // A held take normally accepts commands that can reach the server through
+    // the console, UI or a helper. While waiting, admit only local or queued work.
+    let local_query = allowed_while_running(words)
+        && !matches!(
             words,
-            [
-                "simulation" | "mobs" | "getblock" | "container" | "setblock" | "fill",
-                ..
-            ] | ["lan", "status"]
+            ["simulation" | "mobs" | "memory" | "getblock" | "container", ..] | ["lan", "status"]
+        );
+    if local_query
+        || matches!(
+            words,
+            ["look" | "turn" | "tp" | "fly" | "disconnect", ..] | ["server-hold", "on" | "off"]
         )
     {
-        return Err("the integrated server is completing an export turn".into());
+        Ok(())
+    } else {
+        Err("the integrated server is completing an export turn".into())
     }
-    Ok(())
 }
 
 fn admit_control_output(
@@ -1460,6 +1468,10 @@ mod tests {
         for query in [
             &["getblock", "0", "64", "0"][..],
             &["container", "0", "64", "0"],
+            &["simulation"],
+            &["mobs"],
+            &["memory"],
+            &["lan", "status"],
         ] {
             assert!(allowed_while_running(query));
             assert!(check_export_server_command(true, query).is_err());

@@ -164,7 +164,9 @@ resumes its normal clock when export stops. Live settling waits for terrain work
 already queued on the client. Opening to LAN, starting splitscreen,
 or losing the integrated server interrupts the take. Starting a live export is
 unavailable in LAN, splitscreen, or remote multiplayer sessions. Replay export
-works without an integrated server.
+works without an integrated server. During live export startup or a pending
+server tick, `save`, `save-all`, and other commands that wait on the server return
+a busy error. Retry them once a held export is idle.
 
 ## Replies
 

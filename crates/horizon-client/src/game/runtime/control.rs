@@ -707,7 +707,7 @@ impl Game<'_> {
                     _ => return Err("server-hold on|off".into()),
                 };
                 if let Some(server) = &self.integrated {
-                    if server.running_export_tick()
+                    if self.export_server_calls_blocked()
                         || self
                             .export
                             .as_ref()

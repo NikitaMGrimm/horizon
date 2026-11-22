@@ -55,6 +55,10 @@ impl LiveExport {
         self.start.is_none()
     }
 
+    fn waiting(&self) -> bool {
+        !self.started() || self.turn.is_some()
+    }
+
     pub(super) fn ready_for_frame(&self) -> bool {
         self.started() && self.turn.is_none() && self.steps == 0
     }
@@ -146,7 +150,7 @@ impl Game<'_> {
         self.export
             .as_ref()
             .and_then(|s| s.live.as_ref())
-            .is_some_and(|live| !live.started() || live.turn.is_some())
+            .is_some_and(LiveExport::waiting)
     }
 
     fn queue_export_loading_tick(&mut self) -> Result<()> {
@@ -251,7 +255,34 @@ impl LiveExport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::{Requests, check_export_server_command, parse_start};
     use crate::game::integrated::with_export_clock;
+
+    #[test]
+    fn held_export_startup_fence_refuses_synchronous_saves() {
+        with_export_clock(|server| {
+            let start = parse_start(&["take", "--size", "16x16", "--fps", "20", "--hold"]).unwrap();
+            let requests = Requests {
+                hold: start.hold,
+                ..Requests::default()
+            };
+            let mut live = LiveExport::new(server, 1).unwrap();
+            assert!(requests.held());
+            assert!(live.waiting());
+            for command in [["save"], ["save-all"]] {
+                assert!(requests.check_command(&command).is_ok());
+                assert!(check_export_server_command(live.waiting(), &command).is_err());
+            }
+            for command in [["export", "status"], ["export", "stop"]] {
+                assert!(check_export_server_command(live.waiting(), &command).is_ok());
+            }
+
+            live.start = None;
+            for command in [["save"], ["save-all"]] {
+                assert!(check_export_server_command(live.waiting(), &command).is_ok());
+            }
+        });
+    }
 
     #[test]
     fn a_credited_tick_keeps_ingress_closed_until_the_server_finishes() {
