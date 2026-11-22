@@ -1402,10 +1402,7 @@ pub(crate) fn remove(tag: &str) -> Result<(), String> {
     if !installed.iter().any(|t| t == tag) {
         return Err(format!("{tag} is not installed."));
     }
-    let settings = Settings::load_checked()?;
-    if let Some(instance) =
-        crate::instances::version_user(&installed, settings.selected.as_deref(), tag)?
-    {
+    if let Some(instance) = crate::instances::version_user(&installed, tag)? {
         return Err(crate::i18n::trf(
             "In use by {names}. Pick another version for it first.",
             &[("names", &instance)],
@@ -7929,6 +7926,7 @@ pub fn {f}("
             let root = tempfile::tempdir().unwrap();
             assert!(Command::new(std::env::current_exe().unwrap())
                 .args([
+                    "--include-ignored",
                     "--exact",
                     "backend::tests::pruning_rechecks_candidates_after_an_instance_pins_one"
                 ])

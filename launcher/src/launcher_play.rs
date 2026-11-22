@@ -278,11 +278,17 @@ impl Launcher {
     }
 
     pub(crate) fn play(&mut self) {
-        let java = self
+        let id = self
             .selected_instance()
-            .filter(|i| i.java.is_some())
-            .cloned();
-        if let Some(instance) = java {
+            .map_or(instances::DEFAULT, |i| i.id.as_str());
+        let instance = match instances::for_launch_id(id) {
+            Ok(instance) => instance,
+            Err(e) => {
+                self.client_error = Some(e);
+                return;
+            }
+        };
+        if instance.java.is_some() {
             // Mojang's game: no Horizon version or preparation, only no game already running.
             // It joins a server; a friend's code and opening a world are Horizon's.
             self.joining = None;
@@ -298,14 +304,18 @@ impl Launcher {
             self.start_java(instance, server);
             return;
         }
-        let Some(tag) = self.selected().cloned() else {
-            return;
+        let tag = match instance.resolve_version(None) {
+            Ok(tag) => tag,
+            Err(e) => {
+                self.client_error = Some(e);
+                return;
+            }
         };
         if !self.version_still_installed(&tag) || !self.can_start(&tag) {
             return;
         }
         self.starting_pack = None;
-        self.start_client(tag, self.selected_instance().map(|i| i.id.clone()));
+        self.start_client(tag, Some(instance.id));
     }
 
     /// Starts a Java instance's Minecraft, joining `server` if given: its files and Java first

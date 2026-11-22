@@ -38,21 +38,29 @@ pub fn list() -> Vec<Installed> {
 }
 
 pub(crate) fn list_in(dir: &Path) -> Vec<Installed> {
-    let mut packs: Vec<Installed> = fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| read(&e.path()))
-        .collect();
+    let mut packs: Vec<_> = list_results(dir).into_iter().flatten().flatten().collect();
     packs.sort_by_key(|p| p.name.to_lowercase());
     packs
 }
 
+pub(crate) fn list_checked_in(dir: &Path) -> Result<Vec<Installed>, String> {
+    list_results(dir)?.collect()
+}
+
+fn list_results(
+    dir: &Path,
+) -> Result<impl Iterator<Item = Result<Installed, String>> + '_, String> {
+    Ok(crate::modpacks::pack_folders(dir)?.map(|work| read_record(&work?)))
+}
+
 fn read(work: &Path) -> Option<Installed> {
-    let text = fs::read_to_string(work.join(RECORD)).ok()?;
-    let mut pack: Installed = serde_json::from_str(&text).ok()?;
+    read_record(work).ok()
+}
+
+fn read_record(work: &Path) -> Result<Installed, String> {
+    let mut pack: Installed = horizon_port_pack::pipeline::read_json(&work.join(RECORD))?;
     pack.work = work.to_path_buf();
-    Some(pack)
+    Ok(pack)
 }
 
 /// Whether `work` is a registry pack's folder.

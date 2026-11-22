@@ -351,7 +351,7 @@ fn use_version_pins_only_the_selected_horizon_instance_and_newest_clears_it() {
     let Some(root) = std::env::var_os("HORIZON_TEST_USE_VERSION") else {
         let root = tempfile::tempdir().unwrap();
         assert!(Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "instances::tests::use_version_pins_only_the_selected_horizon_instance_and_newest_clears_it"])
+            .args(["--include-ignored", "--exact", "instances::tests::use_version_pins_only_the_selected_horizon_instance_and_newest_clears_it"])
             .env("HORIZON_TEST_USE_VERSION", root.path())
             .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
             .env("HORIZON_HOME", root.path().join("game"))
@@ -418,7 +418,7 @@ fn migration_leaves_both_files_untouched_when_version_or_instance_data_cannot_be
     if std::env::var_os("HORIZON_TEST_MIGRATION_READ").is_none() {
         let root = tempfile::tempdir().unwrap();
         assert!(Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "instances::tests::migration_leaves_both_files_untouched_when_version_or_instance_data_cannot_be_read"])
+            .args(["--include-ignored", "--exact", "instances::tests::migration_leaves_both_files_untouched_when_version_or_instance_data_cannot_be_read"])
             .env("HORIZON_TEST_MIGRATION_READ", root.path())
             .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
             .env("HORIZON_HOME", root.path().join("game"))
@@ -456,6 +456,40 @@ fn migration_leaves_both_files_untouched_when_version_or_instance_data_cannot_be
     assert!(absorb_held_selection().unwrap_err().contains("versions"));
     assert_eq!(fs::read_to_string(&instances).unwrap(), saved);
     assert_eq!(fs::read_to_string(&settings).unwrap(), old_settings);
+
+    fs::remove_file(&versions).unwrap();
+    fs::rename(data.join("versions-kept"), &versions).unwrap();
+    let game = backend::game_home();
+    let port = game.join("ports/family-pack/pack.json");
+    let registry = game.join("horizon-packs/quiet/pack.json");
+    put(&port, "broken Java pack");
+    assert!(absorb_held_selection()
+        .unwrap_err()
+        .contains(&port.display().to_string()));
+    assert_eq!(fs::read_to_string(&instances).unwrap(), saved);
+    assert_eq!(fs::read_to_string(&settings).unwrap(), old_settings);
+
+    let manifest = horizon_port_pack::import::Pack {
+        name: "Family pack".into(),
+        ..Default::default()
+    };
+    put(&port, &serde_json::to_string(&manifest).unwrap());
+    fs::create_dir_all(registry.parent().unwrap()).unwrap();
+    assert!(absorb_held_selection()
+        .unwrap_err()
+        .contains(&registry.display().to_string()));
+    assert_eq!(fs::read_to_string(&instances).unwrap(), saved);
+    assert_eq!(fs::read_to_string(&settings).unwrap(), old_settings);
+
+    put(
+        &registry,
+        r#"{"id":"quiet","name":"Quiet","version":"1.0","sha256":"00","mods":[]}"#,
+    );
+    absorb_held_selection().unwrap();
+    assert!(backend::Settings::load().instance_versions_migrated);
+    for id in ["port:family-pack", "pack:quiet"] {
+        assert_eq!(find(id).unwrap().version.as_deref(), Some(NOV_21));
+    }
 }
 
 #[test]
@@ -524,6 +558,43 @@ fn migration_keeps_a_legacy_follower_on_latest_as_new_builds_arrive() {
             .as_deref(),
         Some(NOV_22)
     );
+}
+
+#[test]
+fn installation_edit_refuses_a_deleted_build_unless_a_download_is_ready() {
+    if std::env::var_os("HORIZON_TEST_INSTALLATION_EDIT").is_none() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(Command::new(std::env::current_exe().unwrap())
+            .args(["--include-ignored", "--exact", "instances::tests::installation_edit_refuses_a_deleted_build_unless_a_download_is_ready"])
+            .env("HORIZON_TEST_INSTALLATION_EDIT", "1")
+            .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+            .env("HORIZON_HOME", root.path().join("game"))
+            .env("HORIZON_LAUNCHER_LOCATION_FILE", root.path().join("location.json"))
+            .status().unwrap().success());
+        return;
+    }
+    let older = backend::version_dir(NOV_21);
+    put(&older.join(backend::COMPLETE), "");
+    put(&older.join(backend::CLIENT), "pre-holder game");
+    put(&backend::version_dir(NOV_22).join(backend::COMPLETE), "");
+    let instance = create_java("Switching", "26.3").unwrap();
+    let save = |meta: &mut Meta| {
+        Plays::Horizon.apply_to(meta);
+        meta.version = Some(NOV_21.into());
+    };
+    assert!(backend::installed().contains(&NOV_21.into()));
+    backend::remove_version(NOV_21).unwrap();
+    let store = backend::data_dir().join(FILE);
+    let saved = fs::read(&store).unwrap();
+
+    let error = edit_installation(&instance.id, None, save).unwrap_err();
+    assert!(error.contains(NOV_21));
+    assert_eq!(fs::read(&store).unwrap(), saved);
+    assert!(for_launch_id(&instance.id).unwrap().java.is_some());
+
+    let pending = edit_installation(&instance.id, Some(NOV_21), save).unwrap();
+    assert!(pending.java.is_none());
+    assert_eq!(pending.version.as_deref(), Some(NOV_21));
 }
 
 #[test]

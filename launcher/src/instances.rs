@@ -444,6 +444,32 @@ fn own_folders(game_home: &Path) -> Result<Option<Vec<String>>, String> {
 }
 
 fn list_with_store(game_home: &Path, own: Vec<String>, store: &Store) -> Vec<Instance> {
+    list_with_packs(
+        game_home,
+        own,
+        store,
+        modpacks::listed_in(&game_home.join("ports")),
+        registry_pack::list_in(&game_home.join("horizon-packs")),
+    )
+}
+
+fn list_checked_with_store(game_home: &Path, store: &Store) -> Result<Vec<Instance>, String> {
+    Ok(list_with_packs(
+        game_home,
+        own_folders(game_home)?.unwrap_or_default(),
+        store,
+        modpacks::listed_checked_in(&game_home.join("ports"))?,
+        registry_pack::list_checked_in(&game_home.join("horizon-packs"))?,
+    ))
+}
+
+fn list_with_packs(
+    game_home: &Path,
+    own: Vec<String>,
+    store: &Store,
+    ports: Vec<modpacks::Listed>,
+    packs: Vec<registry_pack::Installed>,
+) -> Vec<Instance> {
     let mut found = vec![(
         DEFAULT.to_string(),
         "Horizon".to_string(),
@@ -455,7 +481,7 @@ fn list_with_store(game_home: &Path, own: Vec<String>, store: &Store) -> Vec<Ins
         let dir = game_home.join(OWN).join(&slug);
         found.push((slug.clone(), slug, Kind::Own, dir.clone(), dir));
     }
-    for p in modpacks::listed_in(&game_home.join("ports")) {
+    for p in ports {
         let home = modpacks::profile_home(&p.work);
         found.push((
             format!("port:{}", p.slug),
@@ -465,7 +491,7 @@ fn list_with_store(game_home: &Path, own: Vec<String>, store: &Store) -> Vec<Ins
             home,
         ));
     }
-    for p in registry_pack::list_in(&game_home.join("horizon-packs")) {
+    for p in packs {
         let home = registry_pack::home(&p.work);
         found.push((format!("pack:{}", p.id), p.name, Kind::Pack, p.work, home));
     }
@@ -502,6 +528,53 @@ fn list_with_store(game_home: &Path, own: Vec<String>, store: &Store) -> Vec<Ins
 /// The instance an id, a name (any case) or a pack's folder name names.
 pub fn find(query: &str) -> Result<Instance, String> {
     find_in(&list(), query)
+}
+
+/// Read saved metadata before launching. A damaged store cannot select an unpinned default.
+pub fn for_launch(query: Option<&str>) -> Result<Instance, String> {
+    let all = launch_instances()?;
+    match query {
+        Some(query) => find_in(&all, query),
+        None => {
+            let settings = backend::Settings::load_checked()?;
+            Ok(selected_in(&all, &settings).clone())
+        }
+    }
+}
+
+/// A window's Play button targets the exact instance it displayed.
+pub fn for_launch_id(id: &str) -> Result<Instance, String> {
+    launch_instances()?
+        .into_iter()
+        .find(|i| i.id == id)
+        .ok_or_else(|| instance_unavailable(id))
+}
+
+fn instance_unavailable(id: &str) -> String {
+    crate::i18n::trf(
+        "Instance {instance} is no longer available.",
+        &[("instance", id)],
+    )
+}
+
+/// Finds the saved instance for a modpack's own Play command.
+pub fn pack_for_launch(work: &Path) -> Result<Option<Instance>, String> {
+    Ok(launch_instances()?.into_iter().find(|i| i.work == work))
+}
+
+fn launch_instances() -> Result<Vec<Instance>, String> {
+    let game_home = backend::game_home();
+    let store = Store::load(&backend::data_dir()).map_err(|e| {
+        crate::i18n::trf(
+            "Could not read instance settings: {error}",
+            &[("error", &e)],
+        )
+    })?;
+    Ok(list_with_store(
+        &game_home,
+        own_folders(&game_home)?.unwrap_or_default(),
+        &store,
+    ))
 }
 
 fn find_in(all: &[Instance], query: &str) -> Result<Instance, String> {
@@ -573,11 +646,13 @@ pub fn selected() -> Instance {
 }
 
 pub(crate) fn selected_with(settings: &backend::Settings) -> Instance {
-    let all = list();
+    selected_in(&list(), settings).clone()
+}
+
+fn selected_in<'a>(all: &'a [Instance], settings: &backend::Settings) -> &'a Instance {
     all.iter()
         .find(|i| Some(i.id.as_str()) == settings.instance.as_deref())
         .unwrap_or(&all[0])
-        .clone()
 }
 
 /// Use an installed build for the instance Play starts. Choosing the channel's Latest follows it.
@@ -602,16 +677,11 @@ fn use_version_in(id: Option<&str>, tag: &str) -> Result<(), String> {
         &store,
     );
     let instance = match id {
-        Some(id) => all.iter().find(|i| i.id == id).ok_or_else(|| {
-            crate::i18n::trf(
-                "Instance {instance} is no longer available.",
-                &[("instance", id)],
-            )
-        })?,
-        None => all
+        Some(id) => all
             .iter()
-            .find(|i| Some(i.id.as_str()) == settings.instance.as_deref())
-            .unwrap_or(&all[0]),
+            .find(|i| i.id == id)
+            .ok_or_else(|| instance_unavailable(id))?,
+        None => selected_in(&all, &settings),
     };
     if instance.java.is_some() {
         return Ok(());
@@ -640,8 +710,7 @@ fn used_versions(
 ) -> Result<impl Iterator<Item = (String, String)>, String> {
     let game_home = backend::game_home();
     let store = Store::load(&backend::data_dir())?;
-    let own = own_folders(&game_home)?.unwrap_or_default();
-    let all = list_with_store(&game_home, own, &store);
+    let all = list_checked_with_store(&game_home, &store)?;
     let mut used = Vec::new();
     for instance in all {
         if let Some(tag) = instance
@@ -652,7 +721,7 @@ fn used_versions(
             used.push((tag, instance.name));
         }
     }
-    // Pack discovery skips unreadable manifests. Their saved pins still protect the builds.
+    // Keep saved pins if a removed pack's folder is put back later.
     used.extend(
         store
             .instances
@@ -672,12 +741,9 @@ pub(crate) fn protected_versions(
         .collect())
 }
 
-pub(crate) fn version_user(
-    installed: &[String],
-    selected: Option<&str>,
-    tag: &str,
-) -> Result<Option<String>, String> {
-    Ok(used_versions(installed, selected)?
+pub(crate) fn version_user(installed: &[String], tag: &str) -> Result<Option<String>, String> {
+    let settings = backend::Settings::load_checked()?;
+    Ok(used_versions(installed, settings.selected.as_deref())?
         .find(|(used, _)| used == tag)
         .map(|(_, name)| name))
 }
@@ -714,8 +780,7 @@ fn absorb_held_selection_in(
         .or_else(|| installed.first());
     let newest = nightly::latest_for(Channel::Nightly, installed, None);
     let mut store = Store::load(data)?;
-    let own = own_folders(game_home)?.unwrap_or_default();
-    let instances = list_with_store(game_home, own, &store);
+    let instances = list_checked_with_store(game_home, &store)?;
     let mut changed = false;
     for instance in instances.into_iter().filter(Instance::follows_horizon) {
         let old = match instance.channel {
@@ -968,6 +1033,32 @@ pub fn pin_installed_version(query: &str, pin: Option<&str>) -> Result<Instance,
         meta.version = pin
             .map(|tag| backend::resolve_version(Some(tag)))
             .transpose()?;
+        Ok(())
+    })
+}
+
+/// Applies a dialog's edits and verifies a new pin before committing them. An absent build can
+/// be pinned only when the dialog has a download ready for it.
+pub fn edit_installation(
+    query: &str,
+    downloading: Option<&str>,
+    change: impl FnOnce(&mut Meta),
+) -> Result<Instance, String> {
+    edit_checked_in(&backend::game_home(), &backend::data_dir(), query, |meta| {
+        let before = meta.version.clone();
+        change(meta);
+        if let Some(tag) = meta
+            .version
+            .as_deref()
+            .filter(|tag| Some(*tag) != before.as_deref() && Some(*tag) != downloading)
+        {
+            if !backend::installed_checked()?
+                .iter()
+                .any(|installed| installed == tag)
+            {
+                return Err(backend::version_gone(tag));
+            }
+        }
         Ok(())
     })
 }

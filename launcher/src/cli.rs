@@ -1522,10 +1522,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<i32, String> {
             arg,
             account,
         } => {
-            let instance = match instance {
-                Some(name) => instances::find(&name)?,
-                None => instances::selected(),
-            };
+            let instance = instances::for_launch(instance.as_deref())?;
             if instance.java.is_some() {
                 if version.is_some()
                     || world.is_some()
@@ -3682,8 +3679,13 @@ fn modpack(action: ModpackCmd, as_json: bool) -> Result<i32, String> {
             version,
             allow_jar_downloads,
         } => {
-            let mut cmd = backend::client(&backend::resolve_version(version.as_deref())?)?;
-            modpacks::apply_profile(&mut cmd, &work(&pack)?)?;
+            let work = work(&pack)?;
+            let tag = match instances::pack_for_launch(&work)? {
+                Some(instance) => instance.resolve_version(version.as_deref())?,
+                None => backend::resolve_version(version.as_deref())?,
+            };
+            let mut cmd = backend::client(&tag)?;
+            modpacks::apply_profile(&mut cmd, &work)?;
             horizon_launcher::jars::prepare_launch(
                 &mut cmd,
                 &Default::default(),
@@ -3835,6 +3837,76 @@ mod tests {
         );
         set_setting(&mut settings, "language", "system").unwrap();
         assert_eq!(settings.language, None);
+    }
+
+    #[test]
+    fn play_refuses_unreadable_instance_metadata_after_migration() {
+        if std::env::var_os("HORIZON_TEST_PLAY_STORE").is_none() {
+            let root = tempfile::tempdir().unwrap();
+            assert!(Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--include-ignored",
+                    "--exact",
+                    "cli::tests::play_refuses_unreadable_instance_metadata_after_migration"
+                ])
+                .env("HORIZON_TEST_PLAY_STORE", "1")
+                .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+                .env("HORIZON_HOME", root.path().join("game"))
+                .env(
+                    "HORIZON_LAUNCHER_LOCATION_FILE",
+                    root.path().join("location.json")
+                )
+                .status()
+                .unwrap()
+                .success());
+            return;
+        }
+        backend::Settings {
+            instance_versions_migrated: true,
+            ..backend::Settings::default()
+        }
+        .save()
+        .unwrap();
+        let data = backend::data_dir();
+        let store = data.join("instances.json");
+        let old = "nightly-2026-11-21-aaaaaaa";
+        let new = "nightly-2026-11-22-bbbbbbb";
+        for tag in [old, new] {
+            let version = backend::version_dir(tag);
+            std::fs::create_dir_all(&version).unwrap();
+            std::fs::write(version.join(".installed"), "").unwrap();
+        }
+        instances::pin_installed_version(instances::DEFAULT, Some(old)).unwrap();
+        let saved = std::fs::read(&store).unwrap();
+        assert_eq!(
+            instances::for_launch_id(instances::DEFAULT)
+                .unwrap()
+                .resolve_version(None)
+                .unwrap(),
+            old
+        );
+        std::fs::write(&store, b"{broken").unwrap();
+        assert!(instances::absorb_held_selection().is_ok());
+        for argv in [
+            vec!["horizon-launcher", "play"],
+            vec!["horizon-launcher", "play", "--instance", "Horizon"],
+        ] {
+            let command = Cli::try_parse_from(argv).unwrap().command.unwrap();
+            assert!(execute(command, false)
+                .unwrap_err()
+                .contains("instances.json"));
+        }
+        assert!(instances::for_launch_id(instances::DEFAULT)
+            .unwrap_err()
+            .contains("instances.json"));
+        std::fs::write(&store, saved).unwrap();
+        assert_eq!(
+            instances::for_launch(None)
+                .unwrap()
+                .resolve_version(None)
+                .unwrap(),
+            old
+        );
     }
 
     #[test]

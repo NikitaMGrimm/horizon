@@ -51,23 +51,32 @@ impl Launcher {
             self.accounts = Accounts::load();
             // A pack's Play button plays that pack; Play plays the selected instance.
             let pack = self.starting_pack.take();
-            let instance = match &pack {
-                Some(work) => instances::list().into_iter().find(|i| &i.work == work),
-                None => {
-                    let Some(instance) = instances::list()
-                        .into_iter()
-                        .find(|i| Some(&i.id) == instance_id.as_ref())
-                    else {
-                        self.client_error = Some(
-                            tr("This instance no longer exists. Choose another instance to play.")
-                                .into(),
-                        );
-                        self.joining = None;
-                        self.quick_play = None;
-                        account::discard_unread_sessions();
-                        return;
-                    };
-                    Some(instance)
+            let instance = match (&pack, instance_id.as_deref()) {
+                (Some(work), _) => instances::pack_for_launch(work),
+                (None, Some(id)) => instances::for_launch_id(id).map(Some),
+                (None, None) => Err(tr(
+                    "This instance no longer exists. Choose another instance to play.",
+                )
+                .into()),
+            }
+            .and_then(|instance| {
+                let live_tag = instance
+                    .as_ref()
+                    .map(|i| i.resolve_version(None))
+                    .transpose()?;
+                if live_tag.as_deref().is_some_and(|live| live != tag) {
+                    return Err(tr("The instance's version changed. Press Play again.").into());
+                }
+                Ok(instance)
+            });
+            let instance = match instance {
+                Ok(instance) => instance,
+                Err(e) => {
+                    self.client_error = Some(e);
+                    self.joining = None;
+                    self.quick_play = None;
+                    account::discard_unread_sessions();
+                    return;
                 }
             };
             let run = instance.as_ref().map(|i| i.id.clone());

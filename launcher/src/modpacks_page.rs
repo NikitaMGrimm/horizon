@@ -205,14 +205,16 @@ impl Launcher {
 
     fn play_pack(&mut self, work: PathBuf) {
         // The pack's instance plays its own version, if it has one.
-        let pack = self.instances.list.iter().find(|i| i.work == work);
-        let pack_id = pack.map(|i| i.id.clone());
-        let Some(tag) = pack
-            .and_then(|i| self.version_of(i))
-            .or_else(|| self.launcher_version())
-            .cloned()
-        else {
-            return;
+        let pack = instances::pack_for_launch(&work).and_then(|pack| match pack {
+            Some(instance) => Ok((instance.resolve_version(None)?, Some(instance.id))),
+            None => Ok((backend::resolve_version(None)?, None)),
+        });
+        let (tag, pack_id) = match pack {
+            Ok(launch) => launch,
+            Err(e) => {
+                self.pack_error = Some(e);
+                return;
+            }
         };
         if !self.can_start(&tag) {
             return;

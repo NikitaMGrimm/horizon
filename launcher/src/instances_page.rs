@@ -492,7 +492,8 @@ impl Launcher {
         let Some(d) = self.instances.dialog.as_mut() else {
             return;
         };
-        let download = download.filter(|_| plays_horizon);
+        let download =
+            download.filter(|release| plays_horizon && !self.removing.contains(&release.tag));
         let (java, name) = match (java, minecraft) {
             (Some(_), Some(None)) => {
                 d.error = Some(tr("Mojang's version list isn't here yet.").into());
@@ -510,14 +511,11 @@ impl Launcher {
         };
         d.busy = true;
         d.error = None;
+        let downloading = download.as_ref().map(|release| release.tag.clone());
         let task = cx.background_executor().spawn(async move {
+            let switch_to = switch_to.map(new_instance::with_loader).transpose()?;
             let id = match (editing, java) {
-                (Some(id), _) => {
-                    if let Some(to) = switch_to {
-                        instances::switch(&id, new_instance::with_loader(to)?)?;
-                    }
-                    id
-                }
+                (Some(id), _) => id,
                 (None, Some((j, mc))) => new_instance::create_java(&j, &name, &mc)?.id,
                 (None, None) => instances::create(&name, copy.as_deref())?.id,
             };
@@ -530,7 +528,10 @@ impl Launcher {
                     &horizon_launcher::desktop_seams::to_trash,
                 )?;
             }
-            let instance = instances::edit(&id, |m| {
+            instances::edit_installation(&id, downloading.as_deref(), |m| {
+                if let Some(game) = switch_to {
+                    game.apply_to(m);
+                }
                 m.name = Some(name);
                 m.group = group;
                 m.icon = icon;
@@ -548,8 +549,7 @@ impl Launcher {
                     m.version = pin;
                     m.channel = Some(channel);
                 }
-            })?;
-            Ok(instance)
+            })
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -585,6 +585,7 @@ impl Launcher {
                         }
                     }
                     Err(e) => {
+                        this.installed = backend::installed();
                         if let Some(d) = &mut this.instances.dialog {
                             d.busy = false;
                             d.error = Some(e);
