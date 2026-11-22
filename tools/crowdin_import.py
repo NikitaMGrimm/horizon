@@ -10,8 +10,8 @@ Called by `.github/workflows/crowdin.yml` with two exports of the same project:
     python3 tools/crowdin_import.py --translations l10n/game --approved l10n/game-approved
 
 `--translations` holds every translation in the project, `--approved` the same languages carrying
-only proofread strings (`export_only_approved`, through the same crowdin.yml). A key is recorded as
-reviewed exactly when the approved export has it with the text this run wrote: that is the rule
+only proofread strings (`export_only_approved`, `.github/crowdin-approved.yml`). A key is recorded
+as reviewed exactly when the approved export has it with the text this run wrote: that is the rule
 docs/translations.md states, and it is why an edit a translator makes without a proofread takes the
 mark off again by itself.
 
