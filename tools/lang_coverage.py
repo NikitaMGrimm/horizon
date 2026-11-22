@@ -189,18 +189,57 @@ def stray_controls(english: str, text: str) -> list[str]:
 LENGTH_FACTOR = 4  # at most this many times the English length, in characters...
 LENGTH_SLACK = 80  # ...or the English length plus this many, whichever is more
 MAX_RUN = 60  # the longest run without a break, unless the English text has a longer one
+MAX_MARKS = 4  # the most combining marks in a row, unless the English text has more
 
 # Invisible characters a translation may carry only where its English text has the same one:
-# zero-width space, line and paragraph separators, the byte order mark. Tag characters,
-# noncharacters and private-use characters are checked by range (`invisible`).
-INVISIBLE = frozenset("​  ﻿")
+# zero-width space and word joiner, line and paragraph separators, the byte order mark, the soft
+# hyphen, the combining grapheme joiner, the Mongolian vowel separator, the Hangul fillers and the
+# interlinear annotation controls. Tag characters, noncharacters and private-use characters are
+# checked by range (`invisible`).
+INVISIBLE = frozenset("​⁠  ﻿­͏᠎"
+                      "ᅟᅠㅤﾠ￹￺￻")
 # Openers of a bidi embedding or override (closed by U+202C) and of an isolate (closed by U+2069).
 EMBEDDINGS, ISOLATES = frozenset("‪‫‭‮"), frozenset("⁦⁧⁨")
-# Scripts written without spaces between words (Han, kana, Thai, Lao, Khmer, Myanmar, Tibetan and
-# their punctuation): a line may break after any of their characters, so they end a run.
-SPACELESS = ((0x0E00, 0x0FFF), (0x1000, 0x109F), (0x1780, 0x17FF), (0x3000, 0x30FF),
-             (0x31F0, 0x31FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF),
-             (0xFF00, 0xFFEF), (0x20000, 0x3FFFF))
+# Letters of scripts written without spaces between words (Han, kana, Hangul syllables, Thai, Lao,
+# Khmer, Myanmar): the game's wrapper breaks only at a space and cuts a longer line where it
+# overflows, so a run of these is no unbroken word. Their marks, tone marks and fillers are not
+# letters: they count towards a run like any other character.
+SPACELESS_LETTERS = (
+    (0x0E01, 0x0E30), (0x0E32, 0x0E33), (0x0E40, 0x0E46),  # Thai
+    (0x0E81, 0x0EB0), (0x0EB2, 0x0EB3), (0x0EBD, 0x0EBD), (0x0EC0, 0x0EC4), (0x0EC6, 0x0EC6),
+    (0x0EDC, 0x0EDF),  # Lao
+    (0x1000, 0x102A), (0x103F, 0x103F), (0x1050, 0x1055),  # Myanmar
+    (0x1780, 0x17B3),  # Khmer
+    (0x3041, 0x3096), (0x309D, 0x309F), (0x30A1, 0x30FA), (0x30FC, 0x30FF), (0x31F0, 0x31FF),
+    (0xFF66, 0xFF9D),  # kana
+    (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0x20000, 0x3FFFF),  # Han
+    (0xAC00, 0xD7A3),  # Hangul syllables
+)
+COMBINING_MARKS_FILE = ROOT / "tools/lang_combining_marks.json"
+
+
+def _ranges_contain(ranges, c: str) -> bool:
+    o = ord(c)
+    return any(low <= o <= high for low, high in ranges)
+
+
+_COMBINING: list[tuple[int, int]] = []
+
+
+def combining(c: str) -> bool:
+    """A combining mark (general category Mn or Me), from the table both sides read."""
+    if not _COMBINING:
+        _COMBINING.extend(map(tuple, json.loads(
+            COMBINING_MARKS_FILE.read_text(encoding="utf-8"))["ranges"]))
+    o = ord(c)
+    low, high = 0, len(_COMBINING)
+    while low < high:  # the ranges are sorted and do not overlap
+        middle = (low + high) // 2
+        if _COMBINING[middle][1] < o:
+            low = middle + 1
+        else:
+            high = middle
+    return low < len(_COMBINING) and _COMBINING[low][0] <= o
 
 
 def invisible(c: str) -> bool:
@@ -211,32 +250,44 @@ def invisible(c: str) -> bool:
 
 
 def variation_selector(c: str) -> bool:
-    return 0xFE00 <= ord(c) <= 0xFE0F or 0xE0100 <= ord(c) <= 0xE01EF
+    o = ord(c)
+    return (0xFE00 <= o <= 0xFE0F or 0xE0100 <= o <= 0xE01EF
+            or 0x180B <= o <= 0x180D or o == 0x180F)  # Mongolian free variation selectors
 
 
-def formatting_codes(text: str) -> set[str]:
-    """The legacy codes in `text`: a `§` takes the character after it, whatever it is, and the
-    game draws neither (`Text::resolve_legacy`); an ASCII code is matched without case. A `§` at the
-    end is a code of its own ("")."""
-    found, i = set(), 0
+def formatting_codes(text: str) -> list[str]:
+    """The legacy codes in `text`, in order: a `§` takes the character after it, whatever it is,
+    and the game draws neither (`Text::resolve_legacy`); an ASCII code is matched without case.
+    A `§` at the end is a code of its own ("")."""
+    found, i = [], 0
     while (at := text.find("§", i)) != -1:
         code = text[at + 1:at + 2]
-        found.add(code.lower() if code.isascii() else code)  # to_ascii_lowercase
+        found.append(code.lower() if code.isascii() else code)  # to_ascii_lowercase
         i = at + 2
     return found
 
 
 def longest_run(text: str) -> int:
-    """The most characters in a row with no whitespace and no character of a script written
-    without spaces."""
+    """The most characters in a row the game's wrapper cannot break between: it breaks at a space
+    and a line break only (`Font::split_lines`), and a letter of a script written without spaces
+    ends a run too."""
     longest = current = 0
     for c in text:
-        if c.isspace() or any(low <= ord(c) <= high for low, high in SPACELESS):
+        if c in " \n" or _ranges_contain(SPACELESS_LETTERS, c):
             current = 0
         else:
             current += 1
             longest = max(longest, current)
     return longest
+
+
+def most_marks(text: str) -> int:
+    """The most combining marks in a row."""
+    most = current = 0
+    for c in text:
+        current = current + 1 if combining(c) else 0
+        most = max(most, current)
+    return most
 
 
 def bidi_balanced(english: str, text: str) -> bool:
@@ -266,6 +317,8 @@ def text_problem(english: str, text: str) -> str | None:
         if variation_selector(c) and (i == 0 or text[i - 1].isspace()
                                       or variation_selector(text[i - 1])):
             return "invisible"
+    if most_marks(text) > max(MAX_MARKS, most_marks(english)):
+        return "combining_marks"
     if not bidi_balanced(english, text):
         return "bidi"
     if formatting_codes(text) != formatting_codes(english):

@@ -1033,6 +1033,7 @@ mod tests {
         text_problem(english, value).map(|rule| match rule {
             "control" => "carries a control character its English text lacks",
             "invisible" => "carries an invisible character its English text lacks",
+            "combining_marks" => "stacks more combining marks than its English text allows",
             "bidi" => "opens bidi controls it does not close, or more than its English text",
             "formatting_code" => "has other `§` formatting codes than its English text",
             "line_break" => "has more line breaks than twice its English text's",
@@ -1042,15 +1043,19 @@ mod tests {
     }
 
     /// At most this many times the English length in characters, or the English length plus
-    /// `LENGTH_SLACK`, whichever is more; the longest run without a break is `MAX_RUN` unless
-    /// English has a longer one. The same as `tools/lang_coverage.py`.
+    /// `LENGTH_SLACK`, whichever is more; the longest run without a break is `MAX_RUN`, and the
+    /// most combining marks in a row `MAX_MARKS`, unless English has more. The same as
+    /// `tools/lang_coverage.py`.
     const LENGTH_FACTOR: usize = 4;
     const LENGTH_SLACK: usize = 80;
     const MAX_RUN: usize = 60;
+    const MAX_MARKS: usize = 4;
 
     fn is_invisible(c: char) -> bool {
         matches!(c,
-            '\u{200b}' | '\u{2028}' | '\u{2029}' | '\u{feff}'
+            '\u{200b}' | '\u{2060}' | '\u{2028}' | '\u{2029}' | '\u{feff}' | '\u{ad}' | '\u{34f}'
+            | '\u{180e}' | '\u{115f}' | '\u{1160}' | '\u{3164}' | '\u{ffa0}'
+            | '\u{fff9}'..='\u{fffb}'
             | '\u{e0000}'..='\u{e007f}'
             | '\u{fdd0}'..='\u{fdef}'
             | '\u{e000}'..='\u{f8ff}'
@@ -1059,39 +1064,61 @@ mod tests {
             || ((c as u32) & 0xfffe) == 0xfffe
     }
     fn is_variation_selector(c: char) -> bool {
-        matches!(c, '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}')
-    }
-    /// Scripts written without spaces between words: a line may break after any of their
-    /// characters, so they end a run.
-    fn is_spaceless(c: char) -> bool {
         matches!(c,
-            '\u{0e00}'..='\u{0fff}'
-            | '\u{1000}'..='\u{109f}'
-            | '\u{1780}'..='\u{17ff}'
-            | '\u{3000}'..='\u{30ff}'
-            | '\u{31f0}'..='\u{31ff}'
-            | '\u{3400}'..='\u{4dbf}'
-            | '\u{4e00}'..='\u{9fff}'
-            | '\u{f900}'..='\u{faff}'
-            | '\u{ff00}'..='\u{ffef}'
-            | '\u{20000}'..='\u{3ffff}')
+            '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}' | '\u{180b}'..='\u{180d}' | '\u{180f}')
     }
-    /// The legacy codes in `text`, lowercased: a `§` takes the character after it, whatever it
-    /// is, and neither is drawn (`Text::resolve_legacy`); a `§` at the end is a code of its own.
-    fn formatting_codes(text: &str) -> std::collections::BTreeSet<Option<char>> {
-        let mut found = std::collections::BTreeSet::new();
+    /// Letters of scripts written without spaces (Thai, Lao, Myanmar, Khmer, kana, Han, Hangul
+    /// syllables): the game's wrapper breaks only at a space and cuts a longer line where it
+    /// overflows, so a run of these is no unbroken word. Their marks and fillers are no letters.
+    fn is_spaceless_letter(c: char) -> bool {
+        matches!(c,
+            '\u{0e01}'..='\u{0e30}' | '\u{0e32}'..='\u{0e33}' | '\u{0e40}'..='\u{0e46}'
+            | '\u{0e81}'..='\u{0eb0}' | '\u{0eb2}'..='\u{0eb3}' | '\u{0ebd}' | '\u{0ec0}'..='\u{0ec4}'
+            | '\u{0ec6}' | '\u{0edc}'..='\u{0edf}'
+            | '\u{1000}'..='\u{102a}' | '\u{103f}' | '\u{1050}'..='\u{1055}'
+            | '\u{1780}'..='\u{17b3}'
+            | '\u{3041}'..='\u{3096}' | '\u{309d}'..='\u{309f}' | '\u{30a1}'..='\u{30fa}'
+            | '\u{30fc}'..='\u{30ff}' | '\u{31f0}'..='\u{31ff}' | '\u{ff66}'..='\u{ff9d}'
+            | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'
+            | '\u{20000}'..='\u{3ffff}'
+            | '\u{ac00}'..='\u{d7a3}')
+    }
+    /// Combining marks (general category Mn and Me), from the table `tools/lang_coverage.py`
+    /// reads too: std has no general category.
+    fn is_combining(c: char) -> bool {
+        static RANGES: std::sync::OnceLock<Vec<(u32, u32)>> = std::sync::OnceLock::new();
+        let ranges = RANGES.get_or_init(|| {
+            let path = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tools/lang_combining_marks.json"
+            );
+            let table: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            serde_json::from_value(table["ranges"].clone()).unwrap()
+        });
+        let at = ranges.partition_point(|&(_, high)| high < c as u32);
+        ranges.get(at).is_some_and(|&(low, _)| low <= c as u32)
+    }
+    /// The legacy codes in `text` in order, ASCII ones lowercased: a `§` takes the character
+    /// after it, whatever it is, and neither is drawn (`Text::resolve_legacy`); a `§` at the end
+    /// is a code of its own.
+    fn formatting_codes(text: &str) -> Vec<Option<char>> {
+        let mut found = Vec::new();
         let mut chars = text.chars();
         while let Some(c) = chars.next() {
             if c == '§' {
-                found.insert(chars.next().map(|code| code.to_ascii_lowercase()));
+                found.push(chars.next().map(|code| code.to_ascii_lowercase()));
             }
         }
         found
     }
+    /// The most characters in a row the game's wrapper cannot break between: it breaks at a
+    /// space and a line break only (`Font::split_lines`), and a spaceless script's letter ends a
+    /// run too.
     fn longest_run(text: &str) -> usize {
         let (mut longest, mut current) = (0, 0);
         for c in text.chars() {
-            if c.is_whitespace() || is_spaceless(c) {
+            if c == ' ' || c == '\n' || is_spaceless_letter(c) {
                 current = 0;
             } else {
                 current += 1;
@@ -1099,6 +1126,14 @@ mod tests {
             }
         }
         longest
+    }
+    fn most_marks(text: &str) -> usize {
+        let (mut most, mut current) = (0, 0);
+        for c in text.chars() {
+            current = if is_combining(c) { current + 1 } else { 0 };
+            most = most.max(current);
+        }
+        most
     }
     /// Every bidi embedding, override and isolate `text` opens it closes, nested, and no more of
     /// each than English opens.
@@ -1148,6 +1183,9 @@ mod tests {
             }
             previous = Some(c);
         }
+        if most_marks(text) > MAX_MARKS.max(most_marks(english)) {
+            return Some("combining_marks");
+        }
         if !bidi_balanced(english, text) {
             return Some("bidi");
         }
@@ -1194,7 +1232,7 @@ mod tests {
         assert_eq!(problem("%2$s, %1$s", "%s and %s"), None);
         assert_eq!(problem("50% off %s, %%", "%s"), None);
         assert_eq!(problem("50 % de %s", "50%% off %s"), None);
-        assert_eq!(problem("line\nnext", "line"), None);
+        assert_eq!(problem("line\nnext", "one\ntwo"), None);
         assert_eq!(problem("a\u{2067}b\u{2069}", "\u{2067}x\u{2069}"), None);
         for (value, english) in [
             ("%s %q", "%s %s"),

@@ -338,7 +338,7 @@ class SyncTests(unittest.TestCase):
             row = next(row for row in rows if row["code"] == "es_es")
             self.assertIn("horizon.c", row["unreviewed"])
 
-    def test_a_missing_or_empty_approved_export_does_not_take_every_mark_back(self):
+    def test_a_last_approval_withdrawn_takes_its_mark_back(self):
         for body in (None, b"", b"{}"):
             with self.subTest(body), tempfile.TemporaryDirectory() as tmp:
                 root, lang, review, export = self.fixture(tmp)
@@ -347,18 +347,43 @@ class SyncTests(unittest.TestCase):
                 write(approved, "es-ES.json", {"horizon.c": "Picota"})
                 run("--translations", export, "--approved", approved, "--lang", lang,
                     "--review", review)
-                write(export, "es-ES.json", {"horizon.c": "Guinda"})
                 if body is None:
                     (approved / "es-ES.json").unlink()
                 else:
                     (approved / "es-ES.json").write_bytes(body)
-                before = {path: path.read_bytes() for path in [*lang.iterdir(), *review.rglob("*.json")]}
                 code, _, err = run("--translations", export, "--approved", approved, "--lang", lang,
                                    "--review", review)
-                self.assertEqual(code, 1)
-                self.assertIn("es_es (", err)
-                self.assertIn("approved export incomplete", err)
-                self.assertEqual({path: path.read_bytes() for path in before}, before)
+                self.assertEqual(code, 0, err)
+                self.assertFalse((review / "es_es.json").exists())
+
+    def test_more_withdrawals_than_one_run_may_fail_unless_allowed(self):
+        english = {f"horizon.k{n}": f"Key {n}" for n in range(40)}
+        spanish = {name: f"Clave {name[-2:]}" for name in english}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lang, review, export, approved = (root / "lang", root / "review", root / "export",
+                                              root / "approved")
+            write(lang, "en_us.json", english)
+            write(lang, "es_es.json", spanish)
+            write(export, "es-ES.json", spanish)
+            write(approved, "es-ES.json", spanish)
+            arguments = ("--translations", export, "--approved", approved, "--lang", lang,
+                         "--review", review)
+            self.assertEqual(run(*arguments)[0], 0)
+            # 40 recorded marks: max(3, 10% of 40) = 4 may go in one run. A partial export keeps 35.
+            write(approved, "es-ES.json", dict(list(spanish.items())[:35]))
+            before = {path: path.read_bytes() for path in [*lang.iterdir(), *review.iterdir()]}
+            code, _, err = run(*arguments)
+            self.assertEqual(code, 1)
+            self.assertIn("es_es (approved): would take back 5 of its 40 proofread marks, more than "
+                          "the 4", err)
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
+            # Four is within the cap; five with the flag a run by hand passes.
+            write(approved, "es-ES.json", dict(list(spanish.items())[:36]))
+            self.assertEqual(run(*arguments)[0], 0)
+            write(approved, "es-ES.json", dict(list(spanish.items())[:30]))
+            self.assertEqual(run(*arguments, "--allow-withdrawals")[0], 0)
+            self.assertEqual(len(json.loads((review / "es_es.json").read_text(encoding="utf-8"))), 30)
 
     def test_a_persons_own_entry_survives_the_sync(self):
         with tempfile.TemporaryDirectory() as tmp:

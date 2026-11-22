@@ -59,7 +59,8 @@ READERS = {
     # template cases tools/lang_coverage.py shares.
     "horizon-client-core": [
         "crates/horizon-client/assets/horizon/lang", "tests/fixtures/translation_templates.json",
-        "tests/fixtures/translation_text_rules.json", "tools/lang_unformattable.json",
+        "tests/fixtures/translation_text_rules.json", "tools/lang_combining_marks.json",
+        "tools/lang_unformattable.json",
     ],
     # The world's shaders include the HDR look from its pack, and the look pack's tests load the pack.
     "horizon-client-render": [

@@ -122,19 +122,26 @@ get in and where a single wrong string is still reported.
   templates the way the game's formatter does (`tests/fixtures/translation_templates.json` holds the cases they share).
 - A game translation keeps what its English text allows; the import drops a string that doesn't, and `lang.rs`'s
   test fails on a bundled one (`tests/fixtures/translation_text_rules.json` holds the cases both read):
-  - **formatting codes**: exactly the `§` codes the English text has (a `§` hides the character after it, any one;
-    letters match without case), so no added colour, style or `§k` obfuscation;
+  - **formatting codes**: the same `§` codes as the English text, in the same order and as many (a `§` hides the
+    character after it, any one; ASCII letters match without case), so no added colour, style or `§k` obfuscation;
   - **line breaks**: at most twice as many as the English text has, so none where it has none;
   - **length**: at most 4× the English length in characters or the English length + 80, whichever is more, and no
-    run of more than 60 characters without a space unless the English text has a longer one (characters of scripts
-    written without spaces, such as Chinese, Japanese and Thai, end a run);
-  - **invisible characters**: no zero-width space, line or paragraph separator, byte order mark, tag, noncharacter
-    or private-use character the English text lacks, and a variation selector only after a character; joiners
-    (U+200C, U+200D) and direction marks (U+200E, U+200F, U+061C) stay allowed;
+    run of more than 60 characters the game cannot wrap unless the English text has a longer one. The game breaks a
+    line only at a space or a line break (a no-break or ideographic space doesn't count); a letter of a script
+    written without spaces (Han, kana, Hangul syllables, Thai, Lao, Khmer, Myanmar) ends a run, its marks don't;
+  - **invisible characters**: none of these the English text lacks: zero-width space, word joiner, line and
+    paragraph separators, byte order mark, soft hyphen, combining grapheme joiner, Mongolian vowel separator, Hangul
+    fillers, interlinear annotation controls, tags, noncharacters and private-use characters. A variation selector
+    (Mongolian ones included) only after a character. Joiners (U+200C, U+200D) and direction marks (U+200E, U+200F,
+    U+061C) stay allowed;
+  - **combining marks**: at most 4 in a row unless the English text has more (today's files stack at most 3;
+    `tools/lang_combining_marks.json` is the table both sides read);
   - **controls**: no control character but a line break, and a tab or a bidi control only where the English text
     has one; bidi embeddings, overrides and isolates close in order, and no more open than in the English text.
-- An approved export that is missing or empty for a language the sync recorded proofread keys for fails the import:
-  it is an incomplete download, and the marks stay as they were.
+- One import takes back at most 3 review marks in a language, or 10% of those the sync recorded for it if that is
+  more; a run that would take back more fails with the language named and writes nothing, since a partial approved
+  export looks just like that. Only a run by hand with `allow_withdrawals` ticked passes `--allow-withdrawals` and
+  lets a real bulk withdrawal through.
 
 ## How the first record was made
 
