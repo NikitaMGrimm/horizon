@@ -187,6 +187,7 @@ impl Launcher {
                     self.installed = backend::installed();
                     let as_update = self.update_install.take().filter(|t| *t == tag);
                     let for_instance = self.instance_install.take_if(|t| *t == tag).is_some();
+                    let manual_target = self.manual_install_for.take();
                     let stable = self.stable_install.take_if(|r| r.tag == tag);
                     if let (Ok(()), Some(started)) = (&result, self.install_started.take()) {
                         let name = if as_update.is_some() {
@@ -237,12 +238,13 @@ impl Launcher {
                                             && i.version.as_deref() == Some(tag.as_str())
                                     })
                             });
-                            let manual = as_update.is_none() && instance.is_none();
-                            let saved = if manual {
-                                let id =
-                                    self.selected_instance().map(|instance| instance.id.clone());
-                                match id.map_or(Ok(()), |id| self.use_version_for(&id, &tag)) {
-                                    Ok(()) => true,
+                            let saved = if let Some(id) = manual_target {
+                                match horizon_launcher::instances::finish_manual_install(&id, &tag)
+                                {
+                                    Ok(()) => {
+                                        self.reload_instances();
+                                        true
+                                    }
                                     Err(e) => {
                                         self.install_error = Some((tag.clone(), e));
                                         false

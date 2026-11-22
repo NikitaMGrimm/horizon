@@ -555,7 +555,10 @@ pub fn for_launch(query: Option<&str>) -> Result<Instance, String> {
         Some(query) => find_in(&all, query),
         None => {
             let settings = backend::Settings::load_checked()?;
-            Ok(selected_in(&all, &settings).clone())
+            let id = settings.instance.as_deref().unwrap_or(DEFAULT);
+            all.into_iter()
+                .find(|i| i.id == id)
+                .ok_or_else(|| instance_unavailable(id))
         }
     }
 }
@@ -690,15 +693,23 @@ fn selected_in<'a>(all: &'a [Instance], settings: &backend::Settings) -> &'a Ins
 
 /// Use an installed build for the instance Play starts. Choosing the channel's Latest follows it.
 pub fn use_version(tag: &str) -> Result<(), String> {
-    use_version_in(None, tag)
+    use_version_in(None, tag).map(|_| ())
 }
 
 /// Use a build for the named instance, even if another launcher changed the selected instance.
 pub fn use_version_for(id: &str, tag: &str) -> Result<(), String> {
-    use_version_in(Some(id), tag)
+    match use_version_in(Some(id), tag)? {
+        true => Ok(()),
+        false => Err(instance_unavailable(id)),
+    }
 }
 
-fn use_version_in(id: Option<&str>, tag: &str) -> Result<(), String> {
+/// Selects a manual download for the instance that requested it, if it still exists.
+pub fn finish_manual_install(id: &str, tag: &str) -> Result<(), String> {
+    use_version_in(Some(id), tag).map(|_| ())
+}
+
+fn use_version_in(id: Option<&str>, tag: &str) -> Result<bool, String> {
     let data = backend::data_dir();
     let _lock = lock_store(&data)?;
     let settings = backend::Settings::load_checked()?;
@@ -710,14 +721,14 @@ fn use_version_in(id: Option<&str>, tag: &str) -> Result<(), String> {
         &store,
     );
     let instance = match id {
-        Some(id) => all
-            .iter()
-            .find(|i| i.id == id)
-            .ok_or_else(|| instance_unavailable(id))?,
-        None => selected_in(&all, &settings),
+        Some(id) => all.iter().find(|i| i.id == id),
+        None => Some(selected_in(&all, &settings)),
+    };
+    let Some(instance) = instance else {
+        return Ok(false);
     };
     if instance.java.is_some() {
-        return Ok(());
+        return Ok(true);
     }
     let installed = backend::installed_checked()?;
     if !installed.iter().any(|installed| installed == tag) {
@@ -733,7 +744,7 @@ fn use_version_in(id: Option<&str>, tag: &str) -> Result<(), String> {
             .version = pin;
         store.save(&data)?;
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Instances' pins and resolved builds that must survive cleanup. A failed read must veto removal.

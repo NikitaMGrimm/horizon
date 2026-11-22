@@ -64,12 +64,19 @@ impl Launcher {
                 continue;
             }
             self.instance_install = Some(release.tag.clone());
-            self.install(&release);
+            self.start_install(&release, None);
             return;
         }
     }
 
     pub(crate) fn install(&mut self, release: &Release) {
+        let id = self
+            .selected_instance()
+            .map_or_else(|| instances::DEFAULT.into(), |i| i.id.clone());
+        self.start_install(release, Some(id));
+    }
+
+    pub(super) fn start_install(&mut self, release: &Release, manual_target: Option<String>) {
         if release.asset.is_none()
             || self.installing.is_some()
             || self.removing.contains(&release.tag)
@@ -85,7 +92,8 @@ impl Launcher {
         self.installing = Some((tag.clone(), 0.0));
         self.install_started = Some(Instant::now());
         self.bar = (0., 0.);
-        self.install_error = None;
+        self.manual_install_for = manual_target;
+        clear_install_error_for(&mut self.install_error, &tag);
         let stable = self
             .stable_install
             .as_ref()
@@ -659,6 +667,10 @@ impl Launcher {
     }
 }
 
+fn clear_install_error_for(error: &mut Option<(String, String)>, tag: &str) {
+    error.take_if(|(failed, _)| failed == tag);
+}
+
 fn enqueue_instance_install(
     queue: &mut VecDeque<Release>,
     running: Option<&str>,
@@ -697,7 +709,8 @@ fn take_queued_play(
 #[cfg(test)]
 mod tests {
     use super::{
-        enqueue_instance_install, take_instance_install, take_queued_play, Release, VecDeque,
+        clear_install_error_for, enqueue_instance_install, take_instance_install, take_queued_play,
+        Release, VecDeque,
     };
 
     fn queued() -> Option<(String, String)> {
@@ -726,6 +739,16 @@ mod tests {
             assert_eq!(take_instance_install(&mut queue, &[]).unwrap().tag, tag);
         }
         assert!(take_instance_install(&mut queue, &[]).is_none());
+    }
+
+    #[test]
+    fn starting_a_different_download_keeps_the_previous_failure_visible() {
+        let failed = ("first".to_owned(), "download failed".to_owned());
+        let mut error = Some(failed.clone());
+        clear_install_error_for(&mut error, "second");
+        assert_eq!(error, Some(failed));
+        clear_install_error_for(&mut error, "first");
+        assert_eq!(error, None);
     }
 
     #[test]

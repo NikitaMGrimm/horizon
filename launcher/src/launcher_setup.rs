@@ -115,6 +115,7 @@ impl Launcher {
             min_restart_tried: horizon_launcher::update_handoff::min_restarted(),
             update_install: None,
             instance_install: None,
+            manual_install_for: None,
             install_queue: VecDeque::new(),
             stable_install: None,
             stable_failed: None,
@@ -616,7 +617,7 @@ impl Launcher {
             return;
         }
         self.update_install = Some(release.tag.clone());
-        self.install(&release);
+        self.start_install(&release, None);
     }
 
     /// What installed native build `version` was made from (`native_status::Build`), read once.

@@ -3650,7 +3650,30 @@ pub use update_selection::{select_after_update, selection_after_install, Install
 /// Installs `tag` (or with "latest" the newest release, pre-releases left out). A manual install
 /// uses it for the instance Play starts. Updates maintain the old launcher's compatibility fields.
 pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result<String, String> {
-    let releases = [releases()?, release_selection::snapshot(tag)?].concat();
+    install_tag_with(
+        tag,
+        as_update,
+        || Ok([releases()?, release_selection::snapshot(tag)?].concat()),
+        |release| install(release, progress),
+    )
+}
+
+fn install_tag_with(
+    tag: &str,
+    as_update: bool,
+    releases: impl FnOnce() -> Result<Vec<Release>, String>,
+    download: impl FnOnce(&Release) -> Result<(), String>,
+) -> Result<String, String> {
+    let target = if as_update {
+        None
+    } else {
+        Some(
+            Settings::load_checked()?
+                .instance
+                .unwrap_or_else(|| crate::instances::DEFAULT.into()),
+        )
+    };
+    let releases = releases()?;
     let release = if tag == "latest" {
         releases
             .iter()
@@ -3668,7 +3691,7 @@ pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result
     if let Some(warning) = &downgrade {
         eprintln!("{warning}");
     }
-    install(release, progress)?;
+    download(release)?;
     if as_update && release.nightly.is_some() {
         if let Err(e) = mark_auto_installed(&release.tag) {
             eprintln!("Could not mark updated Nightly {}: {e}", release.tag);
@@ -3689,8 +3712,8 @@ pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result
         {
             settings.save()?;
         }
-    } else {
-        crate::instances::use_version(&release.tag)?;
+    } else if let Some(id) = target {
+        crate::instances::finish_manual_install(&id, &release.tag)?;
     }
     if as_update && release.nightly.is_some() {
         crate::nightly::after_update(&release.tag);
@@ -7917,6 +7940,71 @@ pub fn {f}("
             tags(&["v0.2.88", "v0.2.85", "v0.2.80"])
         );
         assert!(stale_versions(&installed, 9, &[], |_| false).is_empty());
+    }
+
+    #[test]
+    fn manual_install_changes_only_the_instance_selected_when_it_started() {
+        use crate::instances;
+        if std::env::var_os("HORIZON_TEST_MANUAL_INSTALL").is_none() {
+            let root = tempfile::tempdir().unwrap();
+            assert!(Command::new(std::env::current_exe().unwrap())
+                .args(["--include-ignored", "--exact", "backend::tests::manual_install_changes_only_the_instance_selected_when_it_started"])
+                .env("HORIZON_TEST_MANUAL_INSTALL", "1")
+                .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+                .env("HORIZON_HOME", root.path().join("game"))
+                .env("HORIZON_LAUNCHER_LOCATION_FILE", root.path().join("location.json"))
+                .status().unwrap().success());
+            return;
+        }
+        let (old, newest) = ("v0.2.90", "v0.3.0");
+        let marker = |tag: &str| -> std::io::Result<()> {
+            let dir = version_dir(tag);
+            fs::create_dir_all(&dir)?;
+            fs::write(dir.join(COMPLETE), "")
+        };
+        marker(newest).unwrap();
+        let first = instances::create("First", None).unwrap();
+        let second = instances::create("Second", None).unwrap();
+        instances::pin_installed_version(&second.id, Some(newest)).unwrap();
+        let install = |tag: &str, delete_first: bool| {
+            instances::select(&first.id).unwrap();
+            let release = Release {
+                tag: tag.into(),
+                name: tag.into(),
+                body: String::new(),
+                date: String::new(),
+                time: String::new(),
+                asset: Some(("fixture".into(), 1)),
+                prerelease: false,
+                nightly: None,
+            };
+            install_tag_with(
+                tag,
+                false,
+                || Ok(vec![release]),
+                |release| {
+                    instances::select(&second.id)?;
+                    if delete_first {
+                        fs::remove_dir_all(&first.home).map_err(|e| e.to_string())?;
+                    }
+                    marker(&release.tag).map_err(|e| e.to_string())
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(install(old, false), old);
+        assert_eq!(
+            instances::find(&first.id).unwrap().version.as_deref(),
+            Some(old)
+        );
+        assert_eq!(instances::selected().version.as_deref(), Some(newest));
+        assert_eq!(install(newest, false), newest);
+        assert_eq!(instances::find(&first.id).unwrap().version, None);
+        assert_eq!(instances::selected().version.as_deref(), Some(newest));
+
+        assert_eq!(install(old, true), old);
+        assert!(instances::find(&first.id).is_err());
+        assert_eq!(instances::selected().version.as_deref(), Some(newest));
     }
 
     #[test]

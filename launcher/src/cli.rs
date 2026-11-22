@@ -3914,6 +3914,59 @@ mod tests {
     }
 
     #[test]
+    fn plain_play_refuses_a_saved_pack_that_is_no_longer_discoverable() {
+        if std::env::var_os("HORIZON_TEST_PLAY_SELECTED_PACK").is_none() {
+            let root = tempfile::tempdir().unwrap();
+            assert!(Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--include-ignored",
+                    "--exact",
+                    "cli::tests::plain_play_refuses_a_saved_pack_that_is_no_longer_discoverable"
+                ])
+                .env("HORIZON_TEST_PLAY_SELECTED_PACK", "1")
+                .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+                .env("HORIZON_HOME", root.path().join("game"))
+                .env(
+                    "HORIZON_LAUNCHER_LOCATION_FILE",
+                    root.path().join("location.json")
+                )
+                .status()
+                .unwrap()
+                .success());
+            return;
+        }
+        let game = backend::game_home();
+        let pack = game.join("horizon-packs/quiet");
+        let manifest = pack.join("pack.json");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(
+            &manifest,
+            r#"{"id":"quiet","name":"Quiet","version":"1.0","sha256":"00","mods":[]}"#,
+        )
+        .unwrap();
+        for home in [game, pack.join("home")] {
+            let world = home.join("saves/Family");
+            std::fs::create_dir_all(&world).unwrap();
+            std::fs::write(world.join("level.dat"), b"same name in both homes").unwrap();
+        }
+        let id = "pack:quiet";
+        backend::Settings {
+            instance: Some(id.into()),
+            instance_versions_migrated: true,
+            ..backend::Settings::default()
+        }
+        .save()
+        .unwrap();
+        assert_eq!(instances::for_launch(None).unwrap().id, id);
+        std::fs::write(manifest, b"{broken").unwrap();
+        let command = Cli::try_parse_from(["horizon-launcher", "play", "--world", "Family"])
+            .unwrap()
+            .command
+            .unwrap();
+        assert!(execute(command, false).unwrap_err().contains(id));
+    }
+
+    #[test]
     fn play_takes_an_account_for_one_launch() {
         let cli = Cli::try_parse_from(["horizon-launcher", "play", "--account", "Alex"]).unwrap();
         match cli.command {
