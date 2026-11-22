@@ -62,6 +62,16 @@ fn capture_terrain_loading(
     streaming_busy || (!replaying && view.arrival_incomplete(has_column))
 }
 
+// The capture clock drives future columns, but the loading screen must retire locally.
+pub(super) fn capture_level_loading(
+    tracker: Option<&horizon_client::level_loading::LevelLoadTracker>,
+    lockstep: bool,
+    chunks_empty: bool,
+) -> bool {
+    tracker.is_some_and(horizon_client::level_loading::LevelLoadTracker::is_active)
+        || (!lockstep && chunks_empty)
+}
+
 pub(super) enum CaptureMode {
     Sequence,
     Export,
@@ -87,12 +97,11 @@ impl Game<'_> {
             || self.pending_entry.is_some()
             || self.pack_reload.is_some()
             || self.pending_save.is_some()
-            || (!lockstep
-                && (self.world.chunks.is_empty()
-                    || self
-                        .remote
-                        .as_ref()
-                        .is_some_and(|r| r.level_load.is_active())))
+            || capture_level_loading(
+                self.remote.as_ref().map(|r| &r.level_load),
+                lockstep,
+                self.world.chunks.is_empty(),
+            )
             || capture_terrain_loading(
                 self.streaming.busy(),
                 self.replay.playing() || lockstep,

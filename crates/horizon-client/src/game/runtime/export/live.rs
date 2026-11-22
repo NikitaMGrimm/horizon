@@ -55,6 +55,10 @@ impl LiveExport {
         self.start.is_none()
     }
 
+    pub(super) fn ready_for_frame(&self) -> bool {
+        self.started() && self.turn.is_none() && self.steps == 0
+    }
+
     fn check(&self, game: &Game<'_>) -> Result<()> {
         self.clock.check()?;
         if game.options.paced_by_split || game.options.split_guest {
@@ -81,7 +85,33 @@ impl LiveExport {
     }
 }
 
+/// The client may retire a fenced batch only once the server turn is complete.
+pub(in crate::game) enum ExportIngress {
+    Blocked,
+    Through(u64),
+}
+
+impl LiveExport {
+    fn ingress(&self) -> Option<ExportIngress> {
+        if let Some((fence, _)) = self.start {
+            return Some(ExportIngress::Through(fence));
+        }
+        let turn = self.turn.as_ref()?;
+        Some(
+            if turn.received || turn.tick.is_some_and(|tick| !self.clock.completed(tick)) {
+                ExportIngress::Blocked
+            } else {
+                ExportIngress::Through(turn.fence)
+            },
+        )
+    }
+}
+
 impl Game<'_> {
+    pub(in crate::game) fn export_ingress(&self) -> Option<ExportIngress> {
+        self.export.as_ref()?.live.as_ref()?.ingress()
+    }
+
     pub(in crate::game) fn note_export_fence(&mut self, fence: u64) {
         let Some(live) = self.export.as_mut().and_then(|s| s.live.as_mut()) else {
             return;
@@ -119,7 +149,42 @@ impl Game<'_> {
             .is_some_and(|live| !live.started() || live.turn.is_some())
     }
 
+    fn queue_export_loading_tick(&mut self) -> Result<()> {
+        let Some(session) = &self.export else {
+            return Ok(());
+        };
+        if !session.settle
+            || !session
+                .live
+                .as_ref()
+                .is_some_and(|live| live.started() && live.steps == 0)
+            || !self
+                .remote
+                .as_ref()
+                .is_some_and(|r| r.level_load.is_active())
+        {
+            return Ok(());
+        }
+        // The local readiness delay runs on its own. A credit is needed only for
+        // load packets that cannot arrive until the server takes another turn.
+        self.export_ready()?;
+        let has_column = self.player.as_ref().is_some_and(|p| {
+            self.world
+                .chunks
+                .contains_key(&super::super::player_chunk(p.position))
+        });
+        if self
+            .remote
+            .as_ref()
+            .is_some_and(|r| r.level_load.needs_load_packets(has_column))
+        {
+            self.export.as_mut().unwrap().live.as_mut().unwrap().steps = 1;
+        }
+        Ok(())
+    }
+
     pub(super) fn advance_live_export(&mut self, event_loop: &dyn EventLoopCtl) -> Result<bool> {
+        self.queue_export_loading_tick()?;
         loop {
             let Some(live) = self.export.as_ref().and_then(|s| s.live.as_ref()) else {
                 // Applying a disconnect can interrupt the session inside poll_remote.
@@ -187,6 +252,22 @@ impl LiveExport {
 mod tests {
     use super::*;
     use crate::game::integrated::with_export_clock;
+
+    #[test]
+    fn a_credited_tick_keeps_ingress_closed_until_the_server_finishes() {
+        with_export_clock(|server| {
+            let mut live = LiveExport::new(server, 1).unwrap();
+            live.start = None;
+            live.turn = Some(Turn {
+                deadline: Instant::now() + TICK_TIMEOUT,
+                fence: 91,
+                received: false,
+                tick: Some(live.clock.request(91).unwrap()),
+            });
+            assert!(matches!(live.ingress(), Some(ExportIngress::Blocked)));
+            assert!(!live.ready_for_frame());
+        });
+    }
 
     #[test]
     fn stalled_export_turn_releases_the_server_when_the_session_drains() {

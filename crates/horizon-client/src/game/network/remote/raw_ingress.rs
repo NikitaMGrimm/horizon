@@ -1,5 +1,6 @@
 //! Receiving-provider credit follows ordered events and decoder placeholders.
 use super::*;
+use crate::game::export::ExportIngress;
 
 #[inline(always)]
 fn backlog_item_overdue(queued_at: Instant, now: Instant) -> bool {
@@ -32,13 +33,62 @@ impl Remote {
     }
 }
 
+fn export_fence(item: &Received) -> Option<u64> {
+    let Received::Event(Event::Packet(packet), _) = item else {
+        return None;
+    };
+    match packet.as_ref() {
+        C::Unknown(horizon_client::net::EXPORT_FENCE, bytes) => {
+            Some(u64::from_be_bytes(bytes.as_slice().try_into().ok()?))
+        }
+        _ => None,
+    }
+}
+
+fn prepare_export_ingress(
+    events: &mut VecDeque<(Received, Instant)>,
+    gate: ExportIngress,
+) -> std::result::Result<Option<u64>, ()> {
+    // Losing the connection invalidates the batch. It must be handled even
+    // when the last tick never reached its fence.
+    if let Some(index) = events
+        .iter()
+        .position(|(item, _)| matches!(item, Received::Event(Event::Disconnected { .. }, _)))
+    {
+        let end = events.remove(index).unwrap();
+        events.clear();
+        events.push_back(end);
+        return Ok(None);
+    }
+    match gate {
+        ExportIngress::Through(fence)
+            if events
+                .iter()
+                .any(|(item, _)| export_fence(item) == Some(fence)) =>
+        {
+            Ok(Some(fence))
+        }
+        _ => Err(()),
+    }
+}
+
 impl Game<'_> {
     pub(super) fn poll_remote_events(&mut self) -> Result<()> {
+        let gate = self.export_ingress();
         let Some(r) = self.remote.as_mut() else {
             return Ok(());
         };
         let mut events = std::mem::take(&mut r.backlog);
         r.receive_credited_backlog(&mut events);
+        let cutoff = match gate.map(|gate| prepare_export_ingress(&mut events, gate)) {
+            Some(Ok(cutoff)) => cutoff,
+            Some(Err(())) => {
+                r.backlog_since = backlog_head_since(&events);
+                r.backlog = events;
+                return Ok(());
+            }
+            None => None,
+        };
         let mut chunks = Duration::ZERO;
         // A run of ForgetLevelChunk (thousands when the server's view moves far: a
         // teleport at 32 chunks) is forgotten at once, before whatever follows it.
@@ -269,10 +319,17 @@ impl Game<'_> {
                 }
                 Event::Packet(packet) => match *packet {
                     C::Unknown(horizon_client::net::EXPORT_FENCE, ref bytes)
-                        if self.remote.as_ref().is_some_and(|r| r.session.address == "local")
+                        if self
+                            .remote
+                            .as_ref()
+                            .is_some_and(|r| r.session.address == "local")
                             && let Ok(bytes) = bytes.as_slice().try_into() =>
                     {
-                        self.note_export_fence(u64::from_be_bytes(bytes));
+                        let fence = u64::from_be_bytes(bytes);
+                        self.note_export_fence(fence);
+                        if cutoff == Some(fence) {
+                            break;
+                        }
                     }
                     C::CustomPayload(p) if p.channel == horizon_client::perf_net::CHANNEL => {
                         self.remote_perf_reply(&p.data)
@@ -301,6 +358,67 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn export_ingress_waits_for_the_matching_fence_and_prioritizes_disconnect() {
+        use super::*;
+        use horizon_client::net::ingress;
+        let (send, recv) = ingress::channel(1024, |_: &Event| 1).unwrap();
+        let packet = |tick| {
+            Event::Packet(Box::new(C::SetTime(
+                horizon_protocol::packets::play::SetTime {
+                    game_time: tick,
+                    clocks: Vec::new(),
+                },
+            )))
+        };
+        let marker = |fence: u64| {
+            Event::Packet(Box::new(C::Unknown(
+                horizon_client::net::EXPORT_FENCE,
+                fence.to_be_bytes().to_vec(),
+            )))
+        };
+        let mut backlog = VecDeque::new();
+        let add = |backlog: &mut VecDeque<_>, event| {
+            send.send(event).unwrap();
+            let (event, lease) = recv.try_recv_owned().unwrap().into_parts();
+            backlog.push_back((Received::Event(event, lease), Instant::now()));
+        };
+        add(&mut backlog, packet(11));
+        add(&mut backlog, marker(8));
+        assert_eq!(
+            prepare_export_ingress(&mut backlog, ExportIngress::Through(9)),
+            Err(())
+        );
+        add(&mut backlog, marker(9));
+        add(&mut backlog, packet(12));
+        assert_eq!(
+            prepare_export_ingress(&mut backlog, ExportIngress::Blocked),
+            Err(())
+        );
+        assert_eq!(
+            prepare_export_ingress(&mut backlog, ExportIngress::Through(9)),
+            Ok(Some(9))
+        );
+        assert_eq!(backlog.len(), 4);
+        add(
+            &mut backlog,
+            Event::Disconnected {
+                reason: String::from("test"),
+                key: None,
+                from_server: true,
+            },
+        );
+        assert_eq!(
+            prepare_export_ingress(&mut backlog, ExportIngress::Blocked),
+            Ok(None)
+        );
+        assert_eq!(backlog.len(), 1);
+        assert!(matches!(
+            backlog.pop_front(),
+            Some((Received::Event(Event::Disconnected { .. }, _), _))
+        ));
+    }
+
     use super::*;
 
     /// Continuous chunk arrivals keep `events` non-empty across frames; once an

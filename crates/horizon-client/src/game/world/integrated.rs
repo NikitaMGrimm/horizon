@@ -311,6 +311,11 @@ impl Integrated {
     pub fn set_legacy_rules(&self, on: bool) {
         self.flags.legacy_rules.store(on, Ordering::Relaxed);
     }
+    #[cfg(test)]
+    pub(super) fn set_test_published(&self, port: u16) {
+        self.flags.published.store(port, Ordering::Relaxed);
+    }
+
     /// `IntegratedServer.getPort` while `isPublished`.
     pub fn published(&self) -> Option<u16> {
         Some(self.flags.published.load(Ordering::Relaxed)).filter(|&p| p != 0)
@@ -358,7 +363,8 @@ impl Integrated {
     pub(super) fn export_tick(&self) -> Result<()> {
         let flags = Arc::clone(&self.flags);
         self.call(move |game| {
-            if !flags.export_clock.load(Ordering::Acquire) || flags.export_ticks.active().is_some() {
+            if !flags.export_clock.load(Ordering::Acquire) || flags.export_ticks.active().is_some()
+            {
                 return Err("the manual export clock is unavailable".to_owned());
             }
             if game.agent.hold_server {

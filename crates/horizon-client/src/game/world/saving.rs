@@ -1,7 +1,7 @@
 //! The save screen freezes simulation, but keeps pumping window events while
 //! snapshots are prepared in small batches and the region workers drain.
 use super::{ClientQuit, Game, loading_frame};
-use horizon_client::{Result, hud::HudBatch};
+use horizon_client::{Result, hud::HudBatch, text::Text};
 use std::{
     collections::{HashSet, VecDeque},
     time::{Duration, Instant},
@@ -13,7 +13,14 @@ pub(super) struct ClosingSave {
     reply: Option<std::sync::mpsc::Sender<String>>,
     started: Instant,
     stage: Stage,
+    disconnect_reason: Option<Text>,
 }
+impl ClosingSave {
+    pub(super) fn disconnecting(&self) -> bool {
+        self.disconnect_reason.is_some()
+    }
+}
+
 enum Stage {
     Generation,
     Chunks(VecDeque<(i32, i32)>),
@@ -58,6 +65,7 @@ impl Game<'_> {
                 reply: None,
                 started: Instant::now(),
                 stage: Stage::Quit,
+                disconnect_reason: None,
             });
             return Ok(());
         }
@@ -77,6 +85,7 @@ impl Game<'_> {
                 reply: None,
                 started: Instant::now(),
                 stage: Stage::Server,
+                disconnect_reason: None,
             });
         } else if self.remote.is_some() {
             if !quit {
@@ -93,6 +102,7 @@ impl Game<'_> {
                 reply: None,
                 started: Instant::now(),
                 stage: Stage::Quit,
+                disconnect_reason: None,
             });
         } else {
             self.close_container();
@@ -105,9 +115,18 @@ impl Game<'_> {
                 reply: None,
                 started: Instant::now(),
                 stage: Stage::Generation,
+                disconnect_reason: None,
             });
         }
         self.capture(false);
+        Ok(())
+    }
+
+    pub(super) fn begin_integrated_disconnect(&mut self, reason: Text) -> Result<()> {
+        self.begin_closing_save(false)?;
+        if let Some(save) = &mut self.pending_save {
+            save.disconnect_reason = Some(reason);
+        }
         Ok(())
     }
 
@@ -136,6 +155,7 @@ impl Game<'_> {
             reply: Some(reply),
             started: Instant::now(),
             stage: Stage::Generation,
+            disconnect_reason: None,
         });
         Ok(())
     }
@@ -162,7 +182,7 @@ impl Game<'_> {
                     if save.quit {
                         self.integrated.take().unwrap().stop()?;
                     } else {
-                        self.leave_server(None)?;
+                        self.leave_server(save.disconnect_reason.take())?;
                     }
                     Ok(true)
                 }

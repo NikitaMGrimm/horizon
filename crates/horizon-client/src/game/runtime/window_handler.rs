@@ -346,6 +346,13 @@ impl Game<'_> {
         }
         self.poll_export();
         if self.pending_save.is_some() {
+            if self
+                .pending_save
+                .as_ref()
+                .is_some_and(|save| save.disconnecting())
+            {
+                self.poll_control_requests(event_loop);
+            }
             match self.poll_closing_save() {
                 Ok(true) => event_loop.exit(),
                 Ok(false) => {
