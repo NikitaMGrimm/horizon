@@ -470,59 +470,77 @@ fn list_with_packs(
     ports: Vec<modpacks::Listed>,
     packs: Vec<registry_pack::Installed>,
 ) -> Vec<Instance> {
-    let mut found = vec![(
-        DEFAULT.to_string(),
-        "Horizon".to_string(),
+    let mut out = vec![instance_at(
+        store,
+        DEFAULT.into(),
+        "Horizon".into(),
         Kind::Default,
         game_home.to_path_buf(),
         game_home.to_path_buf(),
     )];
-    for slug in own {
+    out.extend(own.into_iter().map(|slug| {
         let dir = game_home.join(OWN).join(&slug);
-        found.push((slug.clone(), slug, Kind::Own, dir.clone(), dir));
-    }
-    for p in ports {
-        let home = modpacks::profile_home(&p.work);
-        found.push((
-            format!("port:{}", p.slug),
-            p.title,
-            Kind::Port,
-            p.work,
-            home,
-        ));
-    }
-    for p in packs {
-        let home = registry_pack::home(&p.work);
-        found.push((format!("pack:{}", p.id), p.name, Kind::Pack, p.work, home));
-    }
-    let mut out: Vec<Instance> = found
-        .into_iter()
-        .map(|(id, name, kind, work, home)| {
-            let meta = store.instances.get(&id).cloned().unwrap_or_default();
-            Instance {
-                name: meta.name.unwrap_or(name),
-                icon: meta.icon,
-                group: meta.group,
-                version: meta.version,
-                channel: meta.channel.unwrap_or_default(),
-                native_profile: meta
-                    .native_profile
-                    .unwrap_or(crate::native_mods::Profile::Optimized),
-                played: Duration::from_secs(meta.played_secs),
-                last_played: meta
-                    .last_played
-                    .map(|s| UNIX_EPOCH + Duration::from_secs(s)),
-                launch: meta.launch,
-                java: meta.java,
-                id,
-                kind,
-                work,
-                home,
-            }
-        })
-        .collect();
+        instance_at(store, slug.clone(), slug, Kind::Own, dir.clone(), dir)
+    }));
+    out.extend(ports.into_iter().map(|pack| port_instance(store, pack)));
+    out.extend(packs.into_iter().map(|pack| registry_instance(store, pack)));
     out[1..].sort_by_key(|i| (i.group.clone(), i.name.to_lowercase()));
     out
+}
+
+fn port_instance(store: &Store, pack: modpacks::Listed) -> Instance {
+    let home = modpacks::profile_home(&pack.work);
+    instance_at(
+        store,
+        format!("port:{}", pack.slug),
+        pack.title,
+        Kind::Port,
+        pack.work,
+        home,
+    )
+}
+
+fn registry_instance(store: &Store, pack: registry_pack::Installed) -> Instance {
+    let home = registry_pack::home(&pack.work);
+    instance_at(
+        store,
+        format!("pack:{}", pack.id),
+        pack.name,
+        Kind::Pack,
+        pack.work,
+        home,
+    )
+}
+
+fn instance_at(
+    store: &Store,
+    id: String,
+    name: String,
+    kind: Kind,
+    work: PathBuf,
+    home: PathBuf,
+) -> Instance {
+    let meta = store.instances.get(&id).cloned().unwrap_or_default();
+    Instance {
+        name: meta.name.unwrap_or(name),
+        icon: meta.icon,
+        group: meta.group,
+        version: meta.version,
+        channel: meta.channel.unwrap_or_default(),
+        native_profile: meta
+            .native_profile
+            .unwrap_or(crate::native_mods::Profile::Optimized),
+        played: Duration::from_secs(meta.played_secs),
+        last_played: meta
+            .last_played
+            .map(|d| UNIX_EPOCH + Duration::from_secs(d)),
+        launch: meta.launch,
+        java: meta.java,
+        id,
+        kind,
+        work,
+        home,
+    }
 }
 
 /// The instance an id, a name (any case) or a pack's folder name names.
@@ -557,19 +575,34 @@ fn instance_unavailable(id: &str) -> String {
     )
 }
 
-/// Finds the saved instance for a modpack's own Play command.
-pub fn pack_for_launch(work: &Path) -> Result<Option<Instance>, String> {
-    Ok(launch_instances()?.into_iter().find(|i| i.work == work))
+/// Reads the requested pack's manifest and saved instance metadata before it can be played.
+pub fn pack_for_launch(work: &Path) -> Result<Instance, String> {
+    let store = load_launch_store()?;
+    let parent = work.parent();
+    if parent == Some(modpacks::ports_dir().as_path()) {
+        return Ok(port_instance(
+            &store,
+            modpacks::read_listed(work.to_owned())?,
+        ));
+    }
+    if parent == Some(registry_pack::packs_dir().as_path()) {
+        return Ok(registry_instance(&store, registry_pack::read_record(work)?));
+    }
+    Err(instance_unavailable(&work.display().to_string()))
 }
 
-fn launch_instances() -> Result<Vec<Instance>, String> {
-    let game_home = backend::game_home();
-    let store = Store::load(&backend::data_dir()).map_err(|e| {
+fn load_launch_store() -> Result<Store, String> {
+    Store::load(&backend::data_dir()).map_err(|e| {
         crate::i18n::trf(
             "Could not read instance settings: {error}",
             &[("error", &e)],
         )
-    })?;
+    })
+}
+
+fn launch_instances() -> Result<Vec<Instance>, String> {
+    let game_home = backend::game_home();
+    let store = load_launch_store()?;
     Ok(list_with_store(
         &game_home,
         own_folders(&game_home)?.unwrap_or_default(),
@@ -706,7 +739,7 @@ fn use_version_in(id: Option<&str>, tag: &str) -> Result<(), String> {
 /// Instances' pins and resolved builds that must survive cleanup. A failed read must veto removal.
 fn used_versions(
     installed: &[String],
-    selected: Option<&str>,
+    settings: &backend::Settings,
 ) -> Result<impl Iterator<Item = (String, String)>, String> {
     let game_home = backend::game_home();
     let store = Store::load(&backend::data_dir())?;
@@ -716,7 +749,7 @@ fn used_versions(
         if let Some(tag) = instance
             .version
             .clone()
-            .or_else(|| instance.installed_version(installed, selected))
+            .or_else(|| instance.installed_version(installed, settings.selected.as_deref()))
         {
             used.push((tag, instance.name));
         }
@@ -729,21 +762,27 @@ fn used_versions(
             .filter(|(id, _)| id.contains(':'))
             .filter_map(|(id, meta)| Some((meta.version?, meta.name.unwrap_or(id)))),
     );
+    // A launcher's old selection can still be the only record of which build a world used.
+    if !settings.instance_versions_migrated {
+        if let Some(tag) = &settings.selected {
+            used.push((tag.clone(), crate::i18n::tr("Horizon").into()));
+        }
+    }
     Ok(used.into_iter())
 }
 
 pub(crate) fn protected_versions(
     installed: &[String],
-    selected: Option<&str>,
+    settings: &backend::Settings,
 ) -> Result<Vec<String>, String> {
-    Ok(used_versions(installed, selected)?
+    Ok(used_versions(installed, settings)?
         .map(|(tag, _)| tag)
         .collect())
 }
 
 pub(crate) fn version_user(installed: &[String], tag: &str) -> Result<Option<String>, String> {
     let settings = backend::Settings::load_checked()?;
-    Ok(used_versions(installed, settings.selected.as_deref())?
+    Ok(used_versions(installed, &settings)?
         .find(|(used, _)| used == tag)
         .map(|(_, name)| name))
 }
@@ -874,6 +913,31 @@ pub fn create(name: &str, from: Option<&str>) -> Result<Instance, String> {
     )
 }
 
+/// Creates a Horizon instance with its pin. The version is checked under the same lock as
+/// deletion, before any files are copied or the instance is published.
+pub fn create_with_installation(
+    name: &str,
+    from: Option<&str>,
+    pin: Option<String>,
+    channel: Channel,
+    downloading: Option<&str>,
+) -> Result<Instance, String> {
+    let from = from.map(find).transpose()?;
+    create_checked_in(
+        &backend::game_home(),
+        &backend::data_dir(),
+        name,
+        from.as_ref(),
+        None,
+        |meta| {
+            validate_new_pin(pin.as_deref(), downloading)?;
+            meta.version = pin;
+            meta.channel = Some(channel);
+            Ok(())
+        },
+    )
+}
+
 /// Creates a Minecraft: Java Edition instance named `name` playing `minecraft` (a version id
 /// from Mojang's list), with an empty game folder: the real game keeps its own options.
 pub fn create_java(name: &str, minecraft: &str) -> Result<Instance, String> {
@@ -905,6 +969,17 @@ fn create_in(
     name: &str,
     from: Option<&Instance>,
     minecraft: Option<&str>,
+) -> Result<Instance, String> {
+    create_checked_in(game_home, data, name, from, minecraft, |_| Ok(()))
+}
+
+fn create_checked_in(
+    game_home: &Path,
+    data: &Path,
+    name: &str,
+    from: Option<&Instance>,
+    minecraft: Option<&str>,
+    change: impl FnOnce(&mut Meta) -> Result<(), String>,
 ) -> Result<Instance, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -938,6 +1013,17 @@ fn create_in(
         })
         .find(|s| !taken(s))
         .unwrap();
+    let meta = store.instances.entry(slug.clone()).or_default();
+    meta.name = (name != slug).then(|| name.to_string());
+    meta.icon = from.and_then(|f| f.icon.clone());
+    meta.group = from.and_then(|f| f.group.clone());
+    meta.java = from.and_then(|f| f.java.clone()).or_else(|| {
+        minecraft.map(|v| JavaGame {
+            minecraft: v.to_string(),
+            ..JavaGame::default()
+        })
+    });
+    change(meta)?;
     let dir = game_home.join(OWN).join(&slug);
     let made = match from {
         Some(from) => copy_home(&from.home, &dir),
@@ -957,16 +1043,6 @@ fn create_in(
         return Err(format!("Could not make {}: {e}", dir.display()));
     }
     crate::run_leases::publish(&dir).map_err(crate::native_mods::cache_error)?;
-    let meta = store.instances.entry(slug.clone()).or_default();
-    meta.name = (name != slug).then(|| name.to_string());
-    meta.icon = from.and_then(|f| f.icon.clone());
-    meta.group = from.and_then(|f| f.group.clone());
-    meta.java = from.and_then(|f| f.java.clone()).or_else(|| {
-        minecraft.map(|v| JavaGame {
-            minecraft: v.to_string(),
-            ..JavaGame::default()
-        })
-    });
     store.save(data)?;
     find_in(
         &list_with_store(
@@ -1047,20 +1123,23 @@ pub fn edit_installation(
     edit_checked_in(&backend::game_home(), &backend::data_dir(), query, |meta| {
         let before = meta.version.clone();
         change(meta);
-        if let Some(tag) = meta
-            .version
-            .as_deref()
-            .filter(|tag| Some(*tag) != before.as_deref() && Some(*tag) != downloading)
-        {
-            if !backend::installed_checked()?
-                .iter()
-                .any(|installed| installed == tag)
-            {
-                return Err(backend::version_gone(tag));
-            }
+        if meta.version != before {
+            validate_new_pin(meta.version.as_deref(), downloading)?;
         }
         Ok(())
     })
+}
+
+fn validate_new_pin(pin: Option<&str>, downloading: Option<&str>) -> Result<(), String> {
+    if let Some(tag) = pin.filter(|tag| Some(*tag) != downloading) {
+        if !backend::installed_checked()?
+            .iter()
+            .any(|installed| installed == tag)
+        {
+            return Err(backend::version_gone(tag));
+        }
+    }
+    Ok(())
 }
 
 fn edit_checked_in(

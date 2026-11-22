@@ -561,6 +561,134 @@ fn migration_keeps_a_legacy_follower_on_latest_as_new_builds_arrive() {
 }
 
 #[test]
+fn pack_play_uses_its_pin_and_refuses_an_unreadable_manifest() {
+    if std::env::var_os("HORIZON_TEST_PACK_PLAY").is_none() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--include-ignored",
+                "--exact",
+                "instances::tests::pack_play_uses_its_pin_and_refuses_an_unreadable_manifest"
+            ])
+            .env("HORIZON_TEST_PACK_PLAY", "1")
+            .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+            .env("HORIZON_HOME", root.path().join("game"))
+            .env(
+                "HORIZON_LAUNCHER_LOCATION_FILE",
+                root.path().join("location.json")
+            )
+            .status()
+            .unwrap()
+            .success());
+        return;
+    }
+    let game = backend::game_home();
+    let port = game.join("ports/family");
+    let registry = game.join("horizon-packs/quiet");
+    let java_pack = horizon_port_pack::import::Pack {
+        name: "Family".into(),
+        ..Default::default()
+    };
+    let manifests = [
+        (
+            &port,
+            "port:family",
+            serde_json::to_string(&java_pack).unwrap(),
+        ),
+        (
+            &registry,
+            "pack:quiet",
+            r#"{"id":"quiet","name":"Quiet","version":"1.0","sha256":"00","mods":[]}"#.into(),
+        ),
+    ];
+    for tag in [NOV_21, NOV_22] {
+        put(&backend::version_dir(tag).join(backend::COMPLETE), "");
+    }
+    for (work, id, manifest) in &manifests {
+        put(&work.join("pack.json"), manifest);
+        use_version_for(id, NOV_21).unwrap();
+    }
+    assert_eq!(
+        for_launch_id(DEFAULT)
+            .unwrap()
+            .resolve_version(None)
+            .unwrap(),
+        NOV_22
+    );
+    for (work, _, text) in manifests {
+        assert_eq!(
+            pack_for_launch(work)
+                .unwrap()
+                .resolve_version(None)
+                .unwrap(),
+            NOV_21
+        );
+        let manifest = work.join("pack.json");
+        put(&manifest, "{broken");
+        assert!(pack_for_launch(work)
+            .unwrap_err()
+            .contains(&manifest.display().to_string()));
+        let mut cmd = Command::new("fixture");
+        assert!(modpacks::apply_profile(&mut cmd, work)
+            .unwrap_err()
+            .contains(&manifest.display().to_string()));
+        assert!(cmd.get_current_dir().is_none());
+        fs::remove_file(&manifest).unwrap();
+        assert!(pack_for_launch(work)
+            .unwrap_err()
+            .contains(&manifest.display().to_string()));
+        put(&manifest, &text);
+    }
+}
+
+#[test]
+fn creating_with_a_stale_pin_does_not_publish_an_instance_or_copy_its_worlds() {
+    if std::env::var_os("HORIZON_TEST_CREATE_PIN").is_none() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(Command::new(std::env::current_exe().unwrap())
+            .args(["--include-ignored", "--exact", "instances::tests::creating_with_a_stale_pin_does_not_publish_an_instance_or_copy_its_worlds"])
+            .env("HORIZON_TEST_CREATE_PIN", "1")
+            .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+            .env("HORIZON_HOME", root.path().join("game"))
+            .env("HORIZON_LAUNCHER_LOCATION_FILE", root.path().join("location.json"))
+            .status().unwrap().success());
+        return;
+    }
+    let game = backend::game_home();
+    let world = Path::new("saves/Family/level.dat");
+    put(&game.join(world), "existing world");
+    let older = backend::version_dir(NOV_21);
+    put(&older.join(backend::COMPLETE), "");
+    put(&older.join(backend::CLIENT), "pre-holder game");
+    put(&backend::version_dir(NOV_22).join(backend::COMPLETE), "");
+    let source = find(DEFAULT).unwrap();
+    assert!(backend::installed().contains(&NOV_21.into()));
+    backend::remove_version(NOV_21).unwrap();
+
+    let create = |downloading| {
+        create_with_installation(
+            "Family copy",
+            Some(&source.id),
+            Some(NOV_21.into()),
+            Channel::Nightly,
+            downloading,
+        )
+    };
+    assert!(create(None).unwrap_err().contains(NOV_21));
+    assert!(!game.join(OWN).exists());
+    assert!(!backend::data_dir().join(FILE).exists());
+    assert_eq!(
+        fs::read_to_string(game.join(world)).unwrap(),
+        "existing world"
+    );
+
+    let made = create(Some(NOV_21)).unwrap();
+    assert_eq!(made.version.as_deref(), Some(NOV_21));
+    assert!(made.home.join(world).is_file());
+    assert_eq!(find(&made.id).unwrap().version.as_deref(), Some(NOV_21));
+}
+
+#[test]
 fn installation_edit_refuses_a_deleted_build_unless_a_download_is_ready() {
     if std::env::var_os("HORIZON_TEST_INSTALLATION_EDIT").is_none() {
         let root = tempfile::tempdir().unwrap();

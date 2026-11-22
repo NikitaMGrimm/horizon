@@ -275,9 +275,7 @@ impl Launcher {
                             self.install_error = Some((tag, e));
                         }
                     }
-                    if let Some(next) = self.install_next.take() {
-                        self.install_for_instance(next);
-                    }
+                    self.start_next_instance_install();
                     // After the selection and the queued install: a build waiting for this
                     // install sees both.
                     self.native_look_again(None, None);
@@ -292,6 +290,7 @@ impl Launcher {
                     if let Err(e) = result {
                         self.install_error = Some((tag, e));
                     }
+                    self.start_next_instance_install();
                 }
                 Msg::DiskUse(disk) => self.disk = disk,
                 Msg::Storage(result) => self.storage_arrived(result),

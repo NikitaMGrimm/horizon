@@ -205,10 +205,8 @@ impl Launcher {
 
     fn play_pack(&mut self, work: PathBuf) {
         // The pack's instance plays its own version, if it has one.
-        let pack = instances::pack_for_launch(&work).and_then(|pack| match pack {
-            Some(instance) => Ok((instance.resolve_version(None)?, Some(instance.id))),
-            None => Ok((backend::resolve_version(None)?, None)),
-        });
+        let pack = instances::pack_for_launch(&work)
+            .and_then(|instance| Ok((instance.resolve_version(None)?, instance.id)));
         let (tag, pack_id) = match pack {
             Ok(launch) => launch,
             Err(e) => {
@@ -220,7 +218,7 @@ impl Launcher {
             return;
         }
         self.starting_pack = Some(work);
-        self.start_client(tag, pack_id);
+        self.start_client(tag, Some(pack_id));
     }
 
     /// Looks for other launchers' modpacks on a thread: their folders can be slow to read.

@@ -303,12 +303,12 @@ fn capable_units_delete_only_after_the_last_game_lease_and_mixed_builds_stay_res
 }
 
 #[test]
-fn storage_keeps_a_native_build_pinned_after_inventory() {
+fn storage_protects_a_held_selection_and_a_native_build_pinned_after_inventory() {
     use std::process::Command;
     if std::env::var_os("HORIZON_TEST_STORAGE_PIN").is_none() {
         let root = tempfile::tempdir().unwrap();
         assert!(Command::new(std::env::current_exe().unwrap())
-            .args(["--include-ignored", "--exact", "storage::inventory::regressions::storage_keeps_a_native_build_pinned_after_inventory"])
+            .args(["--include-ignored", "--exact", "storage::inventory::regressions::storage_protects_a_held_selection_and_a_native_build_pinned_after_inventory"])
             .env("HORIZON_TEST_STORAGE_PIN", "1")
             .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
             .env("HORIZON_HOME", root.path().join("game"))
@@ -339,6 +339,19 @@ fn storage_keeps_a_native_build_pinned_after_inventory() {
             .find(|entry| entry.path == native_dir.canonicalize().unwrap())
             .unwrap()
     };
+    let mut settings = backend::Settings {
+        selected: Some(native.into()),
+        ..backend::Settings::default()
+    };
+    settings.save().unwrap();
+    assert!(matches!(listed().clear(), Err(Error::InstanceVersion(_))));
+    assert!(backend::remove_version(native)
+        .unwrap_err()
+        .contains("Horizon"));
+    assert!(native_dir.join(backend::COMPLETE).is_file());
+
+    settings.instance_versions_migrated = true;
+    settings.save().unwrap();
     let entry = listed();
     assert_eq!(entry.category, Category::SpareGameBuilds);
 

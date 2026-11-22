@@ -3679,11 +3679,15 @@ fn modpack(action: ModpackCmd, as_json: bool) -> Result<i32, String> {
             version,
             allow_jar_downloads,
         } => {
-            let work = work(&pack)?;
-            let tag = match instances::pack_for_launch(&work)? {
-                Some(instance) => instance.resolve_version(version.as_deref())?,
-                None => backend::resolve_version(version.as_deref())?,
+            let registry = horizon::pack::packs_dir().join(&pack);
+            let work = match std::fs::symlink_metadata(&registry) {
+                Ok(_) => registry,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    modpacks::ports_dir().join(&pack)
+                }
+                Err(e) => return Err(format!("{}: {e}", registry.display())),
             };
+            let tag = instances::pack_for_launch(&work)?.resolve_version(version.as_deref())?;
             let mut cmd = backend::client(&tag)?;
             modpacks::apply_profile(&mut cmd, &work)?;
             horizon_launcher::jars::prepare_launch(

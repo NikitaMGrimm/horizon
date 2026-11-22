@@ -46,18 +46,38 @@ impl Launcher {
     /// Installs `release` for an instance made or edited to play it, after the install running
     /// now if there is one.
     pub(crate) fn install_for_instance(&mut self, release: Release) {
-        match &self.installing {
-            Some((now, _)) if *now == release.tag => {}
-            Some(_) => self.install_next = Some(release),
-            None => {
-                self.instance_install = Some(release.tag.clone());
-                self.install(&release);
+        let running = self.installing.as_ref().map(|(tag, _)| tag.as_str());
+        enqueue_instance_install(&mut self.install_queue, running, release);
+        self.start_next_instance_install();
+    }
+
+    pub(super) fn start_next_instance_install(&mut self) {
+        if self.installing.is_some() {
+            return;
+        }
+        while let Some(release) = take_instance_install(&mut self.install_queue, &self.removing) {
+            // Another window or a retried Stable update may have supplied the queued build.
+            if backend::is_installed(&release.tag) {
+                if !self.installed.contains(&release.tag) {
+                    self.installed = backend::installed();
+                }
+                continue;
             }
+            self.instance_install = Some(release.tag.clone());
+            self.install(&release);
+            return;
         }
     }
 
     pub(crate) fn install(&mut self, release: &Release) {
-        if release.asset.is_none() || self.removing.contains(&release.tag) {
+        if release.asset.is_none()
+            || self.installing.is_some()
+            || self.removing.contains(&release.tag)
+            || self
+                .install_queue
+                .iter()
+                .any(|queued| queued.tag == release.tag)
+        {
             return;
         }
         let (release, tx) = (release.clone(), self.tx.clone());
@@ -639,6 +659,29 @@ impl Launcher {
     }
 }
 
+fn enqueue_instance_install(
+    queue: &mut VecDeque<Release>,
+    running: Option<&str>,
+    release: Release,
+) {
+    if release.asset.is_some()
+        && running != Some(release.tag.as_str())
+        && queue.iter().all(|queued| queued.tag != release.tag)
+    {
+        queue.push_back(release);
+    }
+}
+
+fn take_instance_install(queue: &mut VecDeque<Release>, removing: &[String]) -> Option<Release> {
+    if queue
+        .front()
+        .is_some_and(|release| removing.contains(&release.tag))
+    {
+        return None;
+    }
+    queue.pop_front()
+}
+
 /// Takes the Play that waited for its version to be prepared, unless another start is under
 /// way: then it stays queued for [`Launcher::start_queued_play`] to try again.
 fn take_queued_play(
@@ -653,10 +696,36 @@ fn take_queued_play(
 
 #[cfg(test)]
 mod tests {
-    use super::take_queued_play;
+    use super::{
+        enqueue_instance_install, take_instance_install, take_queued_play, Release, VecDeque,
+    };
 
     fn queued() -> Option<(String, String)> {
         Some(("nightly-2026-11-19".into(), "instance-1".into()))
+    }
+
+    #[test]
+    fn instance_downloads_wait_in_order_and_keep_each_distinct_save() {
+        let release = |tag: &str| Release {
+            tag: tag.into(),
+            name: tag.into(),
+            body: String::new(),
+            date: String::new(),
+            time: String::new(),
+            asset: Some(("fixture".into(), 1)),
+            prerelease: false,
+            nightly: None,
+        };
+        let mut queue = VecDeque::new();
+        for tag in ["first", "second", "first", "running", "third"] {
+            enqueue_instance_install(&mut queue, Some("running"), release(tag));
+        }
+
+        assert!(take_instance_install(&mut queue, &["first".into()]).is_none());
+        for tag in ["first", "second", "third"] {
+            assert_eq!(take_instance_install(&mut queue, &[]).unwrap().tag, tag);
+        }
+        assert!(take_instance_install(&mut queue, &[]).is_none());
     }
 
     #[test]

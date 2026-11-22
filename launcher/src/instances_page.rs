@@ -517,7 +517,16 @@ impl Launcher {
             let id = match (editing, java) {
                 (Some(id), _) => id,
                 (None, Some((j, mc))) => new_instance::create_java(&j, &name, &mc)?.id,
-                (None, None) => instances::create(&name, copy.as_deref())?.id,
+                (None, None) => {
+                    instances::create_with_installation(
+                        &name,
+                        copy.as_deref(),
+                        pin.clone(),
+                        channel,
+                        downloading.as_deref(),
+                    )?
+                    .id
+                }
             };
             // Finish fallible picture work before committing the edited metadata and commands.
             if let Some(png) = picture {

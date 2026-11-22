@@ -306,7 +306,7 @@ impl Launcher {
     /// Whether Home's Stable update has to wait: another download runs or is queued, and the
     /// update never replaces it.
     pub(super) fn stable_update_waits(&self) -> bool {
-        self.installing.is_some() || self.install_next.is_some()
+        self.installing.is_some() || !self.install_queue.is_empty()
     }
 
     /// Home's Stable update is installed for the instance when no other download is pending.

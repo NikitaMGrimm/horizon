@@ -57,7 +57,7 @@ fn read(work: &Path) -> Option<Installed> {
     read_record(work).ok()
 }
 
-fn read_record(work: &Path) -> Result<Installed, String> {
+pub(crate) fn read_record(work: &Path) -> Result<Installed, String> {
     let mut pack: Installed = horizon_port_pack::pipeline::read_json(&work.join(RECORD))?;
     pack.work = work.to_path_buf();
     Ok(pack)
@@ -177,9 +177,7 @@ fn install_version_in(
 /// Turns the game's command into the pack's profile: its own game folder (the player's
 /// options.txt copied in when the pack brings none), its taken-down mods turned off first.
 pub fn apply(cmd: &mut Command, work: &Path) -> Result<(), String> {
-    if !is_pack(work) {
-        return Err(format!("{} is not an installed modpack.", work.display()));
-    }
+    read_record(work)?;
     let home = home(work);
     fs::create_dir_all(&home).map_err(|e| format!("{}: {e}", home.display()))?;
     let options = home.join("options.txt");

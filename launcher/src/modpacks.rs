@@ -374,21 +374,22 @@ pub(crate) fn listed_checked_in(ports: &Path) -> Result<Vec<Listed>, String> {
 fn listed_results(
     ports: &Path,
 ) -> Result<impl Iterator<Item = Result<Listed, String>> + '_, String> {
-    Ok(pack_folders(ports)?.map(|work| {
-        let work = work?;
-        let pack: Pack = pipeline::read_json(&work.join("pack.json"))?;
-        let slug = work
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-        let title = if pack.name.is_empty() {
-            slug.clone()
-        } else {
-            pack.name
-        };
-        Ok(Listed { slug, title, work })
-    }))
+    Ok(pack_folders(ports)?.map(|work| read_listed(work?)))
+}
+
+pub(crate) fn read_listed(work: PathBuf) -> Result<Listed, String> {
+    let pack: Pack = pipeline::read_json(&work.join("pack.json"))?;
+    let slug = work
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let title = if pack.name.is_empty() {
+        slug.clone()
+    } else {
+        pack.name
+    };
+    Ok(Listed { slug, title, work })
 }
 
 /// Missing pack roots are empty. Checked callers preserve errors for every candidate directory.
@@ -530,7 +531,10 @@ pub fn profile_home(work: &Path) -> PathBuf {
 /// copied in the first time, so keys and video settings carry over) and its carried-over mods.
 /// A modpack from Horizon's registry (`horizon-packs/<id>/`) plays its own profile the same way.
 pub fn apply_profile(cmd: &mut Command, work: &Path) -> Result<(), String> {
-    if horizon_pack::is_pack(work) {
+    let parent = work.parent();
+    if parent == Some(ports_dir().as_path()) {
+        read_listed(work.to_owned())?;
+    } else if parent == Some(horizon_pack::packs_dir().as_path()) || horizon_pack::is_pack(work) {
         return horizon_pack::apply(cmd, work);
     }
     // Only mods that load together: the game would refuse the later of two sharing a namespace.

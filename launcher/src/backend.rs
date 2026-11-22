@@ -3322,14 +3322,13 @@ pub fn prune_old_versions() -> Vec<String> {
         return Vec::new();
     }
     let installed = installed();
-    let protected =
-        match crate::instances::protected_versions(&installed, settings.selected.as_deref()) {
-            Ok(protected) => protected,
-            Err(e) => {
-                eprintln!("Could not check instance versions before pruning: {e}");
-                return Vec::new();
-            }
-        };
+    let protected = match crate::instances::protected_versions(&installed, &settings) {
+        Ok(protected) => protected,
+        Err(e) => {
+            eprintln!("Could not check instance versions before pruning: {e}");
+            return Vec::new();
+        }
+    };
     prune_versions(stale_versions(
         &installed,
         settings.keep_newest(),
@@ -7953,7 +7952,8 @@ pub fn {f}("
             mark_auto_installed(tag).unwrap();
         }
         let installed = installed();
-        let protected = crate::instances::protected_versions(&installed, None).unwrap();
+        let protected =
+            crate::instances::protected_versions(&installed, &Settings::default()).unwrap();
         let candidates = stale_versions(&installed, 1, &protected, auto_installed);
         assert_eq!(candidates, [newly_pinned, unused]);
 

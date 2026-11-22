@@ -185,8 +185,7 @@ fn is_date(text: &str) -> bool {
 pub fn after_update(version: &str) {
     let installed = backend::installed();
     let settings = backend::Settings::load();
-    let Ok(protected) = instances::protected_versions(&installed, settings.selected.as_deref())
-    else {
+    let Ok(protected) = instances::protected_versions(&installed, &settings) else {
         return;
     };
     for old in stale(&installed, version, &protected, backend::auto_installed) {

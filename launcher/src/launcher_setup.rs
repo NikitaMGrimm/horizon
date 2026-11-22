@@ -115,7 +115,7 @@ impl Launcher {
             min_restart_tried: horizon_launcher::update_handoff::min_restarted(),
             update_install: None,
             instance_install: None,
-            install_next: None,
+            install_queue: VecDeque::new(),
             stable_install: None,
             stable_failed: None,
             bar: (0., 0.),
@@ -609,7 +609,10 @@ impl Launcher {
         let Some(release) = self.updates.horizon.clone() else {
             return;
         };
-        if self.installing.is_some() || self.removing.contains(&release.tag) {
+        if self.installing.is_some()
+            || !self.install_queue.is_empty()
+            || self.removing.contains(&release.tag)
+        {
             return;
         }
         self.update_install = Some(release.tag.clone());
