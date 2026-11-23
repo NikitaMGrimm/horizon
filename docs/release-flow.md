@@ -854,10 +854,12 @@ After approving the current head commit, put `/merge` on the first line of a com
   newer commits and earlier queue entries. The merge group's `verify` uses GitHub's queue entries to identify
   each `/merge` squash commit, then checks the paths that commit actually applies to its parent. The workflow's
   reply identifies the reviewer, PR head and queue entry. The queue check retries while the reply becomes visible.
-  If posting the reply fails after retries, the command attempts to remove its original entry. A group with a
-  delegated entry and no matching receipt fails `verify`. The grant must still be live and cover the paths under
-  the policy at the group's base and the commit's parent. A `needs-proof` or `release-now` label on a delegated
-  entry at verification time fails the group's `verify`. This includes labels added after enqueue. A maintainer's
+  If posting the reply fails after retries, the command reports the failure. GitHub's dequeue API targets the
+  pull request, so automatic cleanup could remove a maintainer's replacement entry. The required `verify`
+  check fails a group containing a delegated entry without its matching receipt. The grant must still be live
+  and cover the paths under the policy at the group's base and the commit's parent. A `needs-proof` or
+  `release-now` label on a delegated entry at verification time fails the group's `verify`. This includes labels
+  added after enqueue. A maintainer's
   own queue entries keep their usual checks. The rules of
   [Merging](#merging) still bind the reviewer: read the whole diff, wait for `parity` on gameplay code, and a "don't
   merge" from anyone holds it. A fork's workflow runs and `run-parity` still take a Team member.
@@ -869,7 +871,7 @@ After approving the current head commit, put `/merge` on the first line of a com
   a council-approved commit on `main` would have to rename a file covered by the grant directly onto
   `.github/workflows/ci.yml` between enqueue and group build. Horizon accepts this GitHub Actions boundary.
   An organization-level required workflow could move that check outside the group ref.
-- **Two tokens.** The workflow's own token reads and answers. A GitHub App's token changes the queue. A pull
+- **Two tokens.** The workflow's own token reads and answers. A GitHub App's token enqueues the pull request. A pull
   request queued by the workflow's own token gets no `merge_group` run, so `verify` would never start. The App
   token is made only when the comment's author has a live line. Until the app exists, `/merge` answers that it
   isn't switched on. An organisation owner sets it up once: a

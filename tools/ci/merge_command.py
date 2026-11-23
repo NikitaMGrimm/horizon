@@ -81,9 +81,6 @@ ENQUEUE = """mutation($id: ID!, $head: GitObjectID!) {
     mergeQueueEntry { id enqueuer { ... on Bot { databaseId } } }
   }
 }"""
-DEQUEUE = """mutation($id: ID!) {
-  dequeuePullRequest(input: {id: $id}) { mergeQueueEntry { id } }
-}"""
 QUEUE = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
   ref(qualifiedName: "refs/heads/main") { target { oid } }
   mergeQueue(branch: "main") { entries(first: 100) { nodes {
@@ -377,15 +374,12 @@ class Api:
                     ".files[] | [.filename, .previous_filename]")
         return [tuple(json.loads(line)) for line in raw.splitlines() if line.strip()]
 
-    def queue_mutation(self, query: str, node: str, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["gh", "api", "graphql", "-f", f"query={query}", "-f", f"id={node}", *args],
-                              capture_output=True, text=True, timeout=WRITE_TIMEOUT,
-                              env={**os.environ, "GH_TOKEN": self.merge_token})
-
     def enqueue(self, node: str, head: str) -> str:
         """Adds it at this head, returning the queue entry ID GitHub assigns to this enqueue."""
         try:
-            r = self.queue_mutation(ENQUEUE, node, "-f", f"head={head}")
+            r = subprocess.run(["gh", "api", "graphql", "-f", f"query={ENQUEUE}", "-f", f"id={node}", "-f",
+                                f"head={head}"], capture_output=True, text=True, timeout=WRITE_TIMEOUT,
+                               env={**os.environ, "GH_TOKEN": self.merge_token})
         except subprocess.TimeoutExpired:
             raise Refused("GitHub didn't confirm the enqueue. The queue check requires a receipt.") from None
         if r.returncode != 0:
@@ -400,23 +394,6 @@ class Api:
         except (ValueError, KeyError, TypeError):
             pass
         raise Refused("GitHub didn't confirm a queue entry from this app. The queue check requires a receipt.")
-
-    def dequeue(self, number: int, node: str, entry_id: str) -> None:
-        # GitHub's mutation targets the PR, so check for our entry immediately before using it.
-        data = self.repository(f"query($owner: String!, $name: String!) {{ repository(owner: $owner, name: $name) "
-                               f"{{ pullRequest(number: {number}) "
-                               "{ mergeQueueEntry { id enqueuer { ... on Bot { databaseId } } } } } }")
-        current = data["pullRequest"]["mergeQueueEntry"]
-        if not current or current["id"] != entry_id:
-            return
-        if not self.app_bot_id or current["enqueuer"].get("databaseId") != self.app_bot_id:
-            raise RuntimeError("GitHub didn't confirm the original entry's enqueuer.")
-        result = self.queue_mutation(DEQUEUE, node)
-        if result.returncode:
-            raise RuntimeError(f"GitHub refused to remove the unreceipted queue entry: {result.stderr.strip()[:300]}")
-        removed = json.loads(result.stdout)["data"]["dequeuePullRequest"]["mergeQueueEntry"]
-        if not removed or removed["id"] != entry_id:
-            raise RuntimeError("GitHub did not confirm removal of the original queue entry.")
 
     def repository(self, query: str) -> dict:
         owner, name = self.repo.split("/", 1)
@@ -498,15 +475,17 @@ def merges_by(api, actor: ns.Actor, now: datetime) -> int:
     return len({m[3] for body in api.recent_answers(since) if (m := answer_mark(body)) and int(m[1]) == actor.id})
 
 
-def retry_write(write, *args) -> None:
+def post_receipt(api, number: int, receipt: str) -> None:
     for attempt in range(3):
         try:
-            write(*args)
+            api.comment(number, receipt)
             return
         except WRITE_ERRORS as e:
             print(str(e)[:350], file=sys.stderr)
             if attempt == 2:
-                raise
+                # Dequeue targets the PR and could remove a maintainer's replacement entry.
+                raise Refused("GitHub couldn't confirm the queue receipt after retries. "
+                              "The merge group's `verify` requires a matching receipt.") from None
             sleep(attempt + 1)
 
 
@@ -562,15 +541,7 @@ def run(api, actor: ns.Actor, number: int, url: str, grants: Grants, guarded: li
     entry = api.enqueue(pr.node, pr.head)
     receipt = (f"{PREFIX}added to the merge queue at `{pr.head[:7]}`, on behalf of @{actor.login} "
                f"([their comment]({url})). <!-- merge-by:{actor.id} head:{pr.head} queue:{entry} -->")
-    try:
-        retry_write(api.comment, number, receipt)
-    except WRITE_ERRORS:
-        try:
-            retry_write(api.dequeue, number, pr.node, entry)
-        except (*WRITE_ERRORS, ValueError, KeyError, TypeError) as e:
-            print(repr(e), file=sys.stderr)
-            raise Refused("GitHub couldn't publish the receipt or confirm queue removal. `verify` requires the receipt.") from None
-        raise Refused("GitHub couldn't publish the receipt. The original entry is no longer queued.") from None
+    post_receipt(api, number, receipt)
     return receipt
 
 

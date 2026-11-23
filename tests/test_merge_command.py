@@ -74,9 +74,6 @@ class Fake:
     def comment(self, n, text):
         self.comments.append(text)
 
-    def dequeue(self, number, node, entry):
-        self.queued.remove((node, self.pr.head))
-
     def recent_answers(self, since):
         return self.past
 
@@ -279,7 +276,7 @@ class PullRequestTests(unittest.TestCase):
         self.refused("approving review is required", api)
         self.assertEqual(api.comments, [])
 
-    def test_a_timed_out_receipt_post_is_retried_before_queue_removal(self):
+    def test_a_timed_out_receipt_post_is_retried(self):
         api = Fake()
 
         def retry(n, receipt):
@@ -292,22 +289,6 @@ class PullRequestTests(unittest.TestCase):
             self.assertEqual(do(api)[0], queued_answer())
         self.assertEqual(api.queued, [("PR_1", HEAD)])
         self.assertEqual(api.comments, [queued_answer(), queued_answer()])
-
-    def test_persistent_receipt_post_failure_removes_the_original_entry(self):
-        api = Fake()
-        with mock.patch.object(api, "comment", side_effect=RuntimeError("GitHub unavailable")), \
-                mock.patch.object(mc, "sleep"):
-            self.refused("original entry is no longer queued", api)
-        self.assertEqual(api.comments, [])
-
-    def test_unconfirmed_queue_removal_does_not_publish_a_success_receipt(self):
-        api = Fake()
-        with mock.patch.object(api, "comment", side_effect=RuntimeError("GitHub unavailable")), \
-                mock.patch.object(api, "dequeue", side_effect=RuntimeError("GitHub unavailable")), \
-                mock.patch.object(mc, "sleep"):
-            with self.assertRaisesRegex(mc.Refused, "couldn't publish the receipt or confirm queue removal"):
-                do(api)
-        self.assertEqual(api.comments, [])
 
 
 class FilesTests(unittest.TestCase):
@@ -554,30 +535,12 @@ class AnswerTests(unittest.TestCase):
             reply = {"data": {"enqueuePullRequest": {"mergeQueueEntry": {
                 "id": ENTRY, "enqueuer": {"databaseId": bot_id}}}}}
             result = subprocess.CompletedProcess([], 0, json.dumps(reply), "")
-            with self.subTest(bot_id=bot_id), mock.patch.object(api, "queue_mutation", return_value=result):
+            with self.subTest(bot_id=bot_id), mock.patch.object(mc.subprocess, "run", return_value=result):
                 if bot_id == APP_BOT_ID:
                     self.assertEqual(api.enqueue("PR_1", HEAD), ENTRY)
                 else:
                     with self.assertRaisesRegex(mc.Refused, "didn't confirm a queue entry from this app"):
                         api.enqueue("PR_1", HEAD)
-
-    def test_receipt_cleanup_leaves_replacement_queue_entries_alone(self):
-        api = mc.Api("horizon-rust/horizon", "app-token", APP_BOT_ID)
-        replacement = {"pullRequest": {"mergeQueueEntry": {"id": "MQE_replacement", "enqueuer": {}}}}
-        with mock.patch.object(api, "repository", return_value=replacement), \
-                mock.patch.object(api, "queue_mutation") as mutation:
-            api.dequeue(5, "PR_1", ENTRY)
-        mutation.assert_not_called()
-
-    def test_receipt_cleanup_dequeues_the_confirmed_app_entry(self):
-        api = mc.Api("horizon-rust/horizon", "app-token", APP_BOT_ID)
-        active = {"pullRequest": {"mergeQueueEntry": {"id": ENTRY, "enqueuer": {"databaseId": APP_BOT_ID}}}}
-        reply = {"data": {"dequeuePullRequest": {"mergeQueueEntry": {"id": ENTRY}}}}
-        result = subprocess.CompletedProcess([], 0, json.dumps(reply), "")
-        with mock.patch.object(api, "repository", return_value=active), \
-                mock.patch.object(api, "queue_mutation", return_value=result) as mutation:
-            api.dequeue(5, "PR_1", ENTRY)
-        mutation.assert_called_once_with(mc.DEQUEUE, "PR_1")
 
     def test_queue_attribution_only_reads_the_workflow_bots_answers(self):
         comments = [{"author": {}, "body": queued_answer(actor=OTHER), "createdAt": ENQUEUED},
@@ -658,8 +621,8 @@ class AnswerTests(unittest.TestCase):
 class CommandTests(unittest.TestCase):
     """command(), as merge-command.yml runs it: the comment in the environment, one answer posted back."""
 
-    def run_command(self, body, author=REVIEWER, token="app-token"):
-        api = Fake()
+    def run_command(self, body, author=REVIEWER, token="app-token", api=None):
+        api = api or Fake()
         env = {"REPO": "horizon-rust/horizon", "ISSUE": "5", "AUTHOR": author.login, "AUTHOR_ID": str(author.id),
                "BODY": body, "COMMENT_URL": URL, "GH_TOKEN": "token", "MERGE_TOKEN": token,
                "MERGE_APP_BOT_ID": str(APP_BOT_ID)}
@@ -681,6 +644,21 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(api.queued, [("PR_1", HEAD)])
         self.assertEqual(len(api.comments), 1)
         self.assertIn("added to the merge queue", api.comments[0])
+
+    def test_receipt_post_failure_is_reported_and_leaves_the_entry_for_verify(self):
+        api = Fake()
+        comment = api.comment
+
+        def fail_receipt(n, text):
+            if mc.answer_mark(text):
+                raise RuntimeError("GitHub couldn't post the receipt")
+            comment(n, text)
+
+        with mock.patch.object(api, "comment", side_effect=fail_receipt), mock.patch.object(mc, "sleep"):
+            self.run_command("/merge", api=api)
+        self.assertEqual(api.queued, [("PR_1", HEAD)])
+        self.assertEqual(api.comments, ["🤖 Merge: refused, GitHub couldn't confirm the queue receipt after retries. "
+                                        "The merge group's `verify` requires a matching receipt. (asked by @duzzl)"])
 
     def test_a_refusal_answers_and_queues_nothing(self):
         for api in (self.run_command("/merge", author=OTHER), self.run_command("/merge", token="")):
