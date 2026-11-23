@@ -1,0 +1,70 @@
+name: merge command
+# `/merge` comments: the merge reviewers in .github/merge-reviewers.txt send someone else's pull request to the merge
+# queue without any repository role, inside the folders and until the day their line names
+# (docs/release-flow.md "Merge reviewers", tools/ci/merge_command.py).
+#
+# Why no pull request's code runs here, though a token can merge:
+# - `issue_comment` always runs this file from main, whoever comments and wherever.
+# - It checks out main's script and lists only, never a pull request; it reads the pull request through the API.
+# - The comment's text and author reach the script as env vars, never in a shell line. The tokens stay in the step.
+#
+# Two tokens. The workflow's own reads and answers. The app's adds to the queue and does nothing else: a pull request
+# queued by the workflow's own token gets no `merge_group` run, so `verify` would never start. Its key is a secret
+# of the `merge-command` environment, which only main's workflows can use.
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+jobs:
+  command:
+    # Every other comment skips here, before a runner starts.
+    if: >-
+      github.event.issue.pull_request && github.event.comment.user.type != 'Bot' && (
+      startsWith(github.event.comment.body, '/merge') ||
+      startsWith(github.event.comment.body, '🤖 Agent: /merge'))
+    # One command per pull request at a time. On the job, not the workflow: the skipped runs of ordinary comments
+    # must not cancel a waiting one.
+    concurrency:
+      group: merge-command-${{ github.event.issue.number }}
+    # GitHub's own runner, never one of ours: this job holds a token that can merge.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: merge-command
+    permissions:
+      contents: read
+      issues: write         # answers in the thread
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: |
+            .github/CODEOWNERS
+            .github/merge-reviewers.txt
+            tools/ci/nightly_set.py
+            tools/ci/merge_command.py
+          sparse-checkout-cone-mode: false
+      - name: The app's token, for the merge queue alone
+        id: app
+        # Until the app exists the script answers that `/merge` isn't switched on.
+        if: vars.MERGE_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MERGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Run the command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ steps.app.outputs.token }}
+          BODY: ${{ github.event.comment.body }}
+          AUTHOR: ${{ github.event.comment.user.login }}
+          # Who may act is decided by this numeric ID: a login can be claimed by someone else after a rename.
+          AUTHOR_ID: ${{ github.event.comment.user.id }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+        run: python3 tools/ci/merge_command.py command

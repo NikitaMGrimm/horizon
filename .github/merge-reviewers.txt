@@ -1,0 +1,14 @@
+# Merge reviewers: accounts that send other people's pull requests to the merge queue with a `/merge` comment, with
+# no repository role (docs/release-flow.md "Merge reviewers", tools/ci/merge_command.py).
+# One line per reviewer:
+#
+#   <numeric GitHub ID> <login> until <YYYY-MM-DD> </folder/> [</folder/> ...]   # who added it and when
+#
+# - The ID decides; the login is for people reading this file. Get it with `gh api users/<login> --jq .id`.
+# - `until` is the last day (UTC) the line works. It can be at most 31 days away: a later date grants nothing until
+#   it is that close, so staying a merge reviewer takes a new date every month. Extend a line by changing its date.
+# - The folders are the only places a pull request may change for this reviewer's `/merge` to work, written from
+#   the repository's root as in CODEOWNERS (`/crates/horizon-world/`, `/tools/test_*_parity.py`). What CODEOWNERS
+#   guards is never included, whatever is written here.
+# A line in any other form grants nothing. Removing a line revokes that account at once. A line with only `paused`
+# stops `/merge` for everyone listed.

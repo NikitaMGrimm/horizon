@@ -11,6 +11,7 @@ How decisions are made is in [GOVERNANCE.md](../GOVERNANCE.md); how a change rea
 | --- | --- |
 | **Horizon Team** (GitHub team `horizon-team`, write access) | Review, label and merge pull requests; approve a fork's workflow runs; re-run failed jobs; start workflows by hand (`gh workflow run`); add `release-blocker` to an issue; merge in horizon-mods (form pull requests too) and upload its `staging` files |
 | **Trusted reviewers** (`.github/trusted-reviewers.txt`) | `/nightly`, `/close`, `/reopen`, `/label`, `/unlabel`, `/unclaim` by comment ([release-flow.md](release-flow.md#trusted-reviewers)) |
+| **Merge reviewers** (`.github/merge-reviewers.txt`) | `/merge` by comment on someone else's pull request, inside the folders and until the day their line names ([release-flow.md](release-flow.md#merge-reviewers)) |
 | **Council** (🏛️ Council on Discord) | Decide by poll (`/vote`, `/poll start`); emergency actions (GOVERNANCE.md 4.6) |
 | **Organisation owners** (Ludovic and rdbtCVS since 2026-11-11, council poll P28) | Repository variables and secrets (`SELF_HOSTED_CI`, `RELEASES_PAUSED`), branch protection, adding people to GitHub teams, merging past a missing review, the security advisories |
 | **Code owners** (`.github/CODEOWNERS`: the team `horizon-rust/council`, P35) | Approve pull requests that touch `.github/`, `tools/ci/`, the release, signing and update code |

@@ -121,7 +121,8 @@ and ships releases). Branches don't have to be up to date with main: main's own 
 semantic conflict.
 
 **Who merges.** The Horizon Team (GitHub team `horizon-team`: kacpherek, levzzz5154, rdbtCVS, Online5277, dezer-x,
-NikitaMGrimm) and Ludovic. The orchestrator's agents prove only the risky pull requests (below), so a contributor's
+NikitaMGrimm) and Ludovic. A [merge reviewer](#merge-reviewers) merges by comment, inside the folders and until
+the day the council gave them. The orchestrator's agents prove only the risky pull requests (below), so a contributor's
 ordinary pull request doesn't wait for them.
 
 **An ordinary pull request merges on CI.** A Team member:
@@ -812,6 +813,42 @@ Online5277 since 2026-10-27, levzzz5154 since 2026-10-28) and for Ludovic, with 
   `tools/ci/nightly_set.py`); each holds these owner powers. A line in any other form, a bare login included, grants nothing.
   `python3 tools/ci/resolve_reviewer_ids.py` fills in IDs for new lines; `--check` reports a listed ID whose login
   changed (a rename to look at) or whose account is gone.
+
+### Merge reviewers
+
+A merge reviewer sends other people's pull requests to the merge queue with a comment, inside the folders a line of
+`.github/merge-reviewers.txt` names and until the day it names, with no repository role: no push, no labels, no
+workflow approval. It is how someone reviews and merges for a month before the Team decides about them.
+
+```text
+/merge        on a pull request, after approving its head commit
+```
+
+- **The line.** `<numeric GitHub ID> <login> until <YYYY-MM-DD> </folder/> ...`, folders written from the root as in
+  CODEOWNERS. It works through that day (UTC) and then stops by itself. The day can be at most 31 days away: a later
+  one grants nothing until it is that close (and fails `tests/test_merge_command.py` in the pull request that writes
+  it), so staying a merge reviewer takes a new date every month. Changing the date extends it; removing the line or
+  adding a `paused` line stops it at once. The file is under `.github/`, so the council reviews every change to it.
+- **What it takes.** The pull request is open, to main, not a draft, not the reviewer's own and holds no commit of
+  theirs. Every file it changes (a renamed file under both names) is in the reviewer's folders, and none is one
+  CODEOWNERS guards, whatever the line says. The reviewer's own approving review is on the head commit. Nobody's
+  change request is open, `verify` and every other check of the head passed, and it carries neither `needs-proof`
+  nor `release-now` (those stay the Team's, as in a Team member's probation). At most 60 merges per reviewer in 24
+  hours.
+- **What happens.** The workflow answers with one comment, `🤖 Merge: added to the merge queue at <commit>, on behalf
+  of @login`, or with the reason it refused. The pull request enters the queue at the commit that was approved
+  (GitHub refuses if it moved since) and the queue runs `verify` on it like on any other. The rules of
+  [Merging](#merging) still bind the reviewer: read the whole diff, wait for `parity` on gameplay code, and a "don't
+  merge" from anyone holds it. A fork's workflow runs and `run-parity` still take a Team member.
+- **Where.** `.github/workflows/merge-command.yml`, `tools/ci/merge_command.py`. Main's copy of the workflow runs,
+  on GitHub's own runner; no pull request's code is checked out or run, and the comment reaches the script as env
+  vars.
+- **Two tokens.** The workflow's own token reads and answers. A GitHub App's token adds to the queue and does
+  nothing else: a pull request the workflow's own token queued gets no `merge_group` run, so `verify` would never
+  start. Until the app exists, `/merge` answers that it isn't switched on. An organisation owner sets it up once: a
+  GitHub App with **Contents** and **Pull requests** read and write and no webhook, installed on this repository
+  only; then an environment `merge-command`, deployable from `main` only, holding the app's client ID as the
+  variable `MERGE_APP_CLIENT_ID` and its private key as the secret `MERGE_APP_PRIVATE_KEY`.
 
 ### Stale pull requests
 

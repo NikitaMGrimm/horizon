@@ -208,7 +208,7 @@ class AllowTests(unittest.TestCase):
 
 class WorkflowIdTests(unittest.TestCase):
     def test_every_command_workflow_passes_the_authors_id(self):
-        for name in ("nightly-command.yml", "triage-command.yml", "claim-command.yml"):
+        for name in ("nightly-command.yml", "triage-command.yml", "claim-command.yml", "merge-command.yml"):
             text = (ROOT / ".github/workflows" / name).read_text()
             self.assertIn("AUTHOR_ID: ${{ github.event.comment.user.id }}", text, name)
 
