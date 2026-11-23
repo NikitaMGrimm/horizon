@@ -23,11 +23,10 @@ jobs:
       github.event.issue.pull_request && github.event.comment.user.type != 'Bot' && (
       startsWith(github.event.comment.body, '/merge') ||
       startsWith(github.event.comment.body, '🤖 Agent: /merge'))
-    # One command per pull request and person at a time. On the job, not the workflow: the skipped runs of ordinary
-    # comments must not cancel a waiting one. Per person: a group keeps one waiting run, so anyone's `/merge` would
-    # otherwise push a reviewer's out.
+    # Only one workflow can take credit for a queue entry. Keep waiting requests in order on each pull request.
     concurrency:
-      group: merge-command-${{ github.event.issue.number }}-${{ github.event.comment.user.id }}
+      group: merge-command-${{ github.event.issue.number }}
+      queue: max
     # GitHub's own runner, never one of ours: this job holds a token that can merge.
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -59,7 +58,7 @@ jobs:
         id: app
         # Made for a live merge reviewer only; anyone else is answered without it. Until the app exists the script
         # answers that `/merge` isn't switched on.
-        if: steps.who.outputs.live == 'true' && vars.MERGE_APP_CLIENT_ID != ''
+        if: steps.who.outputs.live == 'true' && vars.MERGE_APP_CLIENT_ID != '' && vars.MERGE_APP_SLUG != ''
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.MERGE_APP_CLIENT_ID }}
@@ -69,7 +68,7 @@ jobs:
       - name: Run the command
         env:
           GH_TOKEN: ${{ github.token }}
-          MERGE_TOKEN: ${{ steps.app.outputs.token }}
+          MERGE_TOKEN: ${{ steps.app.outputs.app-slug == vars.MERGE_APP_SLUG && steps.app.outputs.token || '' }}
           BODY: ${{ github.event.comment.body }}
           AUTHOR: ${{ github.event.comment.user.login }}
           # Who may act is decided by this numeric ID: a login can be claimed by someone else after a rename.

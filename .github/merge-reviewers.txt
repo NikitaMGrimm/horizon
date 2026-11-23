@@ -3,6 +3,8 @@
 # One line per reviewer:
 #
 #   <numeric GitHub ID> <login> until <YYYY-MM-DD> </folder/> [</folder/> ...]   # who added it and when
+# Example folders: /crates/horizon-world/ /crates/horizon-client/src/game/blocks/ /crates/horizon-client/src/game/mobs/
+#                  /crates/horizon-client/src/game/items/
 #
 # - The ID decides; the login is for people reading this file. Get it with `gh api users/<login> --jq .id`.
 # - `until` is the last day (UTC) the line works. It can be at most 31 days away: a later date grants nothing until
@@ -11,5 +13,7 @@
 #   the repository's root: `/crates/horizon-world/` is that folder and all below it, `/tools/test_*_parity.py`
 #   those files (`*` stays inside one name; no `**`). What CODEOWNERS guards is never included, whatever is
 #   written here.
+# - Use narrow gameplay folders within horizon-client. CODEOWNERS covers zero files in that crate today. A
+#   /crates/horizon-client/ grant includes the mod API, native hooks, networking, LAN, anticheat, control and HDR.
 # A line in any other form grants nothing. Removing a line revokes that account at once. A line with only `paused`
 # stops `/merge` for everyone listed.

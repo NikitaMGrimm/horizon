@@ -608,6 +608,10 @@ jobs:
     if: always()
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
     steps:
       - name: Every part of verify passed or had nothing to do
         env:
@@ -641,6 +645,37 @@ jobs:
           [ "$WINDOWS_WASM_CACHE" = success ] ||
             { [ "$WINDOWS_WASM_CACHE" = skipped ] &&
               { [ "$EVENT" != pull_request ] || [ "$WINDOWS_WASM_CACHE_ANSWER" = false ]; }; } || exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'merge_group'
+        with:
+          ref: ${{ github.event.merge_group.head_sha }}
+          fetch-depth: 101 # at most 100 builds in GitHub's queue, plus the base
+          persist-credentials: false
+          sparse-checkout: |
+            /.github/CODEOWNERS
+            /.github/merge-reviewers.txt
+            /tools/ci/merge_command.py
+            /tools/ci/nightly_set.py
+          sparse-checkout-cone-mode: false
+      - name: Verify delegated merge queue paths
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          MERGE_APP_SLUG: ${{ vars.MERGE_APP_SLUG }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}"
+          verifier=$(git ls-tree "$BASE_SHA" -- tools/ci/merge_command.py)
+          # The pull request introducing /merge has no verifier in its base and no app configured yet.
+          if [ -z "$verifier" ] && [ -z "$MERGE_APP_SLUG" ]; then exit 0; fi
+          trusted=$(mktemp -d)
+          trap 'rm -rf "$trusted"' EXIT
+          for script in merge_command.py nightly_set.py; do
+            git show "$BASE_SHA:tools/ci/$script" > "$trusted/$script"
+          done
+          python3 "$trusted/merge_command.py" --verify-merge-group
   # Compile and test Windows ARM64 on an actual ARM64 host, and inspect the resulting PE headers. By hand only
   # (`gh workflow run checks --ref <branch> -f arm64=true`): GitHub's runner queue is the bottleneck, and main's runs
   # gate the releases (tools/release_train.py waits for them), so neither pull requests nor main's pushes start this

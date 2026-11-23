@@ -831,6 +831,10 @@ workflow approval. It is how someone reviews and merges for a month before the T
   it), so staying a merge reviewer takes a new date every month. Changing the date extends it. Removing the line or
   adding a `paused` line stops new requests once the change reaches main. The council reviews every change to the
   file under `.github/`.
+- **Client scope.** CODEOWNERS currently covers zero files inside `crates/horizon-client/`. A crate-wide grant
+  includes the mod API, native hooks, networking, LAN, anticheat, agent control and HDR. For gameplay reviews,
+  start with `/crates/horizon-world/` and the needed client folders, such as `/crates/horizon-client/src/game/blocks/`,
+  `/crates/horizon-client/src/game/mobs/` and `/crates/horizon-client/src/game/items/`.
 - **What it takes.** The pull request is open, to main, not a draft, not the reviewer's own and holds no commit of
   theirs, co-written ones included. Every path in the contributed diff and in the diff that GitHub's test merge
   applies to current main must be in the reviewer's folders and clear of CODEOWNERS. Both names of a rename count.
@@ -845,7 +849,11 @@ workflow approval. It is how someone reviews and merges for a month before the T
   the checked-out policy and that the head and test merge are still the ones whose paths it checked. After looking
   up GitHub Actions' `verify` on that exact head, it reads main's tip again and checks the live grants against the
   current UTC date. GitHub pins the approved head when enqueueing. The queue can apply the change on top of
-  newer commits and earlier queue entries, and runs `verify` on the resulting merge group. The rules of
+  newer commits and earlier queue entries. The merge group's `verify` uses GitHub's queue entries to identify
+  each `/merge` squash commit, then checks the paths that commit actually applies to its parent. The workflow's
+  reply identifies the reviewer, PR head and queue entry. The grant must still be live and cover the paths under
+  the policy at the group's base and the commit's parent. A maintainer's own queue entries keep their usual
+  checks. The rules of
   [Merging](#merging) still bind the reviewer: read the whole diff, wait for `parity` on gameplay code, and a "don't
   merge" from anyone holds it. A fork's workflow runs and `run-parity` still take a Team member.
 - **Where.** `.github/workflows/merge-command.yml`, `tools/ci/merge_command.py`. Main's copy of the workflow runs,
@@ -856,7 +864,9 @@ workflow approval. It is how someone reviews and merges for a month before the T
   start. It is made only when the comment's author has a live line. Until the app exists, `/merge` answers that it isn't switched on. An organisation owner sets it up once: a
   GitHub App with **Contents** and **Pull requests** read and write and no webhook, installed on this repository
   only; then an environment `merge-command`, deployable from `main` only, holding the app's client ID as the
-  variable `MERGE_APP_CLIENT_ID` and its private key as the secret `MERGE_APP_PRIVATE_KEY`.
+  variable `MERGE_APP_CLIENT_ID` and its private key as the secret `MERGE_APP_PRIVATE_KEY`. Set the repository
+  variable `MERGE_APP_SLUG` to the app's slug, without `[bot]`, so the queue can identify its entries. Let that
+  app's entries leave the queue before changing its slug or replacing it.
 
 ### Stale pull requests
 

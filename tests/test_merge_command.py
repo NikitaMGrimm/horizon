@@ -1,7 +1,9 @@
 import io
 import os
+import subprocess
+import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import chdir, redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 11, 23, 12, tzinfo=timezone.utc)
 URL = "https://github.com/horizon-rust/horizon/pull/5#issuecomment-1"
 HEAD, BASE, MERGE = "a" * 40, "c" * 40, "d" * 40
+ENTRY = "MQE_test"
 REVIEWER, AUTHOR, OTHER = ns.Actor("duzzl", 301), ns.Actor("dev", 302), ns.Actor("kacpherek", 101)
 GUARDED = ns.guarded_patterns("/.github/ @horizon-rust/council\n/launcher/src/backend.rs @horizon-rust/council\n")
 LIST = mc.read_grants("301 duzzl until 2026-12-20 /crates/horizon-client/ /tools/test_*_parity.py\n")
@@ -21,6 +24,11 @@ LIST = mc.read_grants("301 duzzl until 2026-12-20 /crates/horizon-client/ /tools
 
 def approval(by=REVIEWER, state="APPROVED", commit=HEAD):
     return mc.Review(by.id, by.login, state, commit)
+
+
+def queued_answer(actor=REVIEWER, head=HEAD, entry=ENTRY):
+    return (f"🤖 Merge: added to the merge queue at `{head[:7]}`, on behalf of @{actor.login} "
+            f"([their comment]({URL})). <!-- merge-by:{actor.id} head:{head} queue:{entry} -->")
 
 
 def pull(**changes):
@@ -58,6 +66,7 @@ class Fake:
         if self.queue_error:
             raise mc.Refused(self.queue_error)
         self.queued.append((node, head))
+        return ENTRY
 
     def comment(self, n, text):
         self.comments.append(text)
@@ -116,8 +125,7 @@ class WhoTests(unittest.TestCase):
     def test_a_listed_reviewer_queues_someone_elses_pull_request(self):
         text, api = do()
         self.assertEqual(api.queued, [("PR_1", HEAD)])
-        self.assertEqual(text, f"🤖 Merge: added to the merge queue at `aaaaaaa`, on behalf of @duzzl "
-                               f"([their comment]({URL})). <!-- merge-by:301 -->")
+        self.assertEqual(text, queued_answer())
 
     def refused(self, pattern, **how):
         api = how.pop("api", None) or Fake()
@@ -173,8 +181,7 @@ class WhoTests(unittest.TestCase):
         self.refused("isn't switched on", switched_on=False)
 
     def test_more_than_the_days_merges_are_refused(self):
-        done = "🤖 Merge: added to the merge queue at `aaaaaaa`, on behalf of @duzzl ([their comment](u)). " \
-               "<!-- merge-by:301 -->"
+        done = queued_answer()
         # Someone else's merges, and a refusal that quotes a file named like the mark, are not this reviewer's.
         others = [done.replace("merge-by:301 ", "merge-by:3011 "), done.replace("merge-by:301 ", "merge-by:30 "),
                   "🤖 Merge: refused, It changes `x<!-- merge-by:301 -->` (asked by @duzzl)"]
@@ -330,6 +337,121 @@ class FilesTests(unittest.TestCase):
         self.refused("didn't list every file", [], count=0)
 
 
+class MergeGroupTests(unittest.TestCase):
+    INSIDE = Path("crates/horizon-client/src/game/blocks/block.rs")
+    OUTSIDE = Path("unowned/block.rs")
+
+    def setUp(self):
+        self.enterContext(chdir(self.enterContext(tempfile.TemporaryDirectory())))
+        mc.git("init", "-q")
+        mc.git("config", "user.name", "Fixture")
+        mc.git("config", "user.email", "fixture@example.invalid")
+        mc.git("config", "commit.gpgSign", "false")
+        self.write(mc.GRANTS, "301 duzzl until 2026-12-20 /crates/horizon-client/src/game/blocks/\n")
+        self.write(ns.CODEOWNERS, "/.github/ @horizon-rust/council\n")
+        self.write(self.INSIDE, "contents\n")
+        self.base = self.commit()
+        self.api = mock.Mock()
+        self.api.delegation_answers.return_value = {5: [queued_answer()]}
+        self.enterContext(mock.patch.object(mc, "datetime", mock.Mock(now=lambda tz: NOW)))
+
+    def write(self, path, text):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def commit(self):
+        mc.git("add", "--", ".")
+        mc.git("commit", "-qm", "Fixture squash")
+        return mc.git("rev-parse", "HEAD").decode().strip()
+
+    def entry(self, squash, parent=None, **changes):
+        entry = mc.QueueEntry(ENTRY, 5, HEAD, parent or self.base, squash, "Bot", "horizon-merge-command")
+        return replace(entry, **changes)
+
+    def check(self, *entries):
+        self.api.queue_entries.return_value = (self.base, list(entries))
+        mc.verify_group(self.api, self.base, entries[-1].squash, "horizon-merge-command")
+
+    def test_delegated_in_scope_squash_passes(self):
+        self.write(self.INSIDE, "updated\n")
+        self.check(self.entry(self.commit()))
+
+    def test_rename_requires_both_paths_to_be_in_scope(self):
+        self.OUTSIDE.parent.mkdir()
+        mc.git("mv", str(self.INSIDE), str(self.OUTSIDE))
+        moved_out = self.commit()
+        with self.assertRaisesRegex(mc.Refused, "unowned/block.rs.*outside the folders"):
+            self.check(self.entry(moved_out))
+
+        self.base = moved_out
+        mc.git("mv", str(self.OUTSIDE), str(self.INSIDE))
+        with self.assertRaisesRegex(mc.Refused, "unowned/block.rs.*outside the folders"):
+            self.check(self.entry(self.commit()))
+
+    def test_expired_grant_fails_the_group_subcommand(self):
+        self.write(mc.GRANTS, "301 duzzl until 2026-11-22 /crates/horizon-client/src/game/blocks/\n")
+        self.base = self.commit()
+        self.write(self.INSIDE, "updated\n")
+        head = self.commit()
+        self.api.queue_entries.return_value = (self.base, [self.entry(head)])
+        env = {"REPO": "horizon-rust/horizon", "BASE_SHA": self.base, "HEAD_SHA": head,
+               "MERGE_APP_SLUG": "horizon-merge-command"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(mc, "Api", return_value=self.api), \
+                mock.patch.object(mc.sys, "stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(mc.verify_merge_group(), 1)
+        self.assertIn("Your line in `.github/merge-reviewers.txt` ended on 2026-11-22", err.getvalue())
+
+    def test_maintainer_passes_even_with_an_old_app_answer(self):
+        self.write(".github/workflows/ci.yml", "maintainer update\n")
+        self.check(self.entry(self.commit(), enqueuer_type="User", enqueuer="maintainer"))
+        self.api.delegation_answers.assert_not_called()
+
+    def test_batch_checks_each_delegated_squash_against_its_parent(self):
+        self.OUTSIDE.parent.mkdir()
+        mc.git("mv", str(self.INSIDE), str(self.OUTSIDE))
+        moved = self.commit()
+        first = self.entry(moved, number=4, enqueuer_type="User", enqueuer="maintainer")
+        self.write(self.INSIDE.parent / "other.rs", "another block\n")
+        self.check(first, self.entry(self.commit(), parent=moved))
+
+        mc.git("reset", "--hard", moved)
+        self.write(self.OUTSIDE, "same original block, now updated\n")
+        with self.assertRaisesRegex(mc.Refused, "#5: It changes `unowned/block.rs`, outside the folders"):
+            self.check(first, self.entry(self.commit(), parent=moved))
+
+    def test_terminal_maintainer_entry_does_not_hide_an_earlier_delegated_violation(self):
+        self.write(self.OUTSIDE, "outside\n")
+        outside = self.commit()
+        self.write(self.INSIDE, "ordinary maintainer edit\n")
+        terminal = self.entry(self.commit(), parent=outside, number=6, enqueuer_type="User", enqueuer="maintainer")
+        with self.assertRaisesRegex(mc.Refused, "#5: It changes `unowned/block.rs`, outside the folders"):
+            self.check(self.entry(outside), terminal)
+
+    def test_guarded_paths_are_refused_even_with_a_repository_wide_grant(self):
+        self.write(mc.GRANTS, "301 duzzl until 2026-12-20 /\n")
+        self.base = self.commit()
+        self.write("tools/ci/example.py", "guarded update\n")
+        with self.assertRaisesRegex(mc.Refused, "#5: It changes `tools/ci/example.py`.*CODEOWNERS"):
+            self.check(self.entry(self.commit()))
+
+    def test_prior_entry_can_revoke_the_grant(self):
+        self.write(mc.GRANTS, Path(mc.GRANTS).read_text() + "paused\n")
+        paused = self.commit()
+        self.write(self.INSIDE, "updated\n")
+        first = self.entry(paused, number=4, enqueuer_type="User", enqueuer="maintainer")
+        with self.assertRaisesRegex(mc.Refused, "#5: `/merge` is paused"):
+            self.check(first, self.entry(self.commit(), parent=paused))
+
+    def test_app_answer_has_to_match_the_entry_and_reviewed_head(self):
+        self.write(self.INSIDE, "updated\n")
+        entry = self.entry(self.commit())
+        self.api.delegation_answers.return_value = {5: [queued_answer(entry="MQE_earlier"),
+                                                        queued_answer(head="b" * 40)]}
+        with self.assertRaisesRegex(mc.Refused, "no unambiguous `/merge` answer for this queue entry and head"):
+            self.check(entry)
+
+
 def answer(**changes):
     """GitHub's answer to QUERY for a pull request `/merge` accepts, as read_pull() takes it."""
     commit = {"oid": HEAD, "committer": {"user": {"databaseId": AUTHOR.id}},
@@ -350,9 +472,16 @@ def answer(**changes):
 class AnswerTests(unittest.TestCase):
     """What GitHub answers, read into the pull request the rules judge."""
 
+    def test_queue_attribution_only_reads_the_workflow_bots_answers(self):
+        comments = [{"author": {}, "body": queued_answer(actor=OTHER)},
+                    {"author": {"databaseId": 136622811}, "body": queued_answer(actor=OTHER)},
+                    {"author": {"databaseId": mc.ACTIONS_BOT}, "body": queued_answer()}]
+        api = mc.Api("horizon-rust/horizon")
+        with mock.patch.object(api, "repository", return_value={"pr5": {"comments": {"nodes": comments}}}):
+            self.assertEqual(api.delegation_answers({5}), {5: [queued_answer()]})
+
     def test_the_days_merges_are_read_from_the_workflows_own_comments(self):
-        done = "🤖 Merge: added to the merge queue at `aaaaaaa`, on behalf of @duzzl ([their comment](u)). " \
-               "<!-- merge-by:301 -->"
+        done = queued_answer()
         # As `gh api --jq '{body, created_at}'` prints them, one object a line. The last one is older than the day:
         # GitHub lists it because it was edited since.
         lines = "\n".join(['{"body":"%s","created_at":"2026-11-23T09:00:00Z"}' % done.replace('"', '\\"'),
@@ -476,7 +605,8 @@ class WorkflowTests(unittest.TestCase):
 
     def test_it_passes_both_tokens(self):
         self.assertIn("GH_TOKEN: ${{ github.token }}", self.TEXT)
-        self.assertIn("MERGE_TOKEN: ${{ steps.app.outputs.token }}", self.TEXT)
+        self.assertIn("MERGE_TOKEN: ${{ steps.app.outputs.app-slug == vars.MERGE_APP_SLUG && steps.app.outputs.token",
+                      self.TEXT)
 
 
 if __name__ == "__main__":

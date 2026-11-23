@@ -6,6 +6,7 @@ reviewers").
                                  changes, adds it to the merge queue, answers in the thread
     merge_command.py live        prints `live=true` when the comment's author has a live line, for the workflow:
                                  only then does it make the app's token
+    merge_command.py --verify-merge-group   rechecks delegation against the queue's actual squash commits
 
 A merge reviewer holds no repository role. A line of .github/merge-reviewers.txt names the account (by numeric ID,
 never by login), the day the line ends and the folders it covers. On the first line of a comment on a pull request:
@@ -48,6 +49,9 @@ MAX_FILES = 300  # GitHub compares no more
 REQUIRED = "verify"  # the check main's protection requires (tools/ci/protect_pipeline.sh)
 ACTIONS_APP = 15368  # GitHub Actions: only its `verify` counts, as in main's protection
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+OID = re.compile(r"[0-9a-f]{40}")
+ACTIONS_BOT = 41898282  # github-actions[bot], which writes the command's answers
+MARK = re.compile(r"<!-- merge-by:([1-9][0-9]{0,11}) head:([0-9a-f]{40}) queue:([\w+/=-]+) -->\Z", re.ASCII)
 QUERY = """query($owner: String!, $name: String!, $n: Int!) { repository(owner: $owner, name: $name) {
   pullRequest(number: $n) {
     id state isDraft baseRefName headRefOid isInMergeQueue mergeable changedFiles
@@ -68,8 +72,16 @@ QUERY = """query($owner: String!, $name: String!, $n: Int!) { repository(owner: 
   }
 } }"""
 ENQUEUE = """mutation($id: ID!, $head: GitObjectID!) {
-  enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head}) { clientMutationId }
+  enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head}) { mergeQueueEntry { id } }
 }"""
+QUEUE = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
+  ref(qualifiedName: "refs/heads/main") { target { oid } }
+  mergeQueue(branch: "main") { entries(first: 100) { nodes {
+    id headCommit { oid } baseCommit { oid } enqueuer { __typename login }
+    pullRequest { number headRefOid }
+  } } }
+} }"""
+COMMENTS = "comments(last: 30) { nodes { body author { ... on Bot { databaseId } } } }"
 
 
 @dataclass(frozen=True)
@@ -199,6 +211,17 @@ class Pull:
     people_cut: bool  # more commits, or more authors of one, than were read; or the commits read don't end at head
 
 
+@dataclass(frozen=True)
+class QueueEntry:
+    id: str
+    number: int
+    head: str  # reviewed PR head
+    base: str | None  # parent of the squash commit
+    squash: str
+    enqueuer_type: str
+    enqueuer: str
+
+
 def pull_refusal(pr: Pull, actor: ns.Actor) -> str | None:
     """Why `actor` can't send this pull request to the queue (None when they can), before its files are read."""
     if pr.state != "OPEN":
@@ -251,6 +274,10 @@ def files_refusal(files: list[tuple[str, str | None]], count: int, paths: list[s
     for the contributed diff, or zero for the applied diff, whose file count can differ."""
     if not files or len(files) < count or len(files) >= MAX_FILES:
         return "GitHub didn't list every file this pull request changes: the Horizon Team merges it."
+    return paths_refusal(files, paths, guarded)
+
+
+def paths_refusal(files: list[tuple[str, str | None]], paths: list[str], guarded: list[str]) -> str | None:
     names = [name for pair in files for name in pair if name is not None]
     council = [f for f in names if ns.guarded(f, guarded)]
     if council:
@@ -334,8 +361,8 @@ class Api:
                     ".files[] | [.filename, .previous_filename]")
         return [tuple(json.loads(line)) for line in raw.splitlines() if line.strip()]
 
-    def enqueue(self, node: str, head: str) -> None:
-        """Adds it to the merge queue at this head; GitHub refuses when the head has moved since."""
+    def enqueue(self, node: str, head: str) -> str:
+        """Adds it at this head, returning the queue entry ID GitHub assigns to this enqueue."""
         r = subprocess.run(["gh", "api", "graphql", "-f", f"query={ENQUEUE}", "-f", f"id={node}", "-f",
                             f"head={head}"], capture_output=True, text=True,
                            env={**os.environ, "GH_TOKEN": self.merge_token})
@@ -343,6 +370,35 @@ class Api:
             print(r.stderr.strip()[:600], file=sys.stderr)
             why = re.sub(r"[^\w#:.,' -]", "", r.stderr.strip().removeprefix("gh: "))[:200].strip()
             raise Refused(f"GitHub didn't take it into the merge queue ({why or 'no reason given'}).")
+        try:
+            entry_id = json.loads(r.stdout)["data"]["enqueuePullRequest"]["mergeQueueEntry"]["id"]
+            if re.fullmatch(r"[\w+/=-]+", entry_id, re.ASCII):
+                return entry_id
+        except (ValueError, KeyError, TypeError):
+            pass
+        raise Refused("GitHub didn't return the queue entry ID. The queue check needs it to approve the merge.")
+
+    def repository(self, query: str) -> dict:
+        owner, name = self.repo.split("/", 1)
+        data = json.loads(ns.gh("api", "graphql", "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}"))
+        if data.get("errors"):
+            raise RuntimeError("GitHub did not return all merge queue data.")
+        return data["data"]["repository"]
+
+    def queue_entries(self) -> tuple[str, list[QueueEntry]]:
+        data = self.repository(QUEUE)
+        entries = [QueueEntry(e["id"], e["pullRequest"]["number"], e["pullRequest"]["headRefOid"],
+                              (e["baseCommit"] or {}).get("oid"), e["headCommit"]["oid"],
+                              e["enqueuer"]["__typename"], e["enqueuer"]["login"])
+                   for e in data["mergeQueue"]["entries"]["nodes"] if e["headCommit"]]
+        return data["ref"]["target"]["oid"], entries
+
+    def delegation_answers(self, numbers: set[int]) -> dict[int, list[str]]:
+        selections = " ".join(f"pr{n}: pullRequest(number: {n}) {{ {COMMENTS} }}" for n in sorted(numbers))
+        data = self.repository(f"query($owner: String!, $name: String!) {{ repository(owner: $owner, name: $name) "
+                               f"{{ {selections} }} }}")
+        return {n: [c["body"] for c in data[f"pr{n}"]["comments"]["nodes"]
+                    if (c["author"] or {}).get("databaseId") == ACTIONS_BOT] for n in numbers}
 
     def comment(self, n: int, text: str) -> None:
         ns.gh("api", f"repos/{self.repo}/issues/{n}/comments", "-f", f"body={text}")
@@ -357,15 +413,15 @@ class Api:
         return [a["body"] for a in answers if a["created_at"] >= since]
 
 
-def mark(actor: ns.Actor) -> str:
-    """Ends a merge's answer, unseen: what the day's count goes by. The ID, since a login can change hands."""
-    return f"<!-- merge-by:{actor.id} -->"
+def answer_mark(body: str) -> re.Match | None:
+    """Read a successful command's marker. The entry ID distinguishes separate enqueues at the same head."""
+    return MARK.search(body.rstrip()) if body.startswith(f"{PREFIX}added to the merge queue at `") else None
 
 
 def merges_by(api, actor: ns.Actor, now: datetime) -> int:
     """Pull requests this workflow queued for `actor` in the last 24 h, counted from its own answers."""
     since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return sum(1 for body in api.recent_answers(since) if body.rstrip().endswith(mark(actor)))
+    return sum(1 for body in api.recent_answers(since) if (m := answer_mark(body)) and int(m[1]) == actor.id)
 
 
 def ready(api, actor: ns.Actor, number: int) -> Pull:
@@ -417,9 +473,87 @@ def run(api, actor: ns.Actor, number: int, url: str, grants: Grants, guarded: li
         for files, count in diffs:
             if (why := files_refusal(files, count, current_paths, guarded)):
                 raise Refused(why)
-    api.enqueue(pr.node, pr.head)
+    entry = api.enqueue(pr.node, pr.head)
     return (f"{PREFIX}added to the merge queue at `{pr.head[:7]}`, on behalf of @{actor.login} "
-            f"([their comment]({url})). {mark(actor)}")
+            f"([their comment]({url})). <!-- merge-by:{actor.id} head:{pr.head} queue:{entry} -->")
+
+
+def git(*args: str) -> bytes:
+    return subprocess.check_output(["git", *args])
+
+
+def squash_files(base: str, head: str) -> list[tuple[str, str | None]]:
+    raw = git("diff", "--no-ext-diff", "--no-textconv", "--name-status", "-M", "-z", base, head, "--")
+    fields = iter(raw.split(b"\0")[:-1])
+    files = []
+    for status in fields:
+        name = os.fsdecode(next(fields))
+        files.append((os.fsdecode(next(fields)), name) if status.startswith(b"R") else (name, None))
+    return files
+
+
+def verify_group(api, base: str, head: str, app_slug: str) -> None:
+    """Verify each unmerged squash commit using GitHub's queue entry for that exact commit and parent."""
+    if not OID.fullmatch(base) or not OID.fullmatch(head):
+        raise Refused("The merge group must name its base and head commit IDs.")
+    chain = git("rev-list", "--first-parent", "--reverse", "--parents", f"{base}..{head}").decode().splitlines()
+    if not chain:
+        raise Refused("The merge group has no squash commits.")
+    main, entries = api.queue_entries()
+    by_squash = {entry.squash: entry for entry in entries}
+    delegated = []
+    parent = base
+    for line in chain:
+        commit, *parents = line.split()
+        if parents != [parent]:
+            raise Refused("The merge group is not a contiguous chain of GitHub squash commits.")
+        entry = by_squash.get(commit)
+        if entry is None:
+            # An earlier entry may already have landed while this group's other checks were running.
+            if not OID.fullmatch(main) or subprocess.run(
+                ["git", "merge-base", "--is-ancestor", commit, main], capture_output=True,
+            ).returncode:
+                raise Refused(f"GitHub has no queue entry for squash commit {commit[:12]}.")
+        elif entry.base != parent:
+            raise Refused(f"GitHub's queue entry for #{entry.number} has a different squash parent.")
+        elif entry.enqueuer_type != "User":
+            if entry.enqueuer_type != "Bot" or not app_slug:
+                raise Refused(f"Cannot identify the app that enqueued #{entry.number}.")
+            if entry.enqueuer.lower().removesuffix("[bot]") == app_slug.lower():
+                delegated.append(entry)
+        parent = commit
+    if not delegated:
+        return
+    answers = api.delegation_answers({e.number for e in delegated})
+    today = datetime.now(timezone.utc).date()
+    for entry in delegated:
+        reviewers = {int(m[1]) for body in answers[entry.number] if (m := answer_mark(body))
+                     and (m[2], m[3]) == (entry.head, entry.id)}
+        if len(reviewers) != 1:
+            raise Refused(f"#{entry.number} has no unambiguous `/merge` answer for this queue entry and head.")
+        actor = ns.Actor("", reviewers.pop())
+        files = squash_files(entry.base, entry.squash)
+        # The group base supplies the policy. An earlier entry can also revoke or narrow the grant.
+        for commit in dict.fromkeys((base, entry.base)):
+            grants = read_grants(git("show", f"{commit}:{GRANTS}").decode())
+            guarded = ns.guarded_patterns(git("show", f"{commit}:{ns.CODEOWNERS}").decode())
+            try:
+                paths = scope(actor, grants, today)
+            except Refused as e:
+                raise Refused(f"#{entry.number}: {e}") from None
+            if (why := paths_refusal(files, paths, guarded)):
+                raise Refused(f"#{entry.number}: {why}")
+
+
+def verify_merge_group() -> int:
+    try:
+        verify_group(Api(os.environ["REPO"]), os.environ["BASE_SHA"], os.environ["HEAD_SHA"],
+                     os.environ.get("MERGE_APP_SLUG", ""))
+    except (Refused, RuntimeError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as e:
+        print(f"Merge queue delegation check failed: {e}", file=sys.stderr)
+        return 1
+    print("Merge queue delegation check passed.")
+    return 0
 
 
 def command() -> int:
@@ -461,4 +595,6 @@ if __name__ == "__main__":
         sys.exit(command())
     if sys.argv[1:] == ["live"]:
         sys.exit(live())
+    if sys.argv[1:] == ["--verify-merge-group"]:
+        sys.exit(verify_merge_group())
     sys.exit(__doc__)
