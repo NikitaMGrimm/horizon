@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -73,6 +74,9 @@ class Fake:
     def comment(self, n, text):
         self.comments.append(text)
 
+    def dequeue(self, number, node, entry):
+        self.queued.remove((node, self.pr.head))
+
     def recent_answers(self, since):
         return self.past
 
@@ -86,9 +90,10 @@ def do(api=None, actor=REVIEWER, grants=LIST, now=NOW, switched_on=True, later=N
 
 class ParseTests(unittest.TestCase):
     def test_the_first_line_decides(self):
-        for body in ("/merge", "  /MERGE  ", "\n/merge\nthanks", "🤖 Agent: /merge\nReviewed the diff."):
+        for body in ("/merge", "/MERGE  ", "/merge\nthanks", "🤖 Agent: /merge\nReviewed the diff."):
             self.assertTrue(mc.parse(body), body)
-        for body in ("", "merge", "please /merge", "/merged yesterday", "/merge-queue is slow", "/close"):
+        for body in ("", "merge", "please /merge", "\n/merge", "  /merge", "🤖 Agent:  /merge", "/merged yesterday",
+                     "/merge-queue is slow", "/close"):
             self.assertFalse(mc.parse(body), body)
 
     def test_words_after_it_are_refused(self):
@@ -187,8 +192,10 @@ class WhoTests(unittest.TestCase):
         # Someone else's merges, and a refusal that quotes a file named like the mark, are not this reviewer's.
         others = [done.replace("merge-by:301 ", "merge-by:3011 "), done.replace("merge-by:301 ", "merge-by:30 "),
                   "🤖 Merge: refused, It changes `x<!-- merge-by:301 -->` (asked by @duzzl)"]
-        self.assertEqual(len(do(Fake(past=[done] * (mc.MAX_PER_DAY - 1) + others * 5))[1].queued), 1)
-        self.refused("in the last 24 hours", api=Fake(past=[done] * mc.MAX_PER_DAY))
+        at_limit = [queued_answer(entry=f"MQE_{i}") for i in range(mc.MAX_PER_DAY)]
+        # A retried POST that created two receipts for one entry still counts once.
+        self.assertEqual(len(do(Fake(past=at_limit[:-1] * 2 + others * 5))[1].queued), 1)
+        self.refused("in the last 24 hours", api=Fake(past=at_limit))
 
 
 class PullRequestTests(unittest.TestCase):
@@ -248,18 +255,15 @@ class PullRequestTests(unittest.TestCase):
             with mock.patch.object(api, "main_oid", side_effect=main_oid):
                 self.refused("Main moved while this was checking it", api)
 
-    def test_verify_is_checked_only_after_the_quota_scan_and_final_pull_read(self):
-        api = Fake(verify=("failure",))
-        with mock.patch.object(api, "recent_answers", wraps=api.recent_answers) as quota:
-            def check(head):
-                quota.assert_called_once()
-                self.assertEqual(api.reads, 2)
-                self.assertEqual(head, HEAD)
-                return api.verify
+    def test_verify_can_fail_during_the_quota_scan(self):
+        api = Fake(verify=("success",))
 
-            with mock.patch.object(api, "required_check", side_effect=check) as verify:
-                self.refused("`verify` hasn't passed", api)
-                verify.assert_called_once_with(HEAD)
+        def scan(since):
+            api.verify = ["failure"]
+            return []
+
+        with mock.patch.object(api, "recent_answers", side_effect=scan):
+            self.refused("`verify` hasn't passed", api)
 
     def test_a_test_merge_is_required_and_must_still_match_on_the_final_read(self):
         self.refused("doesn't have a test merge", Fake(pull(merge_oid=None)))
@@ -271,7 +275,39 @@ class PullRequestTests(unittest.TestCase):
         self.refused("Release-Now", Fake(pull(labels=["Release-Now"])))
 
     def test_githubs_own_refusal_is_the_answer(self):
-        self.refused("approving review is required", Fake(queue_error="At least 1 approving review is required"))
+        api = Fake(queue_error="At least 1 approving review is required")
+        self.refused("approving review is required", api)
+        self.assertEqual(api.comments, [])
+
+    def test_a_timed_out_receipt_post_is_retried_before_queue_removal(self):
+        api = Fake()
+
+        def retry(n, receipt):
+            self.assertEqual(api.queued, [("PR_1", HEAD)])
+            api.comments.append(receipt)
+            if len(api.comments) == 1:
+                raise subprocess.TimeoutExpired("gh", mc.WRITE_TIMEOUT)
+
+        with mock.patch.object(api, "comment", side_effect=retry), mock.patch.object(mc, "sleep"):
+            self.assertEqual(do(api)[0], queued_answer())
+        self.assertEqual(api.queued, [("PR_1", HEAD)])
+        self.assertEqual(api.comments, [queued_answer(), queued_answer()])
+
+    def test_persistent_receipt_post_failure_removes_the_original_entry(self):
+        api = Fake()
+        with mock.patch.object(api, "comment", side_effect=RuntimeError("GitHub unavailable")), \
+                mock.patch.object(mc, "sleep"):
+            self.refused("original entry is no longer queued", api)
+        self.assertEqual(api.comments, [])
+
+    def test_unconfirmed_queue_removal_does_not_publish_a_success_receipt(self):
+        api = Fake()
+        with mock.patch.object(api, "comment", side_effect=RuntimeError("GitHub unavailable")), \
+                mock.patch.object(api, "dequeue", side_effect=RuntimeError("GitHub unavailable")), \
+                mock.patch.object(mc, "sleep"):
+            with self.assertRaisesRegex(mc.Refused, "couldn't publish the receipt or confirm queue removal"):
+                do(api)
+        self.assertEqual(api.comments, [])
 
 
 class FilesTests(unittest.TestCase):
@@ -355,7 +391,9 @@ class MergeGroupTests(unittest.TestCase):
         self.base = self.commit()
         self.api = mock.Mock()
         self.api.delegation_answers.return_value = {5: [queued_answer()]}
+        self.api.queue_labels.return_value = {5: ["bug"]}
         self.enterContext(mock.patch.object(mc, "datetime", mock.Mock(now=lambda tz: NOW)))
+        self.enterContext(mock.patch.object(mc, "sleep"))
 
     def write(self, path, text):
         path = Path(path)
@@ -380,6 +418,25 @@ class MergeGroupTests(unittest.TestCase):
         entry = self.entry(self.commit())
         self.check(entry)
         self.api.delegation_answers.assert_called_once_with([entry])
+
+    def test_a_receipt_that_arrives_after_verify_starts_can_pass(self):
+        self.write(self.INSIDE, "updated\n")
+        self.api.delegation_answers.side_effect = [{5: []}, {5: [queued_answer()]}]
+        self.check(self.entry(self.commit()))
+
+    def test_hold_labels_added_while_waiting_for_the_receipt_fail_the_group(self):
+        self.write(self.INSIDE, "updated\n")
+        entry = self.entry(self.commit())
+        for label in ("needs-proof", "Release-Now"):
+            with self.subTest(label=label):
+                def appears(entries):
+                    self.api.queue_labels.return_value = {5: ["bug", label]}
+                    return {5: [queued_answer()]}
+
+                self.api.queue_labels.return_value = {5: ["bug"]}
+                self.api.delegation_answers.side_effect = appears
+                with self.assertRaisesRegex(mc.Refused, f"#5: This pull request is labelled `{label}`"):
+                    self.check(entry)
 
     def test_an_unconfigured_app_leaves_other_bot_enqueues_alone(self):
         self.write(self.OUTSIDE, "ordinary bot edit\n")
@@ -467,7 +524,7 @@ class MergeGroupTests(unittest.TestCase):
         entry = self.entry(self.commit())
         self.api.delegation_answers.return_value = {5: [queued_answer(entry="MQE_earlier"),
                                                         queued_answer(head="b" * 40)]}
-        with self.assertRaisesRegex(mc.Refused, "no unambiguous `/merge` answer for this queue entry and head"):
+        with self.assertRaisesRegex(mc.Refused, "no `/merge` receipt for this queue entry and head"):
             self.check(entry)
 
 
@@ -490,6 +547,37 @@ def answer(**changes):
 
 class AnswerTests(unittest.TestCase):
     """What GitHub answers, read into the pull request the rules judge."""
+
+    def test_enqueue_reply_must_identify_the_configured_app_bot(self):
+        api = mc.Api("horizon-rust/horizon", "app-token", APP_BOT_ID)
+        for bot_id in (APP_BOT_ID, APP_BOT_ID + 1):
+            reply = {"data": {"enqueuePullRequest": {"mergeQueueEntry": {
+                "id": ENTRY, "enqueuer": {"databaseId": bot_id}}}}}
+            result = subprocess.CompletedProcess([], 0, json.dumps(reply), "")
+            with self.subTest(bot_id=bot_id), mock.patch.object(api, "queue_mutation", return_value=result):
+                if bot_id == APP_BOT_ID:
+                    self.assertEqual(api.enqueue("PR_1", HEAD), ENTRY)
+                else:
+                    with self.assertRaisesRegex(mc.Refused, "didn't confirm a queue entry from this app"):
+                        api.enqueue("PR_1", HEAD)
+
+    def test_receipt_cleanup_leaves_replacement_queue_entries_alone(self):
+        api = mc.Api("horizon-rust/horizon", "app-token", APP_BOT_ID)
+        replacement = {"pullRequest": {"mergeQueueEntry": {"id": "MQE_replacement", "enqueuer": {}}}}
+        with mock.patch.object(api, "repository", return_value=replacement), \
+                mock.patch.object(api, "queue_mutation") as mutation:
+            api.dequeue(5, "PR_1", ENTRY)
+        mutation.assert_not_called()
+
+    def test_receipt_cleanup_dequeues_the_confirmed_app_entry(self):
+        api = mc.Api("horizon-rust/horizon", "app-token", APP_BOT_ID)
+        active = {"pullRequest": {"mergeQueueEntry": {"id": ENTRY, "enqueuer": {"databaseId": APP_BOT_ID}}}}
+        reply = {"data": {"dequeuePullRequest": {"mergeQueueEntry": {"id": ENTRY}}}}
+        result = subprocess.CompletedProcess([], 0, json.dumps(reply), "")
+        with mock.patch.object(api, "repository", return_value=active), \
+                mock.patch.object(api, "queue_mutation", return_value=result) as mutation:
+            api.dequeue(5, "PR_1", ENTRY)
+        mutation.assert_called_once_with(mc.DEQUEUE, "PR_1")
 
     def test_queue_attribution_only_reads_the_workflow_bots_answers(self):
         comments = [{"author": {}, "body": queued_answer(actor=OTHER), "createdAt": ENQUEUED},
@@ -573,10 +661,11 @@ class CommandTests(unittest.TestCase):
     def run_command(self, body, author=REVIEWER, token="app-token"):
         api = Fake()
         env = {"REPO": "horizon-rust/horizon", "ISSUE": "5", "AUTHOR": author.login, "AUTHOR_ID": str(author.id),
-               "BODY": body, "COMMENT_URL": URL, "GH_TOKEN": "token", "MERGE_TOKEN": token}
+               "BODY": body, "COMMENT_URL": URL, "GH_TOKEN": "token", "MERGE_TOKEN": token,
+               "MERGE_APP_BOT_ID": str(APP_BOT_ID)}
         self.api_token = None
         with mock.patch.dict(os.environ, env), \
-                mock.patch.object(mc, "Api", lambda repo, token: setattr(self, "api_token", token) or api), \
+                mock.patch.object(mc, "Api", lambda repo, token, bot_id: setattr(self, "api_token", token) or api), \
                 mock.patch.object(mc, "read_grants", lambda text: LIST), \
                 mock.patch.object(mc, "datetime", mock.Mock(now=lambda tz: NOW)), \
                 mock.patch.object(mc.subprocess, "check_output", return_value=BASE + "\n"), \
@@ -607,8 +696,8 @@ class CommandTests(unittest.TestCase):
         api = Fake()
         api.pull = lambda n: mc.read_pull({"data": {"repository": {"pullRequest": {"id": "PR_1"}}}})
         env = {"REPO": "horizon-rust/horizon", "ISSUE": "5", "AUTHOR": "duzzl", "AUTHOR_ID": "301", "BODY": "/merge",
-               "MERGE_TOKEN": "app-token"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(mc, "Api", lambda repo, token: api), \
+               "MERGE_TOKEN": "app-token", "MERGE_APP_BOT_ID": str(APP_BOT_ID)}
+        with mock.patch.dict(os.environ, env), mock.patch.object(mc, "Api", lambda repo, token, bot_id: api), \
                 mock.patch.object(mc, "read_grants", lambda text: LIST), \
                 mock.patch.object(mc, "datetime", mock.Mock(now=lambda tz: NOW)), \
                 mock.patch.object(mc.subprocess, "check_output", return_value=BASE + "\n"), \

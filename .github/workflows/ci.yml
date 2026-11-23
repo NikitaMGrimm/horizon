@@ -614,6 +614,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Every part of verify passed or had nothing to do
+        id: verify-parts
         env:
           SCOPE: ${{ needs.verify-scope.result }}
           TREE: ${{ needs.verify-tree.result }}

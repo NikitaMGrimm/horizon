@@ -31,6 +31,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from time import sleep
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nightly_set as ns  # noqa: E402  (accounts by ID, CODEOWNERS' patterns, the gh call)
@@ -51,6 +52,10 @@ ACTIONS_APP = 15368  # GitHub Actions: only its `verify` counts, as in main's pr
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 OID = re.compile(r"[0-9a-f]{40}")
 ACTIONS_BOT = 41898282  # github-actions[bot], which writes the command's answers
+WRITE_TIMEOUT = 10
+WRITE_ERRORS = (OSError, RuntimeError, subprocess.SubprocessError)
+# The enqueue and comment attempts have a 43 second timeout and backoff budget. Allow time for the read to catch up.
+RECEIPT_READ_DELAYS = (0, 2, 4, 8, 16, 30)
 MARK = re.compile(r"<!-- merge-by:([1-9][0-9]{0,11}) head:([0-9a-f]{40}) queue:([\w+/=-]+) -->\Z", re.ASCII)
 QUERY = """query($owner: String!, $name: String!, $n: Int!) { repository(owner: $owner, name: $name) {
   pullRequest(number: $n) {
@@ -72,7 +77,12 @@ QUERY = """query($owner: String!, $name: String!, $n: Int!) { repository(owner: 
   }
 } }"""
 ENQUEUE = """mutation($id: ID!, $head: GitObjectID!) {
-  enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head}) { mergeQueueEntry { id } }
+  enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head}) {
+    mergeQueueEntry { id enqueuer { ... on Bot { databaseId } } }
+  }
+}"""
+DEQUEUE = """mutation($id: ID!) {
+  dequeuePullRequest(input: {id: $id}) { mergeQueueEntry { id } }
 }"""
 QUEUE = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
   ref(qualifiedName: "refs/heads/main") { target { oid } }
@@ -165,9 +175,9 @@ def scope(actor: ns.Actor, grants: Grants, today: date) -> list[str]:
 
 def parse(body: str) -> bool:
     """Whether a comment's first line is `/merge`. Raises Refused when it is, with words after it."""
-    line = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    line = body.partition("\n")[0].rstrip()
     # Agents start every comment with "🤖 Agent:" (AGENTS.md), so their `/merge` follows it, as in claim_command.
-    line = re.sub(r"^🤖\s*Agent:\s*", "", line)
+    line = re.sub(r"^🤖 Agent: ", "", line, flags=re.IGNORECASE)
     m = re.match(r"^/(\w+)(?:\s+(.*))?$", line)
     if not m or m.group(1).lower() != "merge":
         return False
@@ -238,9 +248,8 @@ def pull_refusal(pr: Pull, actor: ns.Actor) -> str | None:
         return "It has too many commits or authors to read them all: the Horizon Team merges it."
     if actor.id in pr.people:
         return "It holds a commit of yours: someone else reviews and merges it."
-    held = [name for name in pr.labels if name.lower() in HELD]
-    if held:
-        return f"This pull request is labelled `{ns.safe(held[0])}`: the Horizon Team merges those."
+    if (why := hold_refusal(pr.labels)):
+        return why
     if pr.reviews_cut:
         return "This pull request has more reviewers than this can read: the Horizon Team merges it."
     asking = [r.login for r in pr.reviews if r.state == "CHANGES_REQUESTED"]
@@ -255,6 +264,13 @@ def pull_refusal(pr: Pull, actor: ns.Actor) -> str | None:
         return "This pull request conflicts with main."
     if pr.checks != "SUCCESS":
         return f"The checks of `{pr.head[:7]}` are {(pr.checks or 'missing').lower()}: `/merge` again once all passed."
+    return None
+
+
+def hold_refusal(labels: list[str]) -> str | None:
+    for name in labels:
+        if name.lower() in HELD:
+            return f"This pull request is labelled `{ns.safe(name)}`: the Horizon Team merges those."
     return None
 
 
@@ -332,8 +348,8 @@ class Api:
     """The few GitHub calls this needs; tests replace it. `merge_token` is the app's, used for the queue alone:
     a pull request the workflow's own token queued gets no `merge_group` run, so `verify` never starts."""
 
-    def __init__(self, repo: str, merge_token: str = ""):
-        self.repo, self.merge_token = repo, merge_token
+    def __init__(self, repo: str, merge_token: str = "", app_bot_id: int | None = None):
+        self.repo, self.merge_token, self.app_bot_id = repo, merge_token, app_bot_id
 
     def pull(self, n: int) -> Pull | None:
         owner, name = self.repo.split("/", 1)
@@ -361,22 +377,46 @@ class Api:
                     ".files[] | [.filename, .previous_filename]")
         return [tuple(json.loads(line)) for line in raw.splitlines() if line.strip()]
 
+    def queue_mutation(self, query: str, node: str, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["gh", "api", "graphql", "-f", f"query={query}", "-f", f"id={node}", *args],
+                              capture_output=True, text=True, timeout=WRITE_TIMEOUT,
+                              env={**os.environ, "GH_TOKEN": self.merge_token})
+
     def enqueue(self, node: str, head: str) -> str:
         """Adds it at this head, returning the queue entry ID GitHub assigns to this enqueue."""
-        r = subprocess.run(["gh", "api", "graphql", "-f", f"query={ENQUEUE}", "-f", f"id={node}", "-f",
-                            f"head={head}"], capture_output=True, text=True,
-                           env={**os.environ, "GH_TOKEN": self.merge_token})
+        try:
+            r = self.queue_mutation(ENQUEUE, node, "-f", f"head={head}")
+        except subprocess.TimeoutExpired:
+            raise Refused("GitHub didn't confirm the enqueue. The queue check requires a receipt.") from None
         if r.returncode != 0:
             print(r.stderr.strip()[:600], file=sys.stderr)
             why = re.sub(r"[^\w#:.,' -]", "", r.stderr.strip().removeprefix("gh: "))[:200].strip()
             raise Refused(f"GitHub didn't take it into the merge queue ({why or 'no reason given'}).")
         try:
-            entry_id = json.loads(r.stdout)["data"]["enqueuePullRequest"]["mergeQueueEntry"]["id"]
-            if re.fullmatch(r"[\w+/=-]+", entry_id, re.ASCII):
-                return entry_id
+            entry = json.loads(r.stdout)["data"]["enqueuePullRequest"]["mergeQueueEntry"]
+            if self.app_bot_id and entry["enqueuer"].get("databaseId") == self.app_bot_id:
+                if re.fullmatch(r"[\w+/=-]+", entry["id"], re.ASCII):
+                    return entry["id"]
         except (ValueError, KeyError, TypeError):
             pass
-        raise Refused("GitHub didn't return the queue entry ID. The queue check needs it to approve the merge.")
+        raise Refused("GitHub didn't confirm a queue entry from this app. The queue check requires a receipt.")
+
+    def dequeue(self, number: int, node: str, entry_id: str) -> None:
+        # GitHub's mutation targets the PR, so check for our entry immediately before using it.
+        data = self.repository(f"query($owner: String!, $name: String!) {{ repository(owner: $owner, name: $name) "
+                               f"{{ pullRequest(number: {number}) "
+                               "{ mergeQueueEntry { id enqueuer { ... on Bot { databaseId } } } } } }")
+        current = data["pullRequest"]["mergeQueueEntry"]
+        if not current or current["id"] != entry_id:
+            return
+        if not self.app_bot_id or current["enqueuer"].get("databaseId") != self.app_bot_id:
+            raise RuntimeError("GitHub didn't confirm the original entry's enqueuer.")
+        result = self.queue_mutation(DEQUEUE, node)
+        if result.returncode:
+            raise RuntimeError(f"GitHub refused to remove the unreceipted queue entry: {result.stderr.strip()[:300]}")
+        removed = json.loads(result.stdout)["data"]["dequeuePullRequest"]["mergeQueueEntry"]
+        if not removed or removed["id"] != entry_id:
+            raise RuntimeError("GitHub did not confirm removal of the original queue entry.")
 
     def repository(self, query: str) -> dict:
         owner, name = self.repo.split("/", 1)
@@ -419,7 +459,22 @@ class Api:
         return answers
 
     def comment(self, n: int, text: str) -> None:
-        ns.gh("api", f"repos/{self.repo}/issues/{n}/comments", "-f", f"body={text}")
+        subprocess.run(["gh", "api", f"repos/{self.repo}/issues/{n}/comments", "-f", f"body={text}"],
+                       capture_output=True, check=True, timeout=WRITE_TIMEOUT)
+
+    def queue_labels(self, entries: list[QueueEntry]) -> dict[int, list[str]]:
+        selections = " ".join(f"pr{e.number}: pullRequest(number: {e.number}) "
+                              "{ labels(first: 100) { pageInfo { hasNextPage } nodes { name } } }"
+                              for e in entries)
+        data = self.repository(f"query($owner: String!, $name: String!) {{ repository(owner: $owner, name: $name) "
+                               f"{{ {selections} }} }}")
+        labels = {}
+        for entry in entries:
+            page = data[f"pr{entry.number}"]["labels"]
+            if page["pageInfo"]["hasNextPage"]:
+                raise Refused(f"#{entry.number} has more labels than the queue check can read.")
+            labels[entry.number] = [label["name"] for label in page["nodes"]]
+        return labels
 
     def recent_answers(self, since: str) -> list[str]:
         """This workflow's own answers in the whole repository, written since a time (ISO 8601, UTC)."""
@@ -439,7 +494,20 @@ def answer_mark(body: str) -> re.Match | None:
 def merges_by(api, actor: ns.Actor, now: datetime) -> int:
     """Pull requests this workflow queued for `actor` in the last 24 h, counted from its own answers."""
     since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return sum(1 for body in api.recent_answers(since) if (m := answer_mark(body)) and int(m[1]) == actor.id)
+    # A POST can land even if its response times out. Each queue entry counts once if the retry also lands.
+    return len({m[3] for body in api.recent_answers(since) if (m := answer_mark(body)) and int(m[1]) == actor.id})
+
+
+def retry_write(write, *args) -> None:
+    for attempt in range(3):
+        try:
+            write(*args)
+            return
+        except WRITE_ERRORS as e:
+            print(str(e)[:350], file=sys.stderr)
+            if attempt == 2:
+                raise
+            sleep(attempt + 1)
 
 
 def ready(api, actor: ns.Actor, number: int) -> Pull:
@@ -454,7 +522,7 @@ def ready(api, actor: ns.Actor, number: int) -> Pull:
 
 def run(api, actor: ns.Actor, number: int, url: str, grants: Grants, guarded: list[str], policy_oid: str,
         switched_on: bool = True) -> str:
-    """Queues the pull request; returns the comment to post. Raises Refused for a refusal."""
+    """Queues the pull request and publishes its bound receipt. Raises Refused for a refusal."""
     now = datetime.now(timezone.utc)
     paths = scope(actor, grants, now.date())
     if not switched_on:
@@ -492,8 +560,18 @@ def run(api, actor: ns.Actor, number: int, url: str, grants: Grants, guarded: li
             if (why := files_refusal(files, count, current_paths, guarded)):
                 raise Refused(why)
     entry = api.enqueue(pr.node, pr.head)
-    return (f"{PREFIX}added to the merge queue at `{pr.head[:7]}`, on behalf of @{actor.login} "
-            f"([their comment]({url})). <!-- merge-by:{actor.id} head:{pr.head} queue:{entry} -->")
+    receipt = (f"{PREFIX}added to the merge queue at `{pr.head[:7]}`, on behalf of @{actor.login} "
+               f"([their comment]({url})). <!-- merge-by:{actor.id} head:{pr.head} queue:{entry} -->")
+    try:
+        retry_write(api.comment, number, receipt)
+    except WRITE_ERRORS:
+        try:
+            retry_write(api.dequeue, number, pr.node, entry)
+        except (*WRITE_ERRORS, ValueError, KeyError, TypeError) as e:
+            print(repr(e), file=sys.stderr)
+            raise Refused("GitHub couldn't publish the receipt or confirm queue removal. `verify` requires the receipt.") from None
+        raise Refused("GitHub couldn't publish the receipt. The original entry is no longer queued.") from None
+    return receipt
 
 
 def git(*args: str) -> bytes:
@@ -508,6 +586,26 @@ def squash_files(base: str, head: str) -> list[tuple[str, str | None]]:
         name = os.fsdecode(next(fields))
         files.append((os.fsdecode(next(fields)), name) if status.startswith(b"R") else (name, None))
     return files
+
+
+def receipt_reviewers(api, entries: list[QueueEntry]) -> dict[int, int]:
+    """The exact receipt can appear after the merge-group event starts its checks."""
+    for delay in RECEIPT_READ_DELAYS:
+        if delay:
+            sleep(delay)
+        answers = api.delegation_answers(entries)
+        reviewers = {}
+        for entry in entries:
+            matches = {int(m[1]) for body in answers[entry.number] if (m := answer_mark(body))
+                       and (m[2], m[3]) == (entry.head, entry.id)}
+            if len(matches) > 1:
+                raise Refused(f"#{entry.number} has conflicting `/merge` receipts for this queue entry and head.")
+            if matches:
+                reviewers[entry.number] = matches.pop()
+        if len(reviewers) == len(entries):
+            return reviewers
+    missing = next(e for e in entries if e.number not in reviewers)
+    raise Refused(f"#{missing.number} has no `/merge` receipt for this queue entry and head.")
 
 
 def verify_group(api, base: str, head: str, app_bot_id: int | None) -> None:
@@ -541,14 +639,10 @@ def verify_group(api, base: str, head: str, app_bot_id: int | None) -> None:
         parent = commit
     if not delegated:
         return
-    answers = api.delegation_answers(delegated)
+    reviewers = receipt_reviewers(api, delegated)
     today = datetime.now(timezone.utc).date()
     for entry in delegated:
-        reviewers = {int(m[1]) for body in answers[entry.number] if (m := answer_mark(body))
-                     and (m[2], m[3]) == (entry.head, entry.id)}
-        if len(reviewers) != 1:
-            raise Refused(f"#{entry.number} has no unambiguous `/merge` answer for this queue entry and head.")
-        actor = ns.Actor("", reviewers.pop())
+        actor = ns.Actor("", reviewers[entry.number])
         files = squash_files(entry.base, entry.squash)
         # The group base supplies the policy. An earlier entry can also revoke or narrow the grant.
         for commit in dict.fromkeys((base, entry.base)):
@@ -560,6 +654,11 @@ def verify_group(api, base: str, head: str, app_bot_id: int | None) -> None:
                 raise Refused(f"#{entry.number}: {e}") from None
             if (why := paths_refusal(files, paths, guarded)):
                 raise Refused(f"#{entry.number}: {why}")
+    # Receipt visibility can take time. Check hold labels after those reads and the path checks.
+    labels = api.queue_labels(delegated)
+    for entry in delegated:
+        if (why := hold_refusal(labels[entry.number])):
+            raise Refused(f"#{entry.number}: {why}")
 
 
 def verify_merge_group() -> int:
@@ -581,7 +680,9 @@ def command() -> int:
     number, url, repo = int(os.environ["ISSUE"]), os.environ.get("COMMENT_URL", ""), os.environ["REPO"]
     # Out of the environment: only the queue call gets the app's token, no other `gh` this starts.
     token = os.environ.pop("MERGE_TOKEN", "")
-    api: Api = Api(repo, token)
+    raw_bot_id = os.environ.get("MERGE_APP_BOT_ID", "")
+    bot_id = int(raw_bot_id) if ns.USER_ID.fullmatch(raw_bot_id) else None
+    api: Api = Api(repo, token, bot_id)
     try:
         if not parse(body):
             return 0
@@ -589,13 +690,18 @@ def command() -> int:
         grants = read_grants(Path(GRANTS).read_text())
         guarded = ns.guarded_patterns(Path(ns.CODEOWNERS).read_text())
         policy_oid = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        text = run(api, actor, number, url, grants, guarded, policy_oid, bool(token))
+        run(api, actor, number, url, grants, guarded, policy_oid, bool(token and bot_id))
+        return 0
     except Refused as e:
         text = f"{PREFIX}refused, {e} (asked by @{ns.safe(login)})"
     except (RuntimeError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as e:
         print(repr(e), file=sys.stderr)
         text = f"{PREFIX}GitHub refused that, nothing was done (asked by @{ns.safe(login)})."
-    api.comment(number, text)
+    try:
+        api.comment(number, text)
+    except WRITE_ERRORS as e:
+        print(f"Could not post the command's refusal: {e}", file=sys.stderr)
+        return 1
     return 0
 
 

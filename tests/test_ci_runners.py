@@ -685,6 +685,8 @@ class HostedParityTests(unittest.TestCase):
             (folder / ".local/parity-runner/state.json").write_text(json.dumps({"harnesses": records}))
             env = {"PATH": os.environ.get("PATH", ""), "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
                    "RUNNER_TEMP": str(folder), "HARNESSES": "food light sculk crafter", "SHARD": "3"}
+            if "TZ" in os.environ:
+                env["TZ"] = os.environ["TZ"]
             subprocess.run([sys.executable, "-c", program], cwd=folder, env=env, check=True)
             written = json.loads((folder / "parity-hosted-logs/results-3.json").read_text())
             self.assertEqual(written, {"food": {"status": "pass", "retried": True},
@@ -822,7 +824,7 @@ class VerifyGateTests(unittest.TestCase):
         sys.path.insert(0, str(ROOT / "tools/ci/vendor/pyyaml-6.0.3.zip"))
         import yaml
         cls.jobs = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())["jobs"]
-        (cls.gate,) = cls.jobs["verify"]["steps"]
+        (cls.gate,) = [step for step in cls.jobs["verify"]["steps"] if step.get("id") == "verify-parts"]
         (cls.answers,) = [step for step in cls.jobs["verify-scope"]["steps"] if step.get("id") == "answers"]
 
     def bash(self, script, env):

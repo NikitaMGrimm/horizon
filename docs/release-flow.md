@@ -820,8 +820,10 @@ A merge reviewer sends other people's pull requests to the merge queue with a co
 `.github/merge-reviewers.txt` names and until the day it names, with no repository role: no push, no labels, no
 workflow approval. It is how someone reviews and merges for a month before the Team decides about them.
 
+After approving the current head commit, put `/merge` on the first line of a comment on the pull request.
+
 ```text
-/merge        on a pull request, after approving its head commit
+/merge
 ```
 
 - **The line.** `<numeric GitHub ID> <login> until <YYYY-MM-DD> </folder/> ...`, folders written from the root:
@@ -851,9 +853,12 @@ workflow approval. It is how someone reviews and merges for a month before the T
   current UTC date. GitHub pins the approved head when enqueueing. The queue can apply the change on top of
   newer commits and earlier queue entries. The merge group's `verify` uses GitHub's queue entries to identify
   each `/merge` squash commit, then checks the paths that commit actually applies to its parent. The workflow's
-  reply identifies the reviewer, PR head and queue entry. The grant must still be live and cover the paths under
-  the policy at the group's base and the commit's parent. A maintainer's own queue entries keep their usual
-  checks. The rules of
+  reply identifies the reviewer, PR head and queue entry. The queue check retries while the reply becomes visible.
+  If posting the reply fails after retries, the command attempts to remove its original entry. A group with a
+  delegated entry and no matching receipt fails `verify`. The grant must still be live and cover the paths under
+  the policy at the group's base and the commit's parent. A `needs-proof` or `release-now` label on a delegated
+  entry at verification time fails the group's `verify`. This includes labels added after enqueue. A maintainer's
+  own queue entries keep their usual checks. The rules of
   [Merging](#merging) still bind the reviewer: read the whole diff, wait for `parity` on gameplay code, and a "don't
   merge" from anyone holds it. A fork's workflow runs and `run-parity` still take a Team member.
 - **Where.** `.github/workflows/merge-command.yml`, `tools/ci/merge_command.py`. Main's copy of the workflow runs,
@@ -864,9 +869,10 @@ workflow approval. It is how someone reviews and merges for a month before the T
   a council-approved commit on `main` would have to rename a file covered by the grant directly onto
   `.github/workflows/ci.yml` between enqueue and group build. Horizon accepts this GitHub Actions boundary.
   An organization-level required workflow could move that check outside the group ref.
-- **Two tokens.** The workflow's own token reads and answers. A GitHub App's token adds to the queue and does
-  nothing else: a pull request the workflow's own token queued gets no `merge_group` run, so `verify` would never
-  start. It is made only when the comment's author has a live line. Until the app exists, `/merge` answers that it isn't switched on. An organisation owner sets it up once: a
+- **Two tokens.** The workflow's own token reads and answers. A GitHub App's token changes the queue. A pull
+  request queued by the workflow's own token gets no `merge_group` run, so `verify` would never start. The App
+  token is made only when the comment's author has a live line. Until the app exists, `/merge` answers that it
+  isn't switched on. An organisation owner sets it up once: a
   GitHub App with **Contents** and **Pull requests** read and write and no webhook, installed on this repository
   only; then an environment `merge-command`, deployable from `main` only, holding the app's client ID as the
   variable `MERGE_APP_CLIENT_ID` and its private key as the secret `MERGE_APP_PRIVATE_KEY`. Once the workflow

@@ -8,8 +8,8 @@ name: merge command
 # - It checks out main's script and lists only, never a pull request; it reads the pull request through the API.
 # - The comment's text and author reach the script as env vars, never in a shell line. The tokens stay in the step.
 #
-# Two tokens. The workflow's own reads and answers. The app's adds to the queue and does nothing else: a pull request
-# queued by the workflow's own token gets no `merge_group` run, so `verify` would never start. Its key is a secret
+# Two tokens. The workflow's own reads and answers. The app's changes the queue: a pull request queued by the
+# workflow's own token gets no `merge_group` run, so `verify` would never start. The app key is a secret
 # of the `merge-command` environment, which only main's workflows can use.
 on:
   issue_comment:
@@ -82,6 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_TOKEN: ${{ steps.app-account.outputs.matches == 'true' && steps.app.outputs.token || '' }}
+          MERGE_APP_BOT_ID: ${{ vars.MERGE_APP_BOT_ID }}
           BODY: ${{ github.event.comment.body }}
           AUTHOR: ${{ github.event.comment.user.login }}
           # Who may act is decided by this numeric ID: a login can be claimed by someone else after a rename.
