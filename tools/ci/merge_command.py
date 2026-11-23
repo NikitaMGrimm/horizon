@@ -39,7 +39,7 @@ Refused = ns.Refused
 GRANTS = ".github/merge-reviewers.txt"
 # A line never reaches further ahead than this: staying a merge reviewer takes a new date every month.
 MAX_DAYS = 31
-MAX_PER_DAY = 60
+MAX_PER_DAY = 60  # a soft cap on what one account can send out: two runs at once can both pass it
 PREFIX = "🤖 Merge: "
 # The Team's probation rule (GOVERNANCE.md): proof-waiting pull requests, and ones that release at once, are the Team's.
 HELD = ("needs-proof", "release-now")
@@ -337,11 +337,13 @@ class Api:
         ns.gh("api", f"repos/{self.repo}/issues/{n}/comments", "-f", f"body={text}")
 
     def recent_answers(self, since: str) -> list[str]:
-        """This workflow's own answers in the whole repository since a time (ISO 8601)."""
+        """This workflow's own answers in the whole repository, written since a time (ISO 8601, UTC)."""
         raw = ns.gh("api", "--paginate", f"repos/{self.repo}/issues/comments?since={since}&per_page=100", "--jq",
                     '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("' + PREFIX
-                    + '"))) | .body')
-        return [json.loads(line) for line in raw.splitlines() if line.strip()]
+                    + '"))) | {body, created_at}')
+        answers = [json.loads(line) for line in raw.splitlines() if line.strip()]
+        # GitHub's `since` goes by the last edit, so an older comment someone edited comes back too.
+        return [a["body"] for a in answers if a["created_at"] >= since]
 
 
 def mark(actor: ns.Actor) -> str:
@@ -360,7 +362,7 @@ def ready(api, actor: ns.Actor, number: int) -> Pull:
     pr = api.pull(number)
     if pr is None:
         raise Refused("This isn't a pull request.")
-    if (why := pull_refusal(pr, actor)):
+    if (why := pull_refusal(pr, actor) or required_refusal(api.required_check(pr.head), pr.head)):
         raise Refused(why)
     return pr
 
@@ -372,13 +374,12 @@ def run(api, actor: ns.Actor, number: int, url: str, grants: Grants, guarded: li
     if not switched_on:
         raise Refused("`/merge` isn't switched on yet: the workflow has no app token for the merge queue.")
     pr = ready(api, actor, number)
-    if (why := required_refusal(api.required_check(pr.head), pr.head)):
-        raise Refused(why)
     if (why := files_refusal(api.files(pr.base_oid, pr.head), pr.changed_files, paths, guarded)):
         raise Refused(why)
     if merges_by(api, actor, now) >= MAX_PER_DAY:
         raise Refused(f"You merged {MAX_PER_DAY} pull requests in the last 24 hours. Try again later.")
     # Counting the day's merges reads many pages: a label, a change request or a push may have come meanwhile.
+    # Main moving on changes nothing: the files are what `head` changed since it left main, wherever main is now.
     if ready(api, actor, number).head != pr.head:
         raise Refused("It got a new commit while this was checking it: review it and `/merge` again.")
     api.enqueue(pr.node, pr.head)

@@ -196,6 +196,10 @@ class PullRequestTests(unittest.TestCase):
             self.refused("`verify` hasn't passed", Fake(verify=runs))
 
     def test_what_changed_while_it_was_checked_holds_it(self):
+        api = Fake()
+        runs = iter([["success"], ["failure"]])
+        api.required_check = lambda head: next(runs)
+        self.refused("`verify` hasn't passed", api)
         self.refused("needs-proof", Fake(later=pull(labels=["needs-proof"])))
         self.refused("change request", Fake(later=pull(reviews=[approval(), approval(OTHER, "CHANGES_REQUESTED")])))
         self.refused("new commit", Fake(later=pull(head="b" * 40, reviews=[approval(commit="b" * 40)])))
@@ -276,6 +280,17 @@ def answer(**changes):
 
 class AnswerTests(unittest.TestCase):
     """What GitHub answers, read into the pull request the rules judge."""
+
+    def test_the_days_merges_are_read_from_the_workflows_own_comments(self):
+        done = "🤖 Merge: added to the merge queue at `aaaaaaa`, on behalf of @duzzl ([their comment](u)). " \
+               "<!-- merge-by:301 -->"
+        # As `gh api --jq '{body, created_at}'` prints them, one object a line. The last one is older than the day:
+        # GitHub lists it because it was edited since.
+        lines = "\n".join(['{"body":"%s","created_at":"2026-11-23T09:00:00Z"}' % done.replace('"', '\\"'),
+                           '{"body":"🤖 Merge: refused, x (asked by @duzzl)","created_at":"2026-11-23T10:00:00Z"}',
+                           '{"body":"%s","created_at":"2026-11-20T09:00:00Z"}' % done.replace('"', '\\"')])
+        with mock.patch.object(mc.ns, "gh", return_value=lines):  # the script's own import of nightly_set
+            self.assertEqual(mc.merges_by(mc.Api("horizon-rust/horizon"), REVIEWER, NOW), 1)
 
     def test_a_ready_pull_request_reads_as_one(self):
         self.assertEqual(mc.read_pull(answer()), pull())

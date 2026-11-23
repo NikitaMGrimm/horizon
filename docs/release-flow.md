@@ -835,7 +835,7 @@ workflow approval. It is how someone reviews and merges for a month before the T
   CODEOWNERS guards, whatever the line says. The reviewer's own approving review is on the head commit. Nobody's
   change request is open, `verify` and every other check of the head passed, and it carries neither `needs-proof`
   nor `release-now` (those stay the Team's, as in a Team member's probation). At most 60 merges per reviewer in 24
-  hours.
+  hours, a soft cap counted from the workflow's own answers.
 - **What happens.** The workflow answers with one comment, `🤖 Merge: added to the merge queue at <commit>, on behalf
   of @login`, or with the reason it refused. The pull request enters the queue at the commit that was approved
   (GitHub refuses if it moved since) and the queue runs `verify` on it like on any other. The rules of
