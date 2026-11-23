@@ -14,12 +14,11 @@ never by login), the day the line ends and the folders it covers. On the first l
 
 It is refused with a one-line answer unless all of this holds: the line is live (not past its day, and that day at
 most MAX_DAYS away); the pull request is open, to main, not a draft, not the reviewer's own and holds no commit of
-theirs, co-written ones included; every file it changes is in the reviewer's folders and none is one CODEOWNERS
-guards; the reviewer's own approving review is on the head commit; nobody's change request is open; `verify` and
-every other check of the head passed; it carries
-neither `needs-proof` nor `release-now`; the reviewer merged fewer than MAX_PER_DAY in 24 hours. The queue then runs
-`verify` on it like on any other. No code of any pull request is read or run: only the comment's text, its author
-and the API's answers.
+theirs, co-written ones included; every file in its contributed and applied diffs is in the reviewer's folders
+and none is one CODEOWNERS guards; the reviewer's own approving review is on the head commit; nobody's change
+request is open; `verify` and every other check of the head passed; it carries
+neither `needs-proof` nor `release-now`; the reviewer merged fewer than MAX_PER_DAY in 24 hours. The queue then
+runs `verify` on it like on any other. The script uses the comment and GitHub's metadata and file lists.
 """
 from __future__ import annotations
 
@@ -51,7 +50,9 @@ ACTIONS_APP = 15368  # GitHub Actions: only its `verify` counts, as in main's pr
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 QUERY = """query($owner: String!, $name: String!, $n: Int!) { repository(owner: $owner, name: $name) {
   pullRequest(number: $n) {
-    id state isDraft baseRefName baseRefOid headRefOid isInMergeQueue mergeable changedFiles
+    id state isDraft baseRefName headRefOid isInMergeQueue mergeable changedFiles
+    baseRef { target { oid } }
+    potentialMergeCommit { oid parents(first: 3) { nodes { oid } } }
     author { ... on User { databaseId } }
     labels(first: 100) { nodes { name } }
     head: commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
@@ -185,6 +186,7 @@ class Pull:
     base: str
     base_oid: str
     head: str
+    merge_oid: str | None  # GitHub's test merge commit, if its parents are the current base and head
     author_id: int | None
     queued: bool
     conflicts: bool
@@ -245,8 +247,8 @@ def required_refusal(conclusions: list[str | None], head: str) -> str | None:
 def files_refusal(files: list[tuple[str, str | None]], count: int, paths: list[str],
                   guarded: list[str]) -> str | None:
     """Why these changed files can't be merged by someone covering `paths`. Each file comes with the name it was
-    renamed from, which counts too. `count` is how many files GitHub says the pull request changes: a list it cut
-    short hides the rest."""
+    renamed from, which counts too. A list GitHub cut short hides the rest. `count` is the pull request's file count
+    for the contributed diff, or zero for the applied diff, whose file count can differ."""
     if not files or len(files) < count or len(files) >= MAX_FILES:
         return "GitHub didn't list every file this pull request changes: the Horizon Team merges it."
     names = [name for pair in files for name in pair if name is not None]
@@ -281,9 +283,16 @@ def read_pull(response: dict) -> Pull | None:
            or any(c["authors"]["totalCount"] > len(c["authors"]["nodes"]) for c in commits))
     head = (p["head"]["nodes"] or [{}])[0].get("commit") or {}
     reviews = p["latestOpinionatedReviews"]
+    # GitHub can return baseRefOid and a test merge commit from an older tip of the base branch.
+    base_oid = ((p["baseRef"] or {}).get("target") or {}).get("oid") or ""
+    merge = p["potentialMergeCommit"]
+    merge_oid = None
+    if merge and [parent["oid"] for parent in merge["parents"]["nodes"]] == [base_oid, p["headRefOid"]]:
+        merge_oid = merge["oid"]
     return Pull(
-        node=p["id"], state=p["state"], draft=p["isDraft"], base=p["baseRefName"], base_oid=p["baseRefOid"],
-        head=p["headRefOid"], author_id=(p["author"] or {}).get("databaseId"), queued=p["isInMergeQueue"],
+        node=p["id"], state=p["state"], draft=p["isDraft"], base=p["baseRefName"], base_oid=base_oid,
+        head=p["headRefOid"], merge_oid=merge_oid, author_id=(p["author"] or {}).get("databaseId"),
+        queued=p["isInMergeQueue"],
         conflicts=p["mergeable"] == "CONFLICTING", checks=(head.get("statusCheckRollup") or {}).get("state"),
         labels=[node["name"] for node in p["labels"]["nodes"]],
         reviews=[Review((node["author"] or {}).get("databaseId"), (node["author"] or {}).get("login", "?"),
@@ -315,10 +324,12 @@ class Api:
                                 f"&app_id={ACTIONS_APP}&filter=latest&per_page=100", "--jq",
                                 "[.check_runs[].conclusion]"))
 
+    def main_oid(self) -> str:
+        return ns.gh("api", f"repos/{self.repo}/git/ref/heads/main", "--jq", ".object.sha")
+
     def files(self, base: str, head: str) -> list[tuple[str, str | None]]:
-        """Every file `head` changes since it left `base`, with the name it was renamed from (None when it wasn't).
-        Between two commits, not "the pull request's files": that list follows the branch, which can move between
-        this read and the others, while the queue takes exactly `head`."""
+        """Files changed between the commits' common ancestor and `head`, with both names of each rename.
+        For a test merge commit, `base` is its first parent, so this is the diff applied to the base branch."""
         raw = ns.gh("api", f"repos/{self.repo}/compare/{base}...{head}?per_page=1", "--jq",
                     ".files[] | [.filename, .previous_filename]")
         return [tuple(json.loads(line)) for line in raw.splitlines() if line.strip()]
@@ -362,26 +373,50 @@ def ready(api, actor: ns.Actor, number: int) -> Pull:
     pr = api.pull(number)
     if pr is None:
         raise Refused("This isn't a pull request.")
-    if (why := pull_refusal(pr, actor) or required_refusal(api.required_check(pr.head), pr.head)):
+    if (why := pull_refusal(pr, actor)):
         raise Refused(why)
     return pr
 
 
-def run(api, actor: ns.Actor, number: int, url: str, grants: Grants, guarded: list[str], now: datetime,
+def run(api, actor: ns.Actor, number: int, url: str, grants: Grants, guarded: list[str], policy_oid: str,
         switched_on: bool = True) -> str:
     """Queues the pull request; returns the comment to post. Raises Refused for a refusal."""
+    now = datetime.now(timezone.utc)
     paths = scope(actor, grants, now.date())
     if not switched_on:
         raise Refused("`/merge` isn't switched on yet: the workflow has no app token for the merge queue.")
     pr = ready(api, actor, number)
-    if (why := files_refusal(api.files(pr.base_oid, pr.head), pr.changed_files, paths, guarded)):
-        raise Refused(why)
+    if pr.base_oid != policy_oid:
+        raise Refused("Main moved since the workflow checked out the merge policy: try `/merge` again.")
+    if not pr.merge_oid:
+        raise Refused("GitHub doesn't have a test merge for the current main and head commits: try `/merge` again.")
+    # A rename on main can make the merge touch a path absent from the contributed diff.
+    diffs = []
+    for target, count in ((pr.head, pr.changed_files), (pr.merge_oid, 0)):
+        files = api.files(pr.base_oid, target)
+        if (why := files_refusal(files, count, paths, guarded)):
+            raise Refused(why)
+        diffs.append((files, count))
     if merges_by(api, actor, now) >= MAX_PER_DAY:
         raise Refused(f"You merged {MAX_PER_DAY} pull requests in the last 24 hours. Try again later.")
-    # Counting the day's merges reads many pages: a label, a change request or a push may have come meanwhile.
-    # Main moving on changes nothing: the files are what `head` changed since it left main, wherever main is now.
-    if ready(api, actor, number).head != pr.head:
+    # The quota scan can take many API calls. Re-read eligibility and require the commits we already checked.
+    current = ready(api, actor, number)
+    if current.head != pr.head:
         raise Refused("It got a new commit while this was checking it: review it and `/merge` again.")
+    if current.base_oid != pr.base_oid:
+        raise Refused("Main moved while this was checking it: try `/merge` again.")
+    if current.merge_oid != pr.merge_oid:
+        raise Refused("GitHub's test merge changed while this was checking it: try `/merge` again.")
+    if (why := required_refusal(api.required_check(current.head), current.head)):
+        raise Refused(why)
+    # The enqueue mutation pins only the head. Read main again in case the policy changed during the check lookup.
+    if api.main_oid() != policy_oid:
+        raise Refused("Main moved while this was checking it: try `/merge` again.")
+    current_paths = scope(actor, grants, datetime.now(timezone.utc).date())
+    if current_paths != paths:
+        for files, count in diffs:
+            if (why := files_refusal(files, count, current_paths, guarded)):
+                raise Refused(why)
     api.enqueue(pr.node, pr.head)
     return (f"{PREFIX}added to the merge queue at `{pr.head[:7]}`, on behalf of @{actor.login} "
             f"([their comment]({url})). {mark(actor)}")
@@ -399,10 +434,11 @@ def command() -> int:
         actor = ns.actor_from_env()
         grants = read_grants(Path(GRANTS).read_text())
         guarded = ns.guarded_patterns(Path(ns.CODEOWNERS).read_text())
-        text = run(api, actor, number, url, grants, guarded, datetime.now(timezone.utc), bool(token))
+        policy_oid = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        text = run(api, actor, number, url, grants, guarded, policy_oid, bool(token))
     except Refused as e:
         text = f"{PREFIX}refused, {e} (asked by @{ns.safe(login)})"
-    except (RuntimeError, ValueError, KeyError, TypeError) as e:  # GitHub failed, or answered in another shape
+    except (RuntimeError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as e:
         print(repr(e), file=sys.stderr)
         text = f"{PREFIX}GitHub refused that, nothing was done (asked by @{ns.safe(login)})."
     api.comment(number, text)

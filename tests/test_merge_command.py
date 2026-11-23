@@ -13,7 +13,7 @@ from tools.ci import nightly_set as ns
 ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 11, 23, 12, tzinfo=timezone.utc)
 URL = "https://github.com/horizon-rust/horizon/pull/5#issuecomment-1"
-HEAD, BASE = "a" * 40, "c" * 40
+HEAD, BASE, MERGE = "a" * 40, "c" * 40, "d" * 40
 REVIEWER, AUTHOR, OTHER = ns.Actor("duzzl", 301), ns.Actor("dev", 302), ns.Actor("kacpherek", 101)
 GUARDED = ns.guarded_patterns("/.github/ @horizon-rust/council\n/launcher/src/backend.rs @horizon-rust/council\n")
 LIST = mc.read_grants("301 duzzl until 2026-12-20 /crates/horizon-client/ /tools/test_*_parity.py\n")
@@ -25,18 +25,19 @@ def approval(by=REVIEWER, state="APPROVED", commit=HEAD):
 
 def pull(**changes):
     """A pull request `/merge` accepts: someone else's, open, to main, green, approved by the reviewer at its head."""
-    pr = mc.Pull(node="PR_1", state="OPEN", draft=False, base="main", base_oid=BASE, head=HEAD, author_id=AUTHOR.id,
-                 queued=False, conflicts=False, checks="SUCCESS", labels=["bug"], reviews=[approval()],
+    pr = mc.Pull(node="PR_1", state="OPEN", draft=False, base="main", base_oid=BASE, head=HEAD, merge_oid=MERGE,
+                 author_id=AUTHOR.id, queued=False, conflicts=False, checks="SUCCESS", labels=["bug"], reviews=[approval()],
                  reviews_cut=False, changed_files=1, people={AUTHOR.id}, people_cut=False)
     return replace(pr, **changes)
 
 
 class Fake:
     def __init__(self, pr=None, files=(("crates/horizon-client/src/game.rs", None),), verify=("success",), past=(),
-                 queue_error=None, later=None):
+                 queue_error=None, later=None, applied=None):
         self.pr = pull() if pr is None else pr
         self.later = later  # the pull request as a second read finds it; None: unchanged
         self.changed, self.verify, self.past, self.queue_error = list(files), list(verify), list(past), queue_error
+        self.applied = self.changed if applied is None else list(applied)
         self.queued, self.comments, self.compared, self.reads = [], [], [], 0
 
     def pull(self, n):
@@ -46,9 +47,12 @@ class Fake:
     def required_check(self, head):
         return self.verify
 
+    def main_oid(self):
+        return self.pr.base_oid
+
     def files(self, base, head):
         self.compared.append((base, head))
-        return self.changed
+        return self.applied if head == MERGE else self.changed
 
     def enqueue(self, node, head):
         if self.queue_error:
@@ -62,9 +66,11 @@ class Fake:
         return self.past
 
 
-def do(api=None, actor=REVIEWER, grants=LIST, now=NOW, switched_on=True):
+def do(api=None, actor=REVIEWER, grants=LIST, now=NOW, switched_on=True, later=None, policy_oid=BASE):
     api = api or Fake()
-    return mc.run(api, actor, 5, URL, grants, GUARDED, now, switched_on), api
+    clock = mock.Mock(side_effect=[now, now if later is None else later])
+    with mock.patch.object(mc, "datetime", mock.Mock(now=clock)):
+        return mc.run(api, actor, 5, URL, grants, GUARDED, policy_oid, switched_on), api
 
 
 class ParseTests(unittest.TestCase):
@@ -128,6 +134,26 @@ class WhoTests(unittest.TestCase):
         last_day = datetime(2026, 12, 20, 23, 59, tzinfo=timezone.utc)
         self.assertEqual(len(do(now=last_day)[1].queued), 1)
         self.refused("ended on 2026-12-20", now=last_day + timedelta(minutes=1))
+
+    def test_a_grant_expiring_during_the_check_is_refused(self):
+        last_day = datetime(2026, 12, 20, 23, 59, tzinfo=timezone.utc)
+        api = Fake()
+        self.refused("ended on 2026-12-20", api=api, now=last_day, later=last_day + timedelta(minutes=1))
+        self.assertEqual(api.reads, 2)
+
+    def test_a_second_live_grant_does_not_keep_the_expired_folders(self):
+        grants = mc.read_grants("301 duzzl until 2026-12-20 /crates/horizon-client/\n"
+                                "301 duzzl until 2026-12-21 /crates/horizon-world/\n")
+        last_day = datetime(2026, 12, 20, 23, 59, tzinfo=timezone.utc)
+        api = Fake(files=[("crates/horizon-world/src/nbt.rs", None)],
+                   applied=[("crates/horizon-client/src/game.rs", None)])
+        self.refused("outside the folders", api=api, grants=grants,
+                     now=last_day, later=last_day + timedelta(minutes=1))
+
+    def test_a_checkout_with_an_older_policy_is_refused(self):
+        api = Fake()
+        self.refused("Main moved since the workflow checked out", api=api, policy_oid="b" * 40)
+        self.assertEqual(api.compared, [])
 
     def test_a_day_more_than_a_month_away_grants_nothing_yet(self):
         far = mc.read_grants("301 duzzl until 2027-06-01 /crates/horizon-client/\n")
@@ -196,13 +222,40 @@ class PullRequestTests(unittest.TestCase):
             self.refused("`verify` hasn't passed", Fake(verify=runs))
 
     def test_what_changed_while_it_was_checked_holds_it(self):
-        api = Fake()
-        runs = iter([["success"], ["failure"]])
-        api.required_check = lambda head: next(runs)
-        self.refused("`verify` hasn't passed", api)
         self.refused("needs-proof", Fake(later=pull(labels=["needs-proof"])))
         self.refused("change request", Fake(later=pull(reviews=[approval(), approval(OTHER, "CHANGES_REQUESTED")])))
         self.refused("new commit", Fake(later=pull(head="b" * 40, reviews=[approval(commit="b" * 40)])))
+
+    def test_main_moving_during_the_check_holds_it(self):
+        self.refused("Main moved while this was checking it", Fake(later=pull(base_oid="b" * 40, merge_oid=None)))
+
+    def test_main_moving_during_the_verify_lookup_holds_it(self):
+        api = Fake()
+        with mock.patch.object(api, "required_check", wraps=api.required_check) as verify:
+            def main_oid():
+                verify.assert_called_once_with(HEAD)
+                return "b" * 40
+
+            with mock.patch.object(api, "main_oid", side_effect=main_oid):
+                self.refused("Main moved while this was checking it", api)
+
+    def test_verify_is_checked_only_after_the_quota_scan_and_final_pull_read(self):
+        api = Fake(verify=("failure",))
+        with mock.patch.object(api, "recent_answers", wraps=api.recent_answers) as quota:
+            def check(head):
+                quota.assert_called_once()
+                self.assertEqual(api.reads, 2)
+                self.assertEqual(head, HEAD)
+                return api.verify
+
+            with mock.patch.object(api, "required_check", side_effect=check) as verify:
+                self.refused("`verify` hasn't passed", api)
+                verify.assert_called_once_with(HEAD)
+
+    def test_a_test_merge_is_required_and_must_still_match_on_the_final_read(self):
+        self.refused("doesn't have a test merge", Fake(pull(merge_oid=None)))
+        for merge_oid in (None, "b" * 40):
+            self.refused("test merge changed", Fake(later=pull(merge_oid=merge_oid)))
 
     def test_proof_and_release_labels_are_the_teams(self):
         self.refused("needs-proof", Fake(pull(labels=["bug", "needs-proof"])))
@@ -224,7 +277,7 @@ class FilesTests(unittest.TestCase):
         api = do(Fake(pull(changed_files=2), files=inside))[1]
         self.assertEqual(len(api.queued), 1)
         # Read between the two commits the queue takes, not from the branch, which can move meanwhile.
-        self.assertEqual(api.compared, [(BASE, HEAD)])
+        self.assertEqual(api.compared, [(BASE, HEAD), (BASE, MERGE)])
         self.refused("`crates/horizon-world/src/nbt.rs`, outside the folders",
                      inside + [("crates/horizon-world/src/nbt.rs", None)])
         self.refused("outside the folders", [("crates/horizon-client-render/src/gfx.rs", None)])
@@ -249,6 +302,20 @@ class FilesTests(unittest.TestCase):
         self.refused("`launcher/src/main.rs`, outside the folders",
                      [("crates/horizon-client/src/moved.rs", "launcher/src/main.rs")])
 
+    def test_main_renaming_a_file_out_of_scope_holds_the_applied_diff(self):
+        api = Fake(files=[("crates/horizon-client/src/lan/conn.rs", None)],
+                   applied=[("crates/horizon-world/src/lan/conn.rs", None)])
+        with self.assertRaisesRegex(mc.Refused, "`crates/horizon-world/src/lan/conn.rs`, outside the folders"):
+            do(api)
+        self.assertEqual(api.queued, [])
+
+    def test_a_guarded_path_in_the_applied_diff_holds_it_even_with_a_grant(self):
+        api = Fake(applied=[(".github/workflows/ci.yml", None)])
+        everything = mc.read_grants("301 duzzl until 2026-12-20 /\n")
+        with self.assertRaisesRegex(mc.Refused, "`\\.github/workflows/ci.yml`, which only the council merges"):
+            do(api, grants=everything)
+        self.assertEqual(api.queued, [])
+
     def test_what_codeowners_guards_stays_the_councils_whatever_the_line_says(self):
         everything = mc.read_grants("301 duzzl until 2026-12-20 /\n")
         self.assertEqual(len(do(Fake(files=[("docs/x.md", None)]), grants=everything)[1].queued), 1)
@@ -267,7 +334,9 @@ def answer(**changes):
     """GitHub's answer to QUERY for a pull request `/merge` accepts, as read_pull() takes it."""
     commit = {"oid": HEAD, "committer": {"user": {"databaseId": AUTHOR.id}},
               "authors": {"totalCount": 1, "nodes": [{"user": {"databaseId": AUTHOR.id}}]}}
-    pr = {"id": "PR_1", "state": "OPEN", "isDraft": False, "baseRefName": "main", "baseRefOid": BASE,
+    pr = {"id": "PR_1", "state": "OPEN", "isDraft": False, "baseRefName": "main",
+          "baseRef": {"target": {"oid": BASE}},
+          "potentialMergeCommit": {"oid": MERGE, "parents": {"nodes": [{"oid": BASE}, {"oid": HEAD}]}},
           "headRefOid": HEAD, "isInMergeQueue": False, "mergeable": "MERGEABLE", "changedFiles": 1,
           "author": {"databaseId": AUTHOR.id}, "labels": {"nodes": [{"name": "bug"}]},
           "head": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]},
@@ -296,6 +365,18 @@ class AnswerTests(unittest.TestCase):
         self.assertEqual(mc.read_pull(answer()), pull())
         missing = {"data": {"repository": {"pullRequest": None}}, "errors": [{"type": "NOT_FOUND"}]}
         self.assertIsNone(mc.read_pull(missing))
+
+    def test_the_test_merge_must_have_the_current_base_and_head_as_its_only_parents(self):
+        other = "b" * 40
+        for parents in ([other, HEAD], [BASE, other], [HEAD, BASE], [BASE], [BASE, HEAD, other]):
+            with self.subTest(parents=parents):
+                merge = {"oid": MERGE, "parents": {"nodes": [{"oid": oid} for oid in parents]}}
+                self.assertIsNone(mc.read_pull(answer(potentialMergeCommit=merge)).merge_oid)
+        self.assertIsNone(mc.read_pull(answer(potentialMergeCommit=None)).merge_oid)
+        # The PR's cached baseRefOid can still agree with the stale test merge.
+        pr = mc.read_pull(answer(baseRefOid=BASE, baseRef={"target": {"oid": other}}))
+        self.assertEqual(pr.base_oid, other)
+        self.assertIsNone(pr.merge_oid)
 
     def test_an_answer_with_errors_is_no_answer(self):
         # A field the token may not read comes back null beside an error: read alone, it is a check that passed
@@ -334,6 +415,7 @@ class CommandTests(unittest.TestCase):
                 mock.patch.object(mc, "Api", lambda repo, token: setattr(self, "api_token", token) or api), \
                 mock.patch.object(mc, "read_grants", lambda text: LIST), \
                 mock.patch.object(mc, "datetime", mock.Mock(now=lambda tz: NOW)), \
+                mock.patch.object(mc.subprocess, "check_output", return_value=BASE + "\n"), \
                 mock.patch.object(Path, "read_text", lambda self: ""):
             self.assertEqual(mc.command(), 0)
             # Only the queue call gets the app's token: no other `gh` this starts finds it in its environment.
@@ -365,6 +447,7 @@ class CommandTests(unittest.TestCase):
         with mock.patch.dict(os.environ, env), mock.patch.object(mc, "Api", lambda repo, token: api), \
                 mock.patch.object(mc, "read_grants", lambda text: LIST), \
                 mock.patch.object(mc, "datetime", mock.Mock(now=lambda tz: NOW)), \
+                mock.patch.object(mc.subprocess, "check_output", return_value=BASE + "\n"), \
                 mock.patch.object(Path, "read_text", lambda self: ""):
             self.assertEqual(mc.command(), 0)
         self.assertEqual(api.queued, [])

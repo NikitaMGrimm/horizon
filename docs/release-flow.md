@@ -828,17 +828,24 @@ workflow approval. It is how someone reviews and merges for a month before the T
   `/crates/horizon-world/` is that folder and all below it, `/tools/test_*_parity.py` those files (`*` stays inside
   one name; no `**`). It works through that day (UTC) and then stops by itself. The day can be at most 31 days away: a later
   one grants nothing until it is that close (and fails `tests/test_merge_command.py` in the pull request that writes
-  it), so staying a merge reviewer takes a new date every month. Changing the date extends it; removing the line or
-  adding a `paused` line stops it at once. The file is under `.github/`, so the council reviews every change to it.
+  it), so staying a merge reviewer takes a new date every month. Changing the date extends it. Removing the line or
+  adding a `paused` line stops new requests once the change reaches main. The council reviews every change to the
+  file under `.github/`.
 - **What it takes.** The pull request is open, to main, not a draft, not the reviewer's own and holds no commit of
-  theirs, co-written ones included. Every file it changes (a renamed file under both names) is in the reviewer's folders, and none is one
-  CODEOWNERS guards, whatever the line says. The reviewer's own approving review is on the head commit. Nobody's
+  theirs, co-written ones included. Every path in the contributed diff and in the diff that GitHub's test merge
+  applies to current main must be in the reviewer's folders and clear of CODEOWNERS. Both names of a rename count.
+  This also covers edits that apply to a new path because main moved a file after the pull request branched.
+  `/merge` refuses if GitHub's test merge is missing or its parents differ from current main and the head being
+  reviewed. The reviewer's own approving review is on the head commit. Nobody's
   change request is open, `verify` and every other check of the head passed, and it carries neither `needs-proof`
   nor `release-now` (those stay the Team's, as in a Team member's probation). At most 60 merges per reviewer in 24
   hours, a soft cap counted from the workflow's own answers.
 - **What happens.** The workflow answers with one comment, `🤖 Merge: added to the merge queue at <commit>, on behalf
-  of @login`, or with the reason it refused. The pull request enters the queue at the commit that was approved
-  (GitHub refuses if it moved since) and the queue runs `verify` on it like on any other. The rules of
+  of @login`, or with the reason it refused. After reading the quota, the workflow checks that main still matches
+  the checked-out policy and that the head and test merge are still the ones whose paths it checked. After looking
+  up GitHub Actions' `verify` on that exact head, it reads main's tip again and checks the live grants against the
+  current UTC date. GitHub pins the approved head when enqueueing. The queue can apply the change on top of
+  newer commits and earlier queue entries, and runs `verify` on the resulting merge group. The rules of
   [Merging](#merging) still bind the reviewer: read the whole diff, wait for `parity` on gameplay code, and a "don't
   merge" from anyone holds it. A fork's workflow runs and `run-parity` still take a Team member.
 - **Where.** `.github/workflows/merge-command.yml`, `tools/ci/merge_command.py`. Main's copy of the workflow runs,
