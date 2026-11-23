@@ -77,11 +77,11 @@ ENQUEUE = """mutation($id: ID!, $head: GitObjectID!) {
 QUEUE = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
   ref(qualifiedName: "refs/heads/main") { target { oid } }
   mergeQueue(branch: "main") { entries(first: 100) { nodes {
-    id headCommit { oid } baseCommit { oid } enqueuer { __typename login }
+    id enqueuedAt headCommit { oid } baseCommit { oid } enqueuer { ... on Bot { databaseId } }
     pullRequest { number headRefOid }
   } } }
 } }"""
-COMMENTS = "comments(last: 30) { nodes { body author { ... on Bot { databaseId } } } }"
+COMMENT_PAGE = "{ pageInfo { hasPreviousPage startCursor } nodes { createdAt body author { ... on Bot { databaseId } } } }"
 
 
 @dataclass(frozen=True)
@@ -218,8 +218,8 @@ class QueueEntry:
     head: str  # reviewed PR head
     base: str | None  # parent of the squash commit
     squash: str
-    enqueuer_type: str
-    enqueuer: str
+    bot_id: int | None
+    enqueued_at: str
 
 
 def pull_refusal(pr: Pull, actor: ns.Actor) -> str | None:
@@ -389,16 +389,34 @@ class Api:
         data = self.repository(QUEUE)
         entries = [QueueEntry(e["id"], e["pullRequest"]["number"], e["pullRequest"]["headRefOid"],
                               (e["baseCommit"] or {}).get("oid"), e["headCommit"]["oid"],
-                              e["enqueuer"]["__typename"], e["enqueuer"]["login"])
+                              e["enqueuer"].get("databaseId"), e["enqueuedAt"])
                    for e in data["mergeQueue"]["entries"]["nodes"] if e["headCommit"]]
         return data["ref"]["target"]["oid"], entries
 
-    def delegation_answers(self, numbers: set[int]) -> dict[int, list[str]]:
-        selections = " ".join(f"pr{n}: pullRequest(number: {n}) {{ {COMMENTS} }}" for n in sorted(numbers))
-        data = self.repository(f"query($owner: String!, $name: String!) {{ repository(owner: $owner, name: $name) "
-                               f"{{ {selections} }} }}")
-        return {n: [c["body"] for c in data[f"pr{n}"]["comments"]["nodes"]
-                    if (c["author"] or {}).get("databaseId") == ACTIONS_BOT] for n in numbers}
+    def delegation_answers(self, entries: list[QueueEntry]) -> dict[int, list[str]]:
+        """Workflow replies created at or after each enqueue, paging back across newer comments."""
+        cutoffs = {e.number: datetime.fromisoformat(e.enqueued_at) for e in entries}
+        answers = {n: [] for n in cutoffs}
+        cursors = dict.fromkeys(cutoffs)
+        while cursors:
+            selections = []
+            for n, cursor in cursors.items():
+                before = f", before: {json.dumps(cursor)}" if cursor is not None else ""
+                selections.append(f"pr{n}: pullRequest(number: {n}) {{ comments(last: 30{before}) {COMMENT_PAGE} }}")
+            data = self.repository(f"query($owner: String!, $name: String!) {{ repository(owner: $owner, name: $name) "
+                                   f"{{ {' '.join(selections)} }} }}")
+            for n, cursor in tuple(cursors.items()):
+                page = data[f"pr{n}"]["comments"]
+                recent = [c for c in page["nodes"] if datetime.fromisoformat(c["createdAt"]) >= cutoffs[n]]
+                answers[n].extend(c["body"] for c in recent if (c["author"] or {}).get("databaseId") == ACTIONS_BOT)
+                info = page["pageInfo"]
+                if not info["hasPreviousPage"] or len(recent) < len(page["nodes"]):
+                    del cursors[n]
+                else:
+                    if not info["startCursor"] or info["startCursor"] == cursor:
+                        raise RuntimeError(f"GitHub's comment cursor did not advance for #{n}.")
+                    cursors[n] = info["startCursor"]
+        return answers
 
     def comment(self, n: int, text: str) -> None:
         ns.gh("api", f"repos/{self.repo}/issues/{n}/comments", "-f", f"body={text}")
@@ -492,8 +510,10 @@ def squash_files(base: str, head: str) -> list[tuple[str, str | None]]:
     return files
 
 
-def verify_group(api, base: str, head: str, app_slug: str) -> None:
+def verify_group(api, base: str, head: str, app_bot_id: int | None) -> None:
     """Verify each unmerged squash commit using GitHub's queue entry for that exact commit and parent."""
+    if app_bot_id is None:
+        return
     if not OID.fullmatch(base) or not OID.fullmatch(head):
         raise Refused("The merge group must name its base and head commit IDs.")
     chain = git("rev-list", "--first-parent", "--reverse", "--parents", f"{base}..{head}").decode().splitlines()
@@ -516,15 +536,12 @@ def verify_group(api, base: str, head: str, app_slug: str) -> None:
                 raise Refused(f"GitHub has no queue entry for squash commit {commit[:12]}.")
         elif entry.base != parent:
             raise Refused(f"GitHub's queue entry for #{entry.number} has a different squash parent.")
-        elif entry.enqueuer_type != "User":
-            if entry.enqueuer_type != "Bot" or not app_slug:
-                raise Refused(f"Cannot identify the app that enqueued #{entry.number}.")
-            if entry.enqueuer.lower().removesuffix("[bot]") == app_slug.lower():
-                delegated.append(entry)
+        elif entry.bot_id == app_bot_id:
+            delegated.append(entry)
         parent = commit
     if not delegated:
         return
-    answers = api.delegation_answers({e.number for e in delegated})
+    answers = api.delegation_answers(delegated)
     today = datetime.now(timezone.utc).date()
     for entry in delegated:
         reviewers = {int(m[1]) for body in answers[entry.number] if (m := answer_mark(body))
@@ -547,8 +564,11 @@ def verify_group(api, base: str, head: str, app_slug: str) -> None:
 
 def verify_merge_group() -> int:
     try:
+        bot_id = os.environ.get("MERGE_APP_BOT_ID", "")
+        if bot_id and not ns.USER_ID.fullmatch(bot_id):
+            raise Refused("MERGE_APP_BOT_ID must be a numeric GitHub account ID.")
         verify_group(Api(os.environ["REPO"]), os.environ["BASE_SHA"], os.environ["HEAD_SHA"],
-                     os.environ.get("MERGE_APP_SLUG", ""))
+                     int(bot_id) if bot_id else None)
     except (Refused, RuntimeError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as e:
         print(f"Merge queue delegation check failed: {e}", file=sys.stderr)
         return 1

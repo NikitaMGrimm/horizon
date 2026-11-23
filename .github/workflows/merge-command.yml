@@ -58,17 +58,30 @@ jobs:
         id: app
         # Made for a live merge reviewer only; anyone else is answered without it. Until the app exists the script
         # answers that `/merge` isn't switched on.
-        if: steps.who.outputs.live == 'true' && vars.MERGE_APP_CLIENT_ID != '' && vars.MERGE_APP_SLUG != ''
+        if: steps.who.outputs.live == 'true' && vars.MERGE_APP_CLIENT_ID != '' && vars.MERGE_APP_BOT_ID != ''
+        continue-on-error: true # An unconfigured key leaves /merge switched off.
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.MERGE_APP_CLIENT_ID }}
           private-key: ${{ secrets.MERGE_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
+      - name: Check the app's bot account
+        id: app-account
+        if: steps.app.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          EXPECTED_BOT_ID: ${{ vars.MERGE_APP_BOT_ID }}
+        run: |
+          if bot_id=$(gh api "users/$APP_SLUG%5Bbot%5D" --jq 'select(.type == "Bot") | .id') &&
+            [ "$bot_id" = "$EXPECTED_BOT_ID" ]; then
+            echo 'matches=true' >> "$GITHUB_OUTPUT"
+          fi
       - name: Run the command
         env:
           GH_TOKEN: ${{ github.token }}
-          MERGE_TOKEN: ${{ steps.app.outputs.app-slug == vars.MERGE_APP_SLUG && steps.app.outputs.token || '' }}
+          MERGE_TOKEN: ${{ steps.app-account.outputs.matches == 'true' && steps.app.outputs.token || '' }}
           BODY: ${{ github.event.comment.body }}
           AUTHOR: ${{ github.event.comment.user.login }}
           # Who may act is decided by this numeric ID: a login can be claimed by someone else after a rename.

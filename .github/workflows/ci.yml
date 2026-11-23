@@ -646,7 +646,7 @@ jobs:
             { [ "$WINDOWS_WASM_CACHE" = skipped ] &&
               { [ "$EVENT" != pull_request ] || [ "$WINDOWS_WASM_CACHE_ANSWER" = false ]; }; } || exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name == 'merge_group'
+        if: github.event_name == 'merge_group' && vars.MERGE_APP_BOT_ID != ''
         with:
           ref: ${{ github.event.merge_group.head_sha }}
           fetch-depth: 101 # at most 100 builds in GitHub's queue, plus the base
@@ -658,18 +658,14 @@ jobs:
             /tools/ci/nightly_set.py
           sparse-checkout-cone-mode: false
       - name: Verify delegated merge queue paths
-        if: github.event_name == 'merge_group'
+        if: github.event_name == 'merge_group' && vars.MERGE_APP_BOT_ID != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           BASE_SHA: ${{ github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.merge_group.head_sha }}
-          MERGE_APP_SLUG: ${{ vars.MERGE_APP_SLUG }}
+          MERGE_APP_BOT_ID: ${{ vars.MERGE_APP_BOT_ID }}
         run: |
-          git cat-file -e "$BASE_SHA^{commit}"
-          verifier=$(git ls-tree "$BASE_SHA" -- tools/ci/merge_command.py)
-          # The pull request introducing /merge has no verifier in its base and no app configured yet.
-          if [ -z "$verifier" ] && [ -z "$MERGE_APP_SLUG" ]; then exit 0; fi
           trusted=$(mktemp -d)
           trap 'rm -rf "$trusted"' EXIT
           for script in merge_command.py nightly_set.py; do

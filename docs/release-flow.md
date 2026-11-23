@@ -859,14 +859,21 @@ workflow approval. It is how someone reviews and merges for a month before the T
 - **Where.** `.github/workflows/merge-command.yml`, `tools/ci/merge_command.py`. Main's copy of the workflow runs,
   on GitHub's own runner; no pull request's code is checked out or run, and the comment reaches the script as env
   vars.
+- **Security boundary.** GitHub loads the `merge_group` workflow from the merge-group ref in this repository.
+  The verifier script comes from the group's base commit. For the rename race to bypass the workflow step itself,
+  a council-approved commit on `main` would have to rename a file covered by the grant directly onto
+  `.github/workflows/ci.yml` between enqueue and group build. Horizon accepts this GitHub Actions boundary.
+  An organization-level required workflow could move that check outside the group ref.
 - **Two tokens.** The workflow's own token reads and answers. A GitHub App's token adds to the queue and does
   nothing else: a pull request the workflow's own token queued gets no `merge_group` run, so `verify` would never
   start. It is made only when the comment's author has a live line. Until the app exists, `/merge` answers that it isn't switched on. An organisation owner sets it up once: a
   GitHub App with **Contents** and **Pull requests** read and write and no webhook, installed on this repository
   only; then an environment `merge-command`, deployable from `main` only, holding the app's client ID as the
-  variable `MERGE_APP_CLIENT_ID` and its private key as the secret `MERGE_APP_PRIVATE_KEY`. Set the repository
-  variable `MERGE_APP_SLUG` to the app's slug, without `[bot]`, so the queue can identify its entries. Let that
-  app's entries leave the queue before changing its slug or replacing it.
+  variable `MERGE_APP_CLIENT_ID` and its private key as the secret `MERGE_APP_PRIVATE_KEY`. Once the workflow
+  reaches `main`, set the repository variable `MERGE_APP_BOT_ID` to the app bot's numeric account ID from
+  `gh api 'users/<app-slug>%5Bbot%5D' --jq .id`. `/merge` verifies the token's bot account before using it, and
+  `verify` uses that ID to identify the app's queue entries. With the ID unset, delegation checks are off and
+  other bots keep their usual checks. Let the app's entries leave the queue before removing or replacing the ID.
 
 ### Stale pull requests
 

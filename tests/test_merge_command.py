@@ -17,6 +17,8 @@ NOW = datetime(2026, 11, 23, 12, tzinfo=timezone.utc)
 URL = "https://github.com/horizon-rust/horizon/pull/5#issuecomment-1"
 HEAD, BASE, MERGE = "a" * 40, "c" * 40, "d" * 40
 ENTRY = "MQE_test"
+APP_BOT_ID = 14673881
+ENQUEUED = "2026-11-23T12:00:00Z"
 REVIEWER, AUTHOR, OTHER = ns.Actor("duzzl", 301), ns.Actor("dev", 302), ns.Actor("kacpherek", 101)
 GUARDED = ns.guarded_patterns("/.github/ @horizon-rust/council\n/launcher/src/backend.rs @horizon-rust/council\n")
 LIST = mc.read_grants("301 duzzl until 2026-12-20 /crates/horizon-client/ /tools/test_*_parity.py\n")
@@ -366,16 +368,33 @@ class MergeGroupTests(unittest.TestCase):
         return mc.git("rev-parse", "HEAD").decode().strip()
 
     def entry(self, squash, parent=None, **changes):
-        entry = mc.QueueEntry(ENTRY, 5, HEAD, parent or self.base, squash, "Bot", "horizon-merge-command")
+        entry = mc.QueueEntry(ENTRY, 5, HEAD, parent or self.base, squash, APP_BOT_ID, ENQUEUED)
         return replace(entry, **changes)
 
     def check(self, *entries):
         self.api.queue_entries.return_value = (self.base, list(entries))
-        mc.verify_group(self.api, self.base, entries[-1].squash, "horizon-merge-command")
+        mc.verify_group(self.api, self.base, entries[-1].squash, APP_BOT_ID)
 
-    def test_delegated_in_scope_squash_passes(self):
+    def test_matching_app_bot_id_checks_the_receipt_and_in_scope_squash(self):
         self.write(self.INSIDE, "updated\n")
-        self.check(self.entry(self.commit()))
+        entry = self.entry(self.commit())
+        self.check(entry)
+        self.api.delegation_answers.assert_called_once_with([entry])
+
+    def test_an_unconfigured_app_leaves_other_bot_enqueues_alone(self):
+        self.write(self.OUTSIDE, "ordinary bot edit\n")
+        entry = self.entry(self.commit(), bot_id=APP_BOT_ID + 1)
+        self.api.queue_entries.return_value = (self.base, [entry])
+        env = {"REPO": "horizon-rust/horizon", "BASE_SHA": self.base, "HEAD_SHA": entry.squash}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(mc, "Api", return_value=self.api), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(mc.verify_merge_group(), 0)
+        self.api.queue_entries.assert_not_called()
+
+    def test_another_bot_id_skips_delegation_with_the_app_configured(self):
+        self.write(self.OUTSIDE, "ordinary bot edit\n")
+        self.check(self.entry(self.commit(), bot_id=APP_BOT_ID + 1))
+        self.api.delegation_answers.assert_not_called()
 
     def test_rename_requires_both_paths_to_be_in_scope(self):
         self.OUTSIDE.parent.mkdir()
@@ -396,7 +415,7 @@ class MergeGroupTests(unittest.TestCase):
         head = self.commit()
         self.api.queue_entries.return_value = (self.base, [self.entry(head)])
         env = {"REPO": "horizon-rust/horizon", "BASE_SHA": self.base, "HEAD_SHA": head,
-               "MERGE_APP_SLUG": "horizon-merge-command"}
+               "MERGE_APP_BOT_ID": str(APP_BOT_ID)}
         with mock.patch.dict(os.environ, env), mock.patch.object(mc, "Api", return_value=self.api), \
                 mock.patch.object(mc.sys, "stderr", new_callable=io.StringIO) as err:
             self.assertEqual(mc.verify_merge_group(), 1)
@@ -404,14 +423,14 @@ class MergeGroupTests(unittest.TestCase):
 
     def test_maintainer_passes_even_with_an_old_app_answer(self):
         self.write(".github/workflows/ci.yml", "maintainer update\n")
-        self.check(self.entry(self.commit(), enqueuer_type="User", enqueuer="maintainer"))
+        self.check(self.entry(self.commit(), bot_id=None))
         self.api.delegation_answers.assert_not_called()
 
     def test_batch_checks_each_delegated_squash_against_its_parent(self):
         self.OUTSIDE.parent.mkdir()
         mc.git("mv", str(self.INSIDE), str(self.OUTSIDE))
         moved = self.commit()
-        first = self.entry(moved, number=4, enqueuer_type="User", enqueuer="maintainer")
+        first = self.entry(moved, number=4, bot_id=None)
         self.write(self.INSIDE.parent / "other.rs", "another block\n")
         self.check(first, self.entry(self.commit(), parent=moved))
 
@@ -424,7 +443,7 @@ class MergeGroupTests(unittest.TestCase):
         self.write(self.OUTSIDE, "outside\n")
         outside = self.commit()
         self.write(self.INSIDE, "ordinary maintainer edit\n")
-        terminal = self.entry(self.commit(), parent=outside, number=6, enqueuer_type="User", enqueuer="maintainer")
+        terminal = self.entry(self.commit(), parent=outside, number=6, bot_id=None)
         with self.assertRaisesRegex(mc.Refused, "#5: It changes `unowned/block.rs`, outside the folders"):
             self.check(self.entry(outside), terminal)
 
@@ -439,7 +458,7 @@ class MergeGroupTests(unittest.TestCase):
         self.write(mc.GRANTS, Path(mc.GRANTS).read_text() + "paused\n")
         paused = self.commit()
         self.write(self.INSIDE, "updated\n")
-        first = self.entry(paused, number=4, enqueuer_type="User", enqueuer="maintainer")
+        first = self.entry(paused, number=4, bot_id=None)
         with self.assertRaisesRegex(mc.Refused, "#5: `/merge` is paused"):
             self.check(first, self.entry(self.commit(), parent=paused))
 
@@ -473,12 +492,28 @@ class AnswerTests(unittest.TestCase):
     """What GitHub answers, read into the pull request the rules judge."""
 
     def test_queue_attribution_only_reads_the_workflow_bots_answers(self):
-        comments = [{"author": {}, "body": queued_answer(actor=OTHER)},
-                    {"author": {"databaseId": 136622811}, "body": queued_answer(actor=OTHER)},
-                    {"author": {"databaseId": mc.ACTIONS_BOT}, "body": queued_answer()}]
+        comments = [{"author": {}, "body": queued_answer(actor=OTHER), "createdAt": ENQUEUED},
+                    {"author": {"databaseId": 136622811}, "body": queued_answer(actor=OTHER), "createdAt": ENQUEUED},
+                    {"author": {"databaseId": mc.ACTIONS_BOT}, "body": queued_answer(), "createdAt": ENQUEUED}]
         api = mc.Api("horizon-rust/horizon")
-        with mock.patch.object(api, "repository", return_value={"pr5": {"comments": {"nodes": comments}}}):
-            self.assertEqual(api.delegation_answers({5}), {5: [queued_answer()]})
+        entry = mc.QueueEntry(ENTRY, 5, HEAD, BASE, MERGE, APP_BOT_ID, ENQUEUED)
+        page = {"nodes": comments, "pageInfo": {"hasPreviousPage": False}}
+        with mock.patch.object(api, "repository", return_value={"pr5": {"comments": page}}):
+            self.assertEqual(api.delegation_answers([entry]), {5: [queued_answer()]})
+
+    def test_queue_receipt_survives_more_than_thirty_newer_comments(self):
+        entry = mc.QueueEntry(ENTRY, 5, HEAD, BASE, MERGE, APP_BOT_ID, ENQUEUED)
+        receipt = {"author": {"databaseId": mc.ACTIONS_BOT}, "body": queued_answer(), "createdAt": ENQUEUED}
+        old_reply = {**receipt, "createdAt": "2026-11-23T11:59:59Z", "body": queued_answer(actor=OTHER)}
+        newer = {"author": {}, "body": "ordinary comment", "createdAt": "2026-11-23T12:01:00Z"}
+        newest_page = {"nodes": [newer] * 30, "pageInfo": {"hasPreviousPage": True, "startCursor": "page-2"}}
+        older_page = {"nodes": [old_reply, receipt, newer],
+                      "pageInfo": {"hasPreviousPage": True, "startCursor": "page-3"}}
+        api = mc.Api("horizon-rust/horizon")
+        with mock.patch.object(api, "repository", side_effect=[{"pr5": {"comments": p}}
+                                                               for p in (newest_page, older_page)]) as read:
+            self.assertEqual(api.delegation_answers([entry]), {5: [queued_answer()]})
+        self.assertIn('comments(last: 30, before: "page-2")', read.call_args.args[0])
 
     def test_the_days_merges_are_read_from_the_workflows_own_comments(self):
         done = queued_answer()
@@ -605,7 +640,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_it_passes_both_tokens(self):
         self.assertIn("GH_TOKEN: ${{ github.token }}", self.TEXT)
-        self.assertIn("MERGE_TOKEN: ${{ steps.app.outputs.app-slug == vars.MERGE_APP_SLUG && steps.app.outputs.token",
+        self.assertIn("MERGE_TOKEN: ${{ steps.app-account.outputs.matches == 'true' && steps.app.outputs.token",
                       self.TEXT)
 
 
