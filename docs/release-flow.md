@@ -824,13 +824,14 @@ workflow approval. It is how someone reviews and merges for a month before the T
 /merge        on a pull request, after approving its head commit
 ```
 
-- **The line.** `<numeric GitHub ID> <login> until <YYYY-MM-DD> </folder/> ...`, folders written from the root as in
-  CODEOWNERS. It works through that day (UTC) and then stops by itself. The day can be at most 31 days away: a later
+- **The line.** `<numeric GitHub ID> <login> until <YYYY-MM-DD> </folder/> ...`, folders written from the root:
+  `/crates/horizon-world/` is that folder and all below it, `/tools/test_*_parity.py` those files (`*` stays inside
+  one name; no `**`). It works through that day (UTC) and then stops by itself. The day can be at most 31 days away: a later
   one grants nothing until it is that close (and fails `tests/test_merge_command.py` in the pull request that writes
   it), so staying a merge reviewer takes a new date every month. Changing the date extends it; removing the line or
   adding a `paused` line stops it at once. The file is under `.github/`, so the council reviews every change to it.
 - **What it takes.** The pull request is open, to main, not a draft, not the reviewer's own and holds no commit of
-  theirs. Every file it changes (a renamed file under both names) is in the reviewer's folders, and none is one
+  theirs, co-written ones included. Every file it changes (a renamed file under both names) is in the reviewer's folders, and none is one
   CODEOWNERS guards, whatever the line says. The reviewer's own approving review is on the head commit. Nobody's
   change request is open, `verify` and every other check of the head passed, and it carries neither `needs-proof`
   nor `release-now` (those stay the Team's, as in a Team member's probation). At most 60 merges per reviewer in 24
@@ -845,7 +846,7 @@ workflow approval. It is how someone reviews and merges for a month before the T
   vars.
 - **Two tokens.** The workflow's own token reads and answers. A GitHub App's token adds to the queue and does
   nothing else: a pull request the workflow's own token queued gets no `merge_group` run, so `verify` would never
-  start. Until the app exists, `/merge` answers that it isn't switched on. An organisation owner sets it up once: a
+  start. It is made only when the comment's author has a live line. Until the app exists, `/merge` answers that it isn't switched on. An organisation owner sets it up once: a
   GitHub App with **Contents** and **Pull requests** read and write and no webhook, installed on this repository
   only; then an environment `merge-command`, deployable from `main` only, holding the app's client ID as the
   variable `MERGE_APP_CLIENT_ID` and its private key as the secret `MERGE_APP_PRIVATE_KEY`.

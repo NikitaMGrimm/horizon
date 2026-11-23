@@ -1,5 +1,7 @@
+import io
 import os
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,7 +13,7 @@ from tools.ci import nightly_set as ns
 ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 11, 23, 12, tzinfo=timezone.utc)
 URL = "https://github.com/horizon-rust/horizon/pull/5#issuecomment-1"
-HEAD = "a" * 40
+HEAD, BASE = "a" * 40, "c" * 40
 REVIEWER, AUTHOR, OTHER = ns.Actor("duzzl", 301), ns.Actor("dev", 302), ns.Actor("kacpherek", 101)
 GUARDED = ns.guarded_patterns("/.github/ @horizon-rust/council\n/launcher/src/backend.rs @horizon-rust/council\n")
 LIST = mc.read_grants("301 duzzl until 2026-12-20 /crates/horizon-client/ /tools/test_*_parity.py\n")
@@ -23,28 +25,30 @@ def approval(by=REVIEWER, state="APPROVED", commit=HEAD):
 
 def pull(**changes):
     """A pull request `/merge` accepts: someone else's, open, to main, green, approved by the reviewer at its head."""
-    pr = mc.Pull(node="PR_1", state="OPEN", draft=False, base="main", head=HEAD, author_id=AUTHOR.id, queued=False,
-                 conflicts=False, checks="SUCCESS", required="SUCCESS", labels=["bug"], reviews=[approval()],
-                 reviews_cut=False,
-                 changed_files=1, commits=1)
+    pr = mc.Pull(node="PR_1", state="OPEN", draft=False, base="main", base_oid=BASE, head=HEAD, author_id=AUTHOR.id,
+                 queued=False, conflicts=False, checks="SUCCESS", labels=["bug"], reviews=[approval()],
+                 reviews_cut=False, changed_files=1, people={AUTHOR.id}, people_cut=False)
     return replace(pr, **changes)
 
 
 class Fake:
-    def __init__(self, pr=None, files=(("crates/horizon-client/src/game.rs", None),), people=(AUTHOR.id,), past=(),
-                 queue_error=None):
+    def __init__(self, pr=None, files=(("crates/horizon-client/src/game.rs", None),), verify=("success",), past=(),
+                 queue_error=None, later=None):
         self.pr = pull() if pr is None else pr
-        self.changed, self.people, self.past, self.queue_error = list(files), set(people), list(past), queue_error
-        self.queued, self.comments = [], []
+        self.later = later  # the pull request as a second read finds it; None: unchanged
+        self.changed, self.verify, self.past, self.queue_error = list(files), list(verify), list(past), queue_error
+        self.queued, self.comments, self.compared, self.reads = [], [], [], 0
 
     def pull(self, n):
-        return self.pr
+        self.reads += 1
+        return self.later if self.later is not None and self.reads > 1 else self.pr
 
-    def files(self, n):
+    def required_check(self, head):
+        return self.verify
+
+    def files(self, base, head):
+        self.compared.append((base, head))
         return self.changed
-
-    def commit_people(self, n):
-        return self.people
 
     def enqueue(self, node, head):
         if self.queue_error:
@@ -54,7 +58,7 @@ class Fake:
     def comment(self, n, text):
         self.comments.append(text)
 
-    def recent_comments(self, since):
+    def recent_answers(self, since):
         return self.past
 
 
@@ -87,6 +91,7 @@ class ListTests(unittest.TestCase):
         for line in ("duzzl", "301 duzzl", "301 duzzl /crates/", "301 duzzl until 2026-12-20",
                      "301 duzzl until 2026-13-40 /crates/", "301 duzzl until 20261220 /crates/",
                      "301 duzzl until 2026-12-20 crates/", "301 duzzl until 2026-12-20 /crates/ *",
+                     "301 duzzl until 2026-12-20 /crates/**", "301 duzzl until 2026-12-20 /crates/**/x.rs",
                      "duzzl 301 until 2026-12-20 /crates/", "301 duzzl since 2026-12-20 /crates/"):
             grants = mc.read_grants(line + "\n")
             self.assertEqual(grants.lines, [], line)
@@ -106,7 +111,7 @@ class WhoTests(unittest.TestCase):
         text, api = do()
         self.assertEqual(api.queued, [("PR_1", HEAD)])
         self.assertEqual(text, f"🤖 Merge: added to the merge queue at `aaaaaaa`, on behalf of @duzzl "
-                               f"([their comment]({URL})).")
+                               f"([their comment]({URL})). <!-- merge-by:301 -->")
 
     def refused(self, pattern, **how):
         api = how.pop("api", None) or Fake()
@@ -142,11 +147,11 @@ class WhoTests(unittest.TestCase):
         self.refused("isn't switched on", switched_on=False)
 
     def test_more_than_the_days_merges_are_refused(self):
-        done = {"user": "github-actions[bot]", "body": "🤖 Merge: added to the merge queue at `aaaaaaa`, on behalf "
-                                                       "of @duzzl ([their comment](u))."}
-        others = [{"user": "github-actions[bot]", "body": done["body"].replace("@duzzl", "@duzzl-two")},
-                  {"user": "duzzl", "body": done["body"]},
-                  {"user": "github-actions[bot]", "body": "🤖 Merge: refused, x (asked by @duzzl)"}]
+        done = "🤖 Merge: added to the merge queue at `aaaaaaa`, on behalf of @duzzl ([their comment](u)). " \
+               "<!-- merge-by:301 -->"
+        # Someone else's merges, and a refusal that quotes a file named like the mark, are not this reviewer's.
+        others = [done.replace("merge-by:301 ", "merge-by:3011 "), done.replace("merge-by:301 ", "merge-by:30 "),
+                  "🤖 Merge: refused, It changes `x<!-- merge-by:301 -->` (asked by @duzzl)"]
         self.assertEqual(len(do(Fake(past=[done] * (mc.MAX_PER_DAY - 1) + others * 5))[1].queued), 1)
         self.refused("in the last 24 hours", api=Fake(past=[done] * mc.MAX_PER_DAY))
 
@@ -166,8 +171,8 @@ class PullRequestTests(unittest.TestCase):
 
     def test_never_their_own_work(self):
         self.refused("your own pull request", Fake(pull(author_id=REVIEWER.id)))
-        self.refused("a commit of yours", Fake(people=(AUTHOR.id, REVIEWER.id)))
-        self.refused("too many to read", Fake(pull(commits=251)))
+        self.refused("a commit of yours", Fake(pull(people={AUTHOR.id, REVIEWER.id})))
+        self.refused("too many commits or authors", Fake(pull(people_cut=True)))
 
     def test_their_own_approval_of_the_head_is_needed(self):
         self.refused("Approve it first", Fake(pull(reviews=[])))
@@ -186,8 +191,14 @@ class PullRequestTests(unittest.TestCase):
 
     def test_the_required_check_passed_itself(self):
         # A fork's runs wait for approval while the bots' checks pass: together they read SUCCESS without `verify`.
-        self.refused("`verify` hasn't passed", Fake(pull(checks="SUCCESS", required=None)))
-        self.refused("`verify` is failure", Fake(pull(required="FAILURE")))
+        self.refused("`verify` hasn't run", Fake(verify=[]))
+        for runs in (["failure"], [None], ["success", "failure"]):
+            self.refused("`verify` hasn't passed", Fake(verify=runs))
+
+    def test_what_changed_while_it_was_checked_holds_it(self):
+        self.refused("needs-proof", Fake(later=pull(labels=["needs-proof"])))
+        self.refused("change request", Fake(later=pull(reviews=[approval(), approval(OTHER, "CHANGES_REQUESTED")])))
+        self.refused("new commit", Fake(later=pull(head="b" * 40, reviews=[approval(commit="b" * 40)])))
 
     def test_proof_and_release_labels_are_the_teams(self):
         self.refused("needs-proof", Fake(pull(labels=["bug", "needs-proof"])))
@@ -206,11 +217,29 @@ class FilesTests(unittest.TestCase):
 
     def test_every_file_is_in_the_reviewers_folders(self):
         inside = [("crates/horizon-client/src/game/mobs/wither.rs", None), ("tools/test_mob_ai_parity.py", None)]
-        self.assertEqual(len(do(Fake(pull(changed_files=2), files=inside))[1].queued), 1)
+        api = do(Fake(pull(changed_files=2), files=inside))[1]
+        self.assertEqual(len(api.queued), 1)
+        # Read between the two commits the queue takes, not from the branch, which can move meanwhile.
+        self.assertEqual(api.compared, [(BASE, HEAD)])
         self.refused("`crates/horizon-world/src/nbt.rs`, outside the folders",
                      inside + [("crates/horizon-world/src/nbt.rs", None)])
         self.refused("outside the folders", [("crates/horizon-client-render/src/gfx.rs", None)])
         self.refused("outside the folders", [("tools/parity.py", None)])
+
+    def test_a_folder_or_file_pattern_covers_no_more_than_it_names(self):
+        paths = ["/crates/horizon-client/", "/tools/test_*_parity.py", "/docs/a.md", "/crates/horizon-w*/"]
+        for path in ("crates/horizon-client/src/x.rs", "tools/test_mob_ai_parity.py", "docs/a.md",
+                     "crates/horizon-world/src/nbt.rs"):
+            self.assertTrue(mc.covers(path, paths), path)
+        for path in ("crates/horizon-client-render/src/x.rs", "crates/horizon-client", "Crates/horizon-client/x.rs",
+                     "tools/test_a_parity.py/evil.py", "tools/test_a/b_parity.py", "docs/a.md/x", "docs/a.mdx",
+                     "tools/ci/test_x_parity.py", "x/crates/horizon-client/y.rs"):
+            self.assertFalse(mc.covers(path, paths), path)
+
+    def test_a_files_name_cannot_write_into_the_answer(self):
+        with self.assertRaises(mc.Refused) as refused:
+            do(Fake(files=[("docs/a`\n@everyone <!-- merge-by:301 -->", None)]))
+        self.assertIn("`docs/a???everyone???--?merge-by?301?--?`", str(refused.exception))
 
     def test_a_file_moved_out_of_another_folder_counts_there_too(self):
         self.refused("`launcher/src/main.rs`, outside the folders",
@@ -225,8 +254,57 @@ class FilesTests(unittest.TestCase):
                      grants=everything)
 
     def test_a_list_github_cut_short_is_refused(self):
-        self.refused("didn't list every file", [("crates/horizon-client/src/game.rs", None)], count=3001)
+        self.refused("didn't list every file", [("crates/horizon-client/src/game.rs", None)], count=2)
+        self.refused("didn't list every file", [("crates/horizon-client/src/game.rs", None)] * mc.MAX_FILES)
         self.refused("didn't list every file", [], count=0)
+
+
+def answer(**changes):
+    """GitHub's answer to QUERY for a pull request `/merge` accepts, as read_pull() takes it."""
+    commit = {"oid": HEAD, "committer": {"user": {"databaseId": AUTHOR.id}},
+              "authors": {"totalCount": 1, "nodes": [{"user": {"databaseId": AUTHOR.id}}]}}
+    pr = {"id": "PR_1", "state": "OPEN", "isDraft": False, "baseRefName": "main", "baseRefOid": BASE,
+          "headRefOid": HEAD, "isInMergeQueue": False, "mergeable": "MERGEABLE", "changedFiles": 1,
+          "author": {"databaseId": AUTHOR.id}, "labels": {"nodes": [{"name": "bug"}]},
+          "head": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]},
+          "commits": {"totalCount": 1, "nodes": [{"commit": commit}]},
+          "latestOpinionatedReviews": {"pageInfo": {"hasNextPage": False}, "nodes": [
+              {"state": "APPROVED", "commit": {"oid": HEAD}, "author": {"login": "duzzl", "databaseId": 301}}]}}
+    pr.update(changes)
+    return {"data": {"repository": {"pullRequest": pr}}}
+
+
+class AnswerTests(unittest.TestCase):
+    """What GitHub answers, read into the pull request the rules judge."""
+
+    def test_a_ready_pull_request_reads_as_one(self):
+        self.assertEqual(mc.read_pull(answer()), pull())
+        missing = {"data": {"repository": {"pullRequest": None}}, "errors": [{"type": "NOT_FOUND"}]}
+        self.assertIsNone(mc.read_pull(missing))
+
+    def test_an_answer_with_errors_is_no_answer(self):
+        # A field the token may not read comes back null beside an error: read alone, it is a check that passed
+        # nowhere or a change request that isn't there.
+        for response in ({**answer(), "errors": [{"message": "Resource not accessible by integration"}]},
+                         {"data": {"repository": None}, "errors": [{"message": "x"}]}, {"errors": [{"message": "x"}]}):
+            with self.assertRaises(RuntimeError):
+                mc.read_pull(response)
+
+    def test_a_co_author_is_one_of_its_people(self):
+        commit = {"oid": HEAD, "committer": {"user": None},
+                  "authors": {"totalCount": 3, "nodes": [{"user": {"databaseId": AUTHOR.id}}, {"user": None},
+                                                         {"user": {"databaseId": REVIEWER.id}}]}}
+        pr = mc.read_pull(answer(commits={"totalCount": 1, "nodes": [{"commit": commit}]}))
+        self.assertEqual((pr.people, pr.people_cut), ({AUTHOR.id, REVIEWER.id}, False))
+        self.assertIn("a commit of yours", mc.pull_refusal(pr, REVIEWER))
+
+    def test_commits_or_authors_it_could_not_read_all_of_are_cut(self):
+        commit = answer()["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]
+        many_authors = {**commit, "authors": {"totalCount": 11, "nodes": commit["authors"]["nodes"]}}
+        for commits in ({"totalCount": 101, "nodes": [{"commit": commit}]},
+                        {"totalCount": 1, "nodes": [{"commit": {**commit, "oid": "b" * 40}}]},  # not the head's list
+                        {"totalCount": 1, "nodes": [{"commit": many_authors}]}, {"totalCount": 0, "nodes": []}):
+            self.assertTrue(mc.read_pull(answer(commits=commits)).people_cut, commits)
 
 
 class CommandTests(unittest.TestCase):
@@ -236,11 +314,16 @@ class CommandTests(unittest.TestCase):
         api = Fake()
         env = {"REPO": "horizon-rust/horizon", "ISSUE": "5", "AUTHOR": author.login, "AUTHOR_ID": str(author.id),
                "BODY": body, "COMMENT_URL": URL, "GH_TOKEN": "token", "MERGE_TOKEN": token}
-        with mock.patch.dict(os.environ, env), mock.patch.object(mc, "Api", lambda repo, token: api), \
+        self.api_token = None
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(mc, "Api", lambda repo, token: setattr(self, "api_token", token) or api), \
                 mock.patch.object(mc, "read_grants", lambda text: LIST), \
                 mock.patch.object(mc, "datetime", mock.Mock(now=lambda tz: NOW)), \
                 mock.patch.object(Path, "read_text", lambda self: ""):
             self.assertEqual(mc.command(), 0)
+            # Only the queue call gets the app's token: no other `gh` this starts finds it in its environment.
+            self.assertNotIn("MERGE_TOKEN", os.environ)
+        self.assertEqual(self.api_token, token)
         return api
 
     def test_a_merge_answers_once(self):
@@ -259,6 +342,30 @@ class CommandTests(unittest.TestCase):
         api = self.run_command("Looks good to me")
         self.assertEqual((api.queued, api.comments), ([], []))
 
+    def test_githubs_answer_in_another_shape_still_gets_a_reply(self):
+        api = Fake()
+        api.pull = lambda n: mc.read_pull({"data": {"repository": {"pullRequest": {"id": "PR_1"}}}})
+        env = {"REPO": "horizon-rust/horizon", "ISSUE": "5", "AUTHOR": "duzzl", "AUTHOR_ID": "301", "BODY": "/merge",
+               "MERGE_TOKEN": "app-token"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(mc, "Api", lambda repo, token: api), \
+                mock.patch.object(mc, "read_grants", lambda text: LIST), \
+                mock.patch.object(mc, "datetime", mock.Mock(now=lambda tz: NOW)), \
+                mock.patch.object(Path, "read_text", lambda self: ""):
+            self.assertEqual(mc.command(), 0)
+        self.assertEqual(api.queued, [])
+        self.assertEqual(api.comments, ["🤖 Merge: GitHub refused that, nothing was done (asked by @duzzl)."])
+
+    def test_the_workflow_learns_whether_the_authors_line_is_live(self):
+        def live(author):
+            out = io.StringIO()
+            env = {"AUTHOR": author.login, "AUTHOR_ID": str(author.id)}
+            with mock.patch.dict(os.environ, env), mock.patch.object(mc, "read_grants", lambda text: LIST), \
+                    mock.patch.object(mc, "datetime", mock.Mock(now=lambda tz: NOW)), \
+                    mock.patch.object(Path, "read_text", lambda self: ""), redirect_stdout(out):
+                mc.live()
+            return out.getvalue()
+        self.assertEqual((live(REVIEWER), live(OTHER)), ("live=true\n", "live=false\n"))
+
 
 class WorkflowTests(unittest.TestCase):
     TEXT = (ROOT / ".github/workflows/merge-command.yml").read_text()
@@ -269,8 +376,7 @@ class WorkflowTests(unittest.TestCase):
         for path in (mc.GRANTS, ns.CODEOWNERS, "tools/ci/nightly_set.py", "tools/ci/merge_command.py"):
             self.assertIn(path, checkout)
 
-    def test_it_passes_the_authors_id_and_both_tokens(self):
-        self.assertIn("AUTHOR_ID: ${{ github.event.comment.user.id }}", self.TEXT)
+    def test_it_passes_both_tokens(self):
         self.assertIn("GH_TOKEN: ${{ github.token }}", self.TEXT)
         self.assertIn("MERGE_TOKEN: ${{ steps.app.outputs.token }}", self.TEXT)
 

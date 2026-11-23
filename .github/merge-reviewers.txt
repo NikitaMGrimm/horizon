@@ -8,7 +8,8 @@
 # - `until` is the last day (UTC) the line works. It can be at most 31 days away: a later date grants nothing until
 #   it is that close, so staying a merge reviewer takes a new date every month. Extend a line by changing its date.
 # - The folders are the only places a pull request may change for this reviewer's `/merge` to work, written from
-#   the repository's root as in CODEOWNERS (`/crates/horizon-world/`, `/tools/test_*_parity.py`). What CODEOWNERS
-#   guards is never included, whatever is written here.
+#   the repository's root: `/crates/horizon-world/` is that folder and all below it, `/tools/test_*_parity.py`
+#   those files (`*` stays inside one name; no `**`). What CODEOWNERS guards is never included, whatever is
+#   written here.
 # A line in any other form grants nothing. Removing a line revokes that account at once. A line with only `paused`
 # stops `/merge` for everyone listed.

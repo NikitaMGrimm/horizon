@@ -23,16 +23,19 @@ jobs:
       github.event.issue.pull_request && github.event.comment.user.type != 'Bot' && (
       startsWith(github.event.comment.body, '/merge') ||
       startsWith(github.event.comment.body, '🤖 Agent: /merge'))
-    # One command per pull request at a time. On the job, not the workflow: the skipped runs of ordinary comments
-    # must not cancel a waiting one.
+    # One command per pull request and person at a time. On the job, not the workflow: the skipped runs of ordinary
+    # comments must not cancel a waiting one. Per person: a group keeps one waiting run, so anyone's `/merge` would
+    # otherwise push a reviewer's out.
     concurrency:
-      group: merge-command-${{ github.event.issue.number }}
+      group: merge-command-${{ github.event.issue.number }}-${{ github.event.comment.user.id }}
     # GitHub's own runner, never one of ours: this job holds a token that can merge.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: merge-command
     permissions:
       contents: read
+      checks: read          # the head's `verify` run
+      statuses: read
       issues: write         # answers in the thread
       pull-requests: write
     steps:
@@ -46,10 +49,17 @@ jobs:
             tools/ci/nightly_set.py
             tools/ci/merge_command.py
           sparse-checkout-cone-mode: false
+      - name: Whether the author's line is live
+        id: who
+        env:
+          AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ID: ${{ github.event.comment.user.id }}
+        run: python3 tools/ci/merge_command.py live >> "$GITHUB_OUTPUT"
       - name: The app's token, for the merge queue alone
         id: app
-        # Until the app exists the script answers that `/merge` isn't switched on.
-        if: vars.MERGE_APP_CLIENT_ID != ''
+        # Made for a live merge reviewer only; anyone else is answered without it. Until the app exists the script
+        # answers that `/merge` isn't switched on.
+        if: steps.who.outputs.live == 'true' && vars.MERGE_APP_CLIENT_ID != ''
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.MERGE_APP_CLIENT_ID }}
