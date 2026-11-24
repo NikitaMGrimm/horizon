@@ -55,7 +55,7 @@ the Horizon Team, for example.
 | **Member** | Play, chat, report bugs, suggest ideas, open issues and pull requests, pick group roles | Join the Discord server or the GitHub repo | Leave, or get banned | No |
 | **Contributor** (⛏️ Iron, 🥇 Gold, 💎 Diamond, 🟪 Netherite ranks) | Write in #contributors; `/claim` issues; vote in their group's elections (if active in that group) | One merged pull request in a public horizon-rust repo, linked with `/link-github` and `/verify-github`. Ranks come from merged pull requests: 10, 40, 100 and 200 | Contributor status and ranks stay | No |
 | **Group member** | Read and write in the group's channel; get the group's pings; vote in the group's elections and votes when active | Pick the group's role in Channels & Roles, or with `/groups` | Remove the role | No |
-| **🤝 Support** | Answer and close posts in #horizon-support | Given by any moderator (a free action, section 2.1) | Resign, 30 days inactive, or removed by a moderator, the Chief of Mods or the council | No |
+| **🤝 Support** | Answer and close posts in #support | Given by any moderator (a free action, section 2.1) | Resign, 30 days inactive, or removed by a moderator, the Chief of Mods or the council | No |
 | **🛡️ Moderator** | Time out, delete messages, manage threads, quarantine. No bans | Elected by the mods (section 5.3); council veto within 24 h | Resign, 30 days inactive, suspended by the Chief of Mods, recalled by the mods, removed by a council poll (simple majority) | **Yes** |
 | **🛡️ Chief of Mods** | A moderator's powers, plus bans; leads the mods; suspends a mod at once pending the council | Elected by the mods, from the mods with at least 30 days (section 5.3); council veto within 24 h | Resign, 30 days inactive, recalled by the mods, council poll (simple majority) | **Yes** |
 | **🧭 Group lead** | Decides inside the group's topic (section 6); manages the group's channel; triage on the group's GitHub issues | Elected by the group's active members and the Team (section 5.3); council veto within 24 h; 30 days probation | Resign, 30 days inactive (automatic), recalled by the same electorate, council poll (simple majority); confirmed again every 6 months | **Yes** |
@@ -101,7 +101,7 @@ council matter.
 | --- | --- | --- | --- | --- |
 | **Member** | — | Chat, threads, picks group roles | Play | Issues, pull requests, `/claim` |
 | **Group helper** (🧩 Horizon Modding Team) | — | Writes in the group's team channel | — | — |
-| **🤝 Support** | Closes support posts | Manages threads in #horizon-support | — | — |
+| **🤝 Support** | Closes support posts | Manages threads in #support | — | — |
 | **🛡️ Moderator** | Moderation matters, by the mods' vote (section 7) | Time out, delete messages, manage threads and nicknames, audit log, voice mute and move; quarantine through Kira; the staff channels | In-game op if also elected operator | — |
 | **🛡️ Chief of Mods** | A moderator's, plus bans and unbans; suspends a mod at once; breaks ties in the mods' votes | Plus Ban | As a moderator | — |
 | **Server operator** | In-game moderation by the server rules | — | Op (the server's ops list); no panel, no `server.toml` | — |
@@ -121,7 +121,7 @@ posts as a list of clicks for a named person.
 ### Member
 
 Anyone in the Discord server or on GitHub. Members follow the server rules and Horizon's
-[contributing guide](CONTRIBUTING.md). They can propose anything: an idea in #horizon-ideas, a bug in #horizon-bugs,
+[contributing guide](CONTRIBUTING.md). They can propose anything: an idea in #suggestions, a bug in #bugs,
 an issue or a pull request on GitHub, or a request for a council poll (any council member can pick it up).
 
 ### Contributor
@@ -141,7 +141,7 @@ group's elections and decisions (section 5.3).
 
 ### 🤝 Support
 
-Unchanged: Support members help players in #horizon-support. They answer every post there and mark posts solved.
+Unchanged: Support members help players in #support. They answer every post there and mark posts solved.
 The role carries no permission, so it has no age rule. A moderator gives it, and takes it back, through Kira.
 
 ### 🛡️ Moderators and the Chief of Mods
@@ -281,7 +281,7 @@ measures the work, and only people above a floor can be nominated. Their body th
 | **Merged pull requests** | Pull requests merged in a public horizon-rust repo. Counted overall, and per group by label or by files touched | GitHub search, as the ranks are counted today |
 | **Reviews** | Others' pull requests you reviewed: approved, asked for changes, or left a review with comments. One per pull request | GitHub search `reviewed-by:` and Kira's GitHub webhook |
 | **Triage** | Triage commands run (`/label`, `/close`, duplicates), issues labelled or closed, bug posts routed on Discord | The triage workflow's comments and Kira's webhook |
-| **Support answers** | #horizon-support posts you answered that ended solved | Kira's support feature |
+| **Support answers** | #support posts you answered that ended solved | Kira's support feature |
 | **Active days** | Distinct days with any of the above, or with messages in #contributors or a group's channel. Chat elsewhere doesn't count | Kira |
 | **Tenure** | Days since your first counted contribution (since you joined the server, for moderators) | GitHub, Discord |
 | **Clean record** | No timeout, quarantine or ban in the last 90 days | Kira's mod cases |
@@ -380,7 +380,7 @@ holder or an org owner removes GitHub access when the Team role ends.
 | Group lead | A counted action in the group's area, or messages in the group's channel | Day 21 | Day 30 |
 | Horizon Team | A merge or a review | Day 45 | Day 60 |
 | Moderator, Chief of Mods | A moderation action, or messages in the staff channels | Day 21 | Day 30 |
-| Support | An answer in #horizon-support | Day 21 | Day 30 |
+| Support | An answer in #support | Day 21 | Day 30 |
 | Council | A vote in a poll. At 30 days with no vote, while at least 2 polls were held | Day 23 | Day 30, or 45 days with no counted activity at all |
 
 - **Away.** Anyone can announce an absence with `/away` for up to 45 days, once every 6 months. Away days don't
@@ -400,12 +400,12 @@ holder or an org owner removes GitHub access when the Team role ends.
 
 | Group | Covers | GitHub | Discord |
 | --- | --- | --- | --- |
-| **Modding** | The mod API, native and content mods, mixins, the mod registry, `cargo horizon-mod` | The mod API lives in horizon-rust/horizon, beside horizon-rust/horizon-mods, horizon-mixins, horizon-native-mod-template and the registry. Label `mods` | The 🧩 MODDING category (#modding, #horizon-modding-team); roles 🧩 Modder (picked) and 🧩 Horizon Modding Team (the lead gives it) |
+| **Modding** | The mod API, native and content mods, mixins, the mod registry, `cargo horizon-mod` | The mod API lives in horizon-rust/horizon, beside horizon-rust/horizon-mods, horizon-mixins, horizon-native-mod-template and the registry. Label `mods` | #modding and #horizon-modding-team; roles 🧩 Modder (picked) and 🧩 Horizon Modding Team (the lead gives it) |
 | **Shaders and rendering** | The renderer, shaders, shader packs, OptiFine and Polytone pack formats | Label `rendering`; `crates/horizon-client-render` (gfx), `*.wgsl`, `horizon-shaders`, `horizon-shader-api`, `horizon-optifine`, `horizon-polytone` | #shaders-rendering |
 | **Performance** | Frame rate, memory, server tick, benchmarks | Label `perf`; `horizon-bench`, the benchmark tools | #performance |
 | **Horizon GUI** | The launcher (GPUI: installs, updates, instances, pages), in-game menus, HUD, settings, controller navigation, and the design system | Labels `launcher`, `ui`, `accessibility`; `launcher/`, `title/`, `settings_shell.rs`, `hud*`, `ui.rs`, `docs/design-system.md`, `horizon-theme` | #horizon-gui |
 | **Server and SMP** | Dedicated server, hosting, the anticheat, multiplayer, and the official SMP | Labels `server`, `multiplayer`; `horizon-server*`, `horizon-anticheat`, `lan/`, `dedicated*`; horizon-rust/horizon-server | #server (plus #join-server, #survival-chat, #server-chat) |
-| **Translations** | The game's and the launcher's languages | Label `roadmap:languages`; `launcher/lang/`, `crates/horizon-client/assets/horizon/lang/` | #translations and the 🌍 language channels |
+| **Translations** | The game's and the launcher's languages | Label `roadmap:languages`; `launcher/lang/`, `crates/horizon-client/assets/horizon/lang/` | #translations and the language channels (Translations & languages) |
 | **Website** | playhorizon.dev | horizon-rust/horizon-site; label `website`. The site's design stays as it is unless the council decides otherwise | #website |
 | **Vanilla accuracy** | Parity with vanilla 26.3: harnesses, oracles, the port ledger | Labels `parity`, `parity-regression`, `full-parity`; `tools/test_*_parity.py`, the Java oracles | #vanilla-accuracy |
 
